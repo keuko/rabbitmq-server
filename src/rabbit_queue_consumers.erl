@@ -125,8 +125,7 @@ unacknowledged_message_count() ->
     lists:sum([queue:len(C#cr.acktags) || C <- all_ch_record()]).
 
 add(ChPid, CTag, NoAck, LimiterPid, LimiterActive, Prefetch, Args, IsEmpty,
-    State = #state{consumers = Consumers,
-                   use       = CUInfo}) ->
+    State = #state{consumers = Consumers}) ->
     C = #cr{consumer_count = Count,
             limiter        = Limiter} = ch_record(ChPid, LimiterPid),
     Limiter1 = case LimiterActive of
@@ -145,8 +144,7 @@ add(ChPid, CTag, NoAck, LimiterPid, LimiterActive, Prefetch, Args, IsEmpty,
                          ack_required = not NoAck,
                          prefetch     = Prefetch,
                          args         = Args},
-    State#state{consumers = add_consumer({ChPid, Consumer}, Consumers),
-                use       = update_use(CUInfo, active)}.
+    State#state{consumers = add_consumer({ChPid, Consumer}, Consumers)}.
 
 remove(ChPid, CTag, State = #state{consumers = Consumers}) ->
     case lookup_ch(ChPid) of

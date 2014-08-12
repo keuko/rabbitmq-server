@@ -82,7 +82,6 @@ process_request(?CONNECT,
                             {?CONNACK_ACCEPT, Conn} ->
                                 link(Conn),
                                 {ok, Ch} = amqp_connection:open_channel(Conn),
-                                amqp_channel:enable_delivery_flow_control(Ch),
                                 ok = rabbit_mqtt_collector:register(
                                   ClientId, self()),
                                 Prefetch = rabbit_mqtt_util:env(prefetch),
@@ -212,12 +211,10 @@ amqp_callback({#'basic.deliver'{ consumer_tag = ConsumerTag,
                                  delivery_tag = DeliveryTag,
                                  routing_key  = RoutingKey },
                #amqp_msg{ props = #'P_basic'{ headers = Headers },
-                          payload = Payload },
-               DeliveryCtx} = Delivery,
+                          payload = Payload }} = Delivery,
               #proc_state{ channels      = {Channel, _},
                            awaiting_ack  = Awaiting,
                            message_id    = MsgId } = PState) ->
-    amqp_channel:notify_received(DeliveryCtx),
     case {delivery_dup(Delivery), delivery_qos(ConsumerTag, Headers, PState)} of
         {true, {?QOS_0, ?QOS_1}} ->
             amqp_channel:cast(
@@ -281,8 +278,7 @@ amqp_callback(#'basic.ack'{ multiple = false, delivery_tag = Tag },
     {ok, PState #proc_state{ unacked_pubs = gb_trees:delete(Tag, UnackedPubs) }}.
 
 delivery_dup({#'basic.deliver'{ redelivered = Redelivered },
-              #amqp_msg{ props = #'P_basic'{ headers = Headers }},
-              _DeliveryCtx}) ->
+              #amqp_msg{ props = #'P_basic'{ headers = Headers }}}) ->
     case rabbit_mqtt_util:table_lookup(Headers, <<"x-mqtt-dup">>) of
         undefined   -> Redelivered;
         {bool, Dup} -> Redelivered orelse Dup
@@ -493,14 +489,7 @@ amqp_pub(#mqtt_msg{ qos        = Qos,
 
 adapter_info(Sock, ProtoVer) ->
     amqp_connection:socket_adapter_info(
-             Sock, {'MQTT', human_readable_mqtt_version(ProtoVer)}).
-
-human_readable_mqtt_version(3) ->
-    "3.1.0";
-human_readable_mqtt_version(4) ->
-    "3.1.1";
-human_readable_mqtt_version(_) ->
-    "N/A".
+             Sock, {'MQTT', integer_to_list(ProtoVer)}).
 
 send_client(Frame, #proc_state{ socket = Sock }) ->
     %rabbit_log:info("MQTT sending frame ~p ~n", [Frame]),

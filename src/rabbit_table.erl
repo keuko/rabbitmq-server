@@ -17,7 +17,7 @@
 -module(rabbit_table).
 
 -export([create/0, create_local_copy/1, wait_for_replicated/0, wait/1,
-         force_load/0, is_present/0, is_empty/0, needs_default_data/0,
+         force_load/0, is_present/0, is_empty/0,
          check_schema_integrity/0, clear_ram_only_tables/0]).
 
 -include("rabbit.hrl").
@@ -33,7 +33,6 @@
 -spec(force_load/0 :: () -> 'ok').
 -spec(is_present/0 :: () -> boolean()).
 -spec(is_empty/0 :: () -> boolean()).
--spec(needs_default_data/0 :: () -> boolean()).
 -spec(check_schema_integrity/0 :: () -> rabbit_types:ok_or_error(any())).
 -spec(clear_ram_only_tables/0 :: () -> 'ok').
 
@@ -71,13 +70,7 @@ wait_for_replicated() ->
                  not lists:member({local_content, true}, TabDef)]).
 
 wait(TableNames) ->
-    %% We might be in ctl here for offline ops, in which case we can't
-    %% get_env() for the rabbit app.
-    Timeout = case application:get_env(rabbit, mnesia_table_loading_timeout) of
-                  {ok, T}   -> T;
-                  undefined -> 30000
-              end,
-    case mnesia:wait_for_tables(TableNames, Timeout) of
+    case mnesia:wait_for_tables(TableNames, 30000) of
         ok ->
             ok;
         {timeout, BadTabs} ->
@@ -90,13 +83,9 @@ force_load() -> [mnesia:force_load_table(T) || T <- names()], ok.
 
 is_present() -> names() -- mnesia:system_info(tables) =:= [].
 
-is_empty()           -> is_empty(names()).
-needs_default_data() -> is_empty([rabbit_user, rabbit_user_permission,
-                                  rabbit_vhost]).
-
-is_empty(Names) ->
+is_empty() ->
     lists:all(fun (Tab) -> mnesia:dirty_first(Tab) == '$end_of_table' end,
-              Names).
+              names()).
 
 check_schema_integrity() ->
     Tables = mnesia:system_info(tables),

@@ -16,16 +16,16 @@ function dispatcher() {
     }
 }
 
-function set_auth_pref(userinfo) {
+function set_auth_cookie(userinfo) {
     var b64 = b64_encode_utf8(userinfo);
-    store_pref('auth', encodeURIComponent(b64));
+    document.cookie = 'auth=' + encodeURIComponent(b64);
 }
 
 function login_route () {
     var userpass = '' + this.params['username'] + ':' + this.params['password'],
         location = window.location.href,
         hash = window.location.hash;
-    set_auth_pref(decodeURIComponent(userpass));
+    set_auth_cookie(decodeURIComponent(userpass));
     location = location.substr(0, location.length - hash.length);
     window.location.replace(location);
     // because we change url, we don't need to hit check_login as
@@ -38,13 +38,13 @@ function start_app_login() {
         this.put('#/login', function() {
             username = this.params['username'];
             password = this.params['password'];
-            set_auth_pref(username + ':' + password);
+            set_auth_cookie(username + ':' + password);
             check_login();
         });
         this.get('#/login/:username/:password', login_route)
     });
     app.run();
-    if (get_pref('auth') != null) {
+    if (get_cookie('auth') != '') {
         check_login();
     }
 }
@@ -52,7 +52,7 @@ function start_app_login() {
 function check_login() {
     user = JSON.parse(sync_get('/whoami'));
     if (user == false) {
-        clear_pref('auth');
+        document.cookie = 'auth=; expires=Thu, 01 Jan 1970 00:00:00 GMT';
         replace_content('login-status', '<p>Login failed</p>');
     }
     else {
@@ -189,9 +189,9 @@ function reset_timer() {
 function update_manual(div, query) {
     var path;
     var template;
-    if (query == 'memory' || query == 'binary') {
-        path = current_reqs['node']['path'] + '?' + query + '=true';
-        template = query;
+    if (query == 'memory') {
+        path = current_reqs['node'] + '?memory=true';
+        template = 'memory';
     }
     var data = JSON.parse(sync_get(path));
 
@@ -202,10 +202,6 @@ function update_manual(div, query) {
 function render(reqs, template, highlight) {
     current_template = template;
     current_reqs = reqs;
-    for (var i in outstanding_reqs) {
-        outstanding_reqs[i].abort();
-    }
-    outstanding_reqs = [];
     current_highlight = highlight;
     update();
 }
@@ -372,6 +368,7 @@ function y_position() {
 
 function with_update(fun) {
     with_reqs(apply_state(current_reqs), [], function(json) {
+            json.statistics_level = statistics_level;
             var html = format(current_template, json);
             fun(html);
             update_status('ok');
@@ -403,7 +400,7 @@ function apply_state(reqs) {
         if (options['ranges'] != undefined) {
             for (i in options['ranges']) {
                 var type = options['ranges'][i];
-                var range = get_pref('chart-range').split('|');
+                var range = get_pref('chart-range-' + type).split('|');
                 var prefix;
                 if (type.substring(0, 8) == 'lengths-') {
                     prefix = 'lengths';
@@ -413,9 +410,6 @@ function apply_state(reqs) {
                 }
                 else if (type.substring(0, 11) == 'data-rates-') {
                     prefix = 'data_rates';
-                }
-                else if (type == 'node-stats') {
-                    prefix = 'node_stats';
                 }
                 qs.push(prefix + '_age=' + parseInt(range[0]));
                 qs.push(prefix + '_incr=' + parseInt(range[1]));
@@ -479,7 +473,7 @@ function postprocess() {
     $('#download-definitions').click(function() {
             var path = 'api/definitions?download=' +
                 esc($('#download-filename').val()) +
-                '&auth=' + get_pref('auth');
+                '&auth=' + get_cookie('auth');
             window.location = path;
             setTimeout('app.run()');
             return false;
@@ -511,42 +505,26 @@ function postprocess() {
     $('.help').die().live('click', function() {
         help($(this).attr('id'))
     });
-    $('.popup-options-link').die().live('click', function() {
+    $('.rate-options').die().live('click', function() {
         var remove = $('.popup-owner').length == 1 &&
                      $('.popup-owner').get(0) == $(this).get(0);
         $('.popup-owner').removeClass('popup-owner');
         if (remove) {
-            $('.form-popup-options').fadeOut(200, function() {
+            $('.form-popup-rate-options').fadeOut(200, function() {
                 $(this).remove();
             });
         }
         else {
             $(this).addClass('popup-owner');
-            var template = $(this).attr('type') + '-options';
-            show_popup('options', format(template, {span: $(this)}),
+            show_popup('rate-options', format('rate-options', {span: $(this)}),
                        'fade');
         }
-    });
-    $('.rate-visibility-option').die().live('click', function() {
-        var k = $(this).attr('data-pref');
-        var show = get_pref(k) !== 'true';
-        store_pref(k, '' + show);
-        partial_update();
     });
     $('input, select').live('focus', function() {
         update_counter = 0; // If there's interaction, reset the counter.
     });
     $('.tag-link').click(function() {
         $('#tags').val($(this).attr('tag'));
-    });
-    $('.argument-link').click(function() {
-        var field = $(this).attr('field');
-        var row = $('#' + field).find('.mf').last();
-        var key = row.find('input').first();
-        var type = row.find('select').last();
-        key.val($(this).attr('key'));
-        type.val($(this).attr('type'));
-        update_multifields();
     });
     $('form.auto-submit select, form.auto-submit input').live('click', function(){
         $(this).parents('form').submit();
@@ -592,8 +570,7 @@ function update_multifield(multifield, dict) {
     var largest_id = 0;
     var empty_found = false;
     var name = multifield.attr('id');
-    var type_inputs = $('#' + name + ' *[name$="_mftype"]');
-    type_inputs.each(function(index) {
+    $('#' + name + ' *[name$="_mftype"]').each(function(index) {
         var re = new RegExp(name + '_([0-9]*)_mftype');
         var match = $(this).attr('name').match(re);
         if (!match) return;
@@ -614,12 +591,10 @@ function update_multifield(multifield, dict) {
                 var key = dict ? $('#' + prefix + '_mfkey').val() : '';
                 var value = input.val();
                 if (key == '' && value == '') {
-                    if (index == type_inputs.length - 1) {
-                        empty_found = true;
+                    if (empty_found) {
+                        $(this).parent().remove();
                     }
-                    else {
-                        $(this).parents('.mf').first().remove();
-                    }
+                    empty_found = true;
                 }
             }
             else {
@@ -635,13 +610,13 @@ function update_multifield(multifield, dict) {
             multifield_input(prefix, 'type', t);
 
         if (dict) {
-            multifield.append('<table class="mf"><tr><td>' +
+            multifield.append('<table><tr><td>' +
                               multifield_input(prefix, 'key', 'text') +
                               '</td><td class="equals"> = </td><td>' +
                               val_type + '</td></tr></table>');
         }
         else {
-            multifield.append('<div class="mf">' + val_type + '</div>');
+            multifield.append('<div>' + val_type + '</div>');
         }
     }
 }
@@ -721,11 +696,6 @@ function setup_visibility() {
         }
         if (show) {
             $(this).addClass('section-visible');
-            // Workaround for... something. Although div.hider is
-            // display:block anyway, not explicitly setting this
-            // prevents the first slideToggle() from animating
-            // successfully; instead the element just vanishes.
-            $(this).find('.hider').attr('style', 'display:block;');
         }
         else {
             $(this).addClass('section-invisible');
@@ -865,7 +835,7 @@ function update_status(status) {
 }
 
 function auth_header() {
-    return "Basic " + decodeURIComponent(get_pref('auth'));
+    return "Basic " + decodeURIComponent(get_cookie('auth'));
 }
 
 function with_req(method, path, body, fun) {
@@ -875,17 +845,12 @@ function with_req(method, path, body, fun) {
     req.setRequestHeader('authorization', auth_header());
     req.onreadystatechange = function () {
         if (req.readyState == 4) {
-            var ix = jQuery.inArray(req, outstanding_reqs);
-            if (ix != -1) {
-                outstanding_reqs.splice(ix, 1);
-            }
             if (check_bad_response(req, true)) {
                 last_successful_connect = new Date();
                 fun(req);
             }
         }
     };
-    outstanding_reqs.push(req);
     req.send(body);
 }
 
@@ -1001,7 +966,10 @@ function fill_path_template(template, params) {
 }
 
 function params_magic(params) {
-    return check_password(maybe_remove_fields(collapse_multifields(params)));
+    return check_password(
+             add_known_arguments(
+               maybe_remove_fields(
+                 collapse_multifields(params))));
 }
 
 function collapse_multifields(params0) {
@@ -1072,6 +1040,25 @@ function collapse_multifields(params0) {
             }
         }
     }
+    return params;
+}
+
+function add_known_arguments(params) {
+    for (var k in KNOWN_ARGS) {
+        var v = params[k];
+        if (v != undefined && v != '') {
+            var type = KNOWN_ARGS[k].type;
+            if (type == 'int') {
+                v = parseInt(v);
+                if (isNaN(v)) {
+                    throw(k + " must be an integer.");
+                }
+            }
+            params.arguments[k] = v;
+        }
+        delete params[k];
+    }
+
     return params;
 }
 
@@ -1150,20 +1137,6 @@ function put_policy(sammy, mandatory_keys, num_keys, bool_keys) {
         }
     }
     if (sync_put(sammy, '/policies/:vhost/:name')) update();
-}
-
-function update_column_options(sammy) {
-    var mode = sammy.params['mode'];
-    for (var group in COLUMNS[mode]) {
-        var options = COLUMNS[mode][group];
-        for (var i = 0; i < options.length; i++) {
-            var key = options[i][0];
-            var value = sammy.params[mode + '-' + key] != undefined;
-            store_pref('column-' + mode + '-' + key, value);
-        }
-    }
-
-    partial_update();
 }
 
 function debug(str) {

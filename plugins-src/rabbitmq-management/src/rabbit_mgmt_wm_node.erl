@@ -45,23 +45,19 @@ is_authorized(ReqData, Context) ->
 %%--------------------------------------------------------------------
 
 node0(ReqData) ->
-    Node = list_to_atom(binary_to_list(rabbit_mgmt_util:id(node, ReqData))),
-    case [N || N <- rabbit_mgmt_wm_nodes:all_nodes(ReqData),
-               proplists:get_value(name, N) == Node] of
+    Name = list_to_atom(binary_to_list(rabbit_mgmt_util:id(node, ReqData))),
+    case [N || N <- rabbit_mgmt_wm_nodes:all_nodes(),
+               proplists:get_value(name, N) == Name] of
         []     -> not_found;
-        [Data] -> augment(ReqData, Node, Data)
+        [Node] -> augment(ReqData, Name, Node)
     end.
 
-augment(ReqData, Node, Data) ->
-    lists:foldl(fun (Key, DataN) -> augment(Key, ReqData, Node, DataN) end,
-                Data, [memory, binary]).
-
-augment(Key, ReqData, Node, Data) ->
-    case wrq:get_qs_value(atom_to_list(Key), ReqData) of
-        "true" -> Res = case rpc:call(Node, rabbit_vm, Key, [], infinity) of
+augment(ReqData, Name, Node) ->
+    case wrq:get_qs_value("memory", ReqData) of
+        "true" -> Mem = case rpc:call(Name, rabbit_vm, memory, [], infinity) of
                             {badrpc, _} -> not_available;
-                            Result      -> Result
+                            Memory      -> Memory
                         end,
-                  [{Key, Res} | Data];
-        _      -> Data
+                  [{memory, Mem} | Node];
+        _      -> Node
     end.

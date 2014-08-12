@@ -31,7 +31,7 @@
 
 %% A user to be used by the direct client when permission checks are
 %% not needed. This user can do anything AMQPish.
-user() -> #user{username     = <<"none">>,
+user() -> #user{username     = <<"dummy">>,
                 tags         = [],
                 auth_backend = ?MODULE,
                 impl         = none}.

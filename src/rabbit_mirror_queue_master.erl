@@ -22,9 +22,9 @@
          len/1, is_empty/1, depth/1, drain_confirmed/1,
          dropwhile/2, fetchwhile/4, set_ram_duration_target/2, ram_duration/1,
          needs_timeout/1, timeout/1, handle_pre_hibernate/1, resume/1,
-         msg_rates/1, info/2, invoke/3, is_duplicate/2]).
+         msg_rates/1, status/1, invoke/3, is_duplicate/2]).
 
--export([start/1, stop/0, delete_crashed/1]).
+-export([start/1, stop/0]).
 
 -export([promote_backing_queue_state/8, sender_death_fun/0, depth_fun/0]).
 
@@ -56,14 +56,14 @@
                                  coordinator         :: pid(),
                                  backing_queue       :: atom(),
                                  backing_queue_state :: any(),
-                                 seen_status         :: dict:dict(),
+                                 seen_status         :: dict(),
                                  confirmed           :: [rabbit_guid:guid()],
-                                 known_senders       :: sets:set()
+                                 known_senders       :: set()
                                }).
 
 -spec(promote_backing_queue_state/8 ::
-        (rabbit_amqqueue:name(), pid(), atom(), any(), pid(), [any()],
-         dict:dict(), [pid()]) -> master_state()).
+        (rabbit_amqqueue:name(), pid(), atom(), any(), pid(), [any()], dict(),
+         [pid()]) -> master_state()).
 -spec(sender_death_fun/0 :: () -> death_fun()).
 -spec(depth_fun/0 :: () -> depth_fun()).
 -spec(init_with_existing_bq/3 :: (rabbit_types:amqqueue(), atom(), any()) ->
@@ -90,9 +90,6 @@ stop() ->
     %% Same as start/1.
     exit({not_valid_for_generic_backing_queue, ?MODULE}).
 
-delete_crashed(_QName) ->
-    exit({not_valid_for_generic_backing_queue, ?MODULE}).
-
 init(Q, Recover, AsyncCallback) ->
     {ok, BQ} = application:get_env(backing_queue_module),
     BQS = BQ:init(Q, Recover, AsyncCallback),
@@ -110,8 +107,7 @@ init_with_existing_bq(Q = #amqqueue{name = QName}, BQ, BQS) ->
                    [Q1 = #amqqueue{gm_pids = GMPids}]
                        = mnesia:read({rabbit_queue, QName}),
                    ok = rabbit_amqqueue:store_queue(
-                          Q1#amqqueue{gm_pids = [{GM, Self} | GMPids],
-                                      state   = live})
+                          Q1#amqqueue{gm_pids = [{GM, Self} | GMPids]})
            end),
     {_MNode, SNodes} = rabbit_mirror_queue_misc:suggested_queue_nodes(Q),
     %% We need synchronous add here (i.e. do not return until the
@@ -174,24 +170,10 @@ terminate({shutdown, dropped} = Reason,
     State#state{backing_queue_state = BQ:delete_and_terminate(Reason, BQS)};
 
 terminate(Reason,
-          State = #state { name                = QName,
-                           backing_queue       = BQ,
-                           backing_queue_state = BQS }) ->
+          State = #state { backing_queue = BQ, backing_queue_state = BQS }) ->
     %% Backing queue termination. The queue is going down but
     %% shouldn't be deleted. Most likely safe shutdown of this
-    %% node.
-    {ok, Q = #amqqueue{sync_slave_pids = SSPids}} =
-        rabbit_amqqueue:lookup(QName),
-    case SSPids =:= [] andalso
-        rabbit_policy:get(<<"ha-promote-on-shutdown">>, Q) =/= <<"always">> of
-        true  -> %% Remove the whole queue to avoid data loss
-                 rabbit_mirror_queue_misc:log_warning(
-                   QName, "Stopping all nodes on master shutdown since no "
-                   "synchronised slave is available~n", []),
-                 stop_all_slaves(Reason, State);
-        false -> %% Just let some other slave take over.
-                 ok
-    end,
+    %% node. Thus just let some other slave take over.
     State #state { backing_queue_state = BQ:terminate(Reason, BQS) }.
 
 delete_and_terminate(Reason, State = #state { backing_queue       = BQ,
@@ -199,17 +181,11 @@ delete_and_terminate(Reason, State = #state { backing_queue       = BQ,
     stop_all_slaves(Reason, State),
     State#state{backing_queue_state = BQ:delete_and_terminate(Reason, BQS)}.
 
-stop_all_slaves(Reason, #state{name = QName, gm = GM}) ->
+stop_all_slaves(Reason, #state{name = QName, gm   = GM}) ->
     {ok, #amqqueue{slave_pids = SPids}} = rabbit_amqqueue:lookup(QName),
-    PidsMRefs = [{Pid, erlang:monitor(process, Pid)} || Pid <- [GM | SPids]],
+    MRefs = [erlang:monitor(process, Pid) || Pid <- [GM | SPids]],
     ok = gm:broadcast(GM, {delete_and_terminate, Reason}),
-    %% It's possible that we could be partitioned from some slaves
-    %% between the lookup and the broadcast, in which case we could
-    %% monitor them but they would not have received the GM
-    %% message. So only wait for slaves which are still
-    %% not-partitioned.
-    [receive {'DOWN', MRef, process, _Pid, _Info} -> ok end
-     || {Pid, MRef} <- PidsMRefs, rabbit_mnesia:on_running_node(Pid)],
+    [receive {'DOWN', MRef, process, _Pid, _Info} -> ok end || MRef <- MRefs],
     %% Normally when we remove a slave another slave or master will
     %% notice and update Mnesia. But we just removed them all, and
     %% have stopped listening ourselves. So manually clean up.
@@ -384,13 +360,10 @@ resume(State = #state { backing_queue       = BQ,
 msg_rates(#state { backing_queue = BQ, backing_queue_state = BQS }) ->
     BQ:msg_rates(BQS).
 
-info(backing_queue_status,
-     State = #state { backing_queue = BQ, backing_queue_state = BQS }) ->
-    BQ:info(backing_queue_status, BQS) ++
+status(State = #state { backing_queue = BQ, backing_queue_state = BQS }) ->
+    BQ:status(BQS) ++
         [ {mirror_seen,    dict:size(State #state.seen_status)},
-          {mirror_senders, sets:size(State #state.known_senders)} ];
-info(Item, #state { backing_queue = BQ, backing_queue_state = BQS }) ->
-    BQ:info(Item, BQS).
+          {mirror_senders, sets:size(State #state.known_senders)} ].
 
 invoke(?MODULE, Fun, State) ->
     Fun(?MODULE, State);

@@ -17,7 +17,7 @@
 -module(rabbit_mgmt_wm_nodes).
 
 -export([init/1, to_json/2, content_types_provided/2, is_authorized/2]).
--export([all_nodes/1, all_nodes_raw/0]).
+-export([all_nodes/0]).
 
 -include("rabbit_mgmt.hrl").
 -include_lib("webmachine/include/webmachine.hrl").
@@ -31,21 +31,18 @@ content_types_provided(ReqData, Context) ->
    {[{"application/json", to_json}], ReqData, Context}.
 
 to_json(ReqData, Context) ->
-    rabbit_mgmt_util:reply_list(all_nodes(ReqData), ReqData, Context).
+    rabbit_mgmt_util:reply_list(all_nodes(), ReqData, Context).
 
 is_authorized(ReqData, Context) ->
     rabbit_mgmt_util:is_authorized_monitor(ReqData, Context).
 
 %%--------------------------------------------------------------------
 
-all_nodes(ReqData) ->
-    rabbit_mgmt_db:augment_nodes(
-      all_nodes_raw(), rabbit_mgmt_util:range_ceil(ReqData)).
-
-all_nodes_raw() ->
+all_nodes() ->
     S = rabbit_mnesia:status(),
     Nodes = proplists:get_value(nodes, S),
     Types = proplists:get_keys(Nodes),
     Running = proplists:get_value(running_nodes, S),
-    [[{name, Node}, {type, Type}, {running, lists:member(Node, Running)}] ||
-        Type <- Types, Node <- proplists:get_value(Type, Nodes)].
+    rabbit_mgmt_db:augment_nodes(
+      [[{name, Node}, {type, Type}, {running, lists:member(Node, Running)}] ||
+          Type <- Types, Node <- proplists:get_value(Type, Nodes)]).

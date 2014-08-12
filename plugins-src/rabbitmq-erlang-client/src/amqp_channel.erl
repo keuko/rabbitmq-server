@@ -74,8 +74,7 @@
 -export([call_consumer/2, subscribe/3]).
 -export([next_publish_seqno/1, wait_for_confirms/1, wait_for_confirms/2,
          wait_for_confirms_or_die/1, wait_for_confirms_or_die/2]).
--export([start_link/5, set_writer/2, connection_closing/3, open/1,
-         enable_delivery_flow_control/1, notify_received/1]).
+-export([start_link/5, set_writer/2, connection_closing/3, open/1]).
 
 -export([init/1, terminate/2, code_change/3, handle_call/3, handle_cast/2,
          handle_info/2]).
@@ -98,16 +97,7 @@
                 flow_handler       = none,
                 unconfirmed_set    = gb_sets:new(),
                 waiting_set        = gb_trees:empty(),
-                only_acks_received = true,
-
-                %% true | false, only relevant in the direct
-                %% client case.
-                %% when true, consumers will manually notify
-                %% queue pids using rabbit_amqqueue:notify_sent/2
-                %% to prevent the queue from overwhelming slow
-                %% consumers that use automatic acknowledgement
-                %% mode.
-                delivery_flow_control = false
+                only_acks_received = true
                }).
 
 %%---------------------------------------------------------------------------
@@ -352,12 +342,6 @@ start_link(Driver, Connection, ChannelNumber, Consumer, Identity) ->
 set_writer(Pid, Writer) ->
     gen_server:cast(Pid, {set_writer, Writer}).
 
-enable_delivery_flow_control(Pid) ->
-    gen_server:cast(Pid, enable_delivery_flow_control).
-
-notify_received({Pid, QPid, ServerChPid}) ->
-    gen_server:cast(Pid, {send_notify, {QPid, ServerChPid}}).
-
 %% @private
 connection_closing(Pid, ChannelCloseType, Reason) ->
     gen_server:cast(Pid, {connection_closing, ChannelCloseType, Reason}).
@@ -415,18 +399,8 @@ handle_call({subscribe, BasicConsume, Subscriber}, From, State) ->
                             State).
 
 %% @private
-handle_cast({set_writer, Writer}, State = #state{driver = direct}) ->
-    link(Writer),
-    {noreply, State#state{writer = Writer}};
 handle_cast({set_writer, Writer}, State) ->
     {noreply, State#state{writer = Writer}};
-%% @private
-handle_cast(enable_delivery_flow_control, State) ->
-    {noreply, State#state{delivery_flow_control = true}};
-%% @private
-handle_cast({send_notify, {QPid, ChPid}}, State) ->
-    rabbit_amqqueue:notify_sent(QPid, ChPid),
-    {noreply, State};
 %% @private
 handle_cast({cast, Method, AmqpMsg, Sender, noflow}, State) ->
     handle_method_to_server(Method, AmqpMsg, none, Sender, noflow, State);
@@ -484,15 +458,9 @@ handle_info({send_command, Method, Content}, State) ->
     handle_method_from_server(Method, Content, State);
 %% Received from rabbit_channel in the direct case
 %% @private
-handle_info({send_command_and_notify, QPid, ChPid,
-             Method = #'basic.deliver'{}, Content},
-            State = #state{delivery_flow_control = MFC}) ->
-    case MFC of
-        false -> handle_method_from_server(Method, Content, State),
-                 rabbit_amqqueue:notify_sent(QPid, ChPid);
-        true  -> handle_method_from_server(Method, Content,
-                                           {self(), QPid, ChPid}, State)
-    end,
+handle_info({send_command_and_notify, Q, ChPid, Method, Content}, State) ->
+    handle_method_from_server(Method, Content, State),
+    rabbit_amqqueue:notify_sent(Q, ChPid),
     {noreply, State};
 %% This comes from the writer or rabbit_channel
 %% @private
@@ -665,9 +633,7 @@ pre_do(_, _, _, State) ->
 %% Handling of methods from the server
 %%---------------------------------------------------------------------------
 
-safely_handle_method_from_server(Method, Content,
-                                 Continuation,
-                                 State = #state{closing = Closing}) ->
+handle_method_from_server(Method, Content, State = #state{closing = Closing}) ->
     case is_connection_method(Method) of
         true -> server_misbehaved(
                     #amqp_error{name        = command_invalid,
@@ -685,27 +651,10 @@ safely_handle_method_from_server(Method, Content,
                                       "server because channel is closing~n",
                                       [self(), {Method, Content}]),
                             {noreply, State};
-                    true ->
-                         Continuation()
+                    true -> handle_method_from_server1(Method,
+                                                       amqp_msg(Content), State)
                  end
     end.
-
-handle_method_from_server(Method, Content, State) ->
-    Fun = fun () ->
-                  handle_method_from_server1(Method,
-                                             amqp_msg(Content), State)
-          end,
-    safely_handle_method_from_server(Method, Content, Fun, State).
-
-handle_method_from_server(Method = #'basic.deliver'{},
-                          Content, DeliveryCtx, State) ->
-    Fun = fun () ->
-                  handle_method_from_server1(Method,
-                                             amqp_msg(Content),
-                                             DeliveryCtx,
-                                             State)
-          end,
-    safely_handle_method_from_server(Method, Content, Fun, State).
 
 handle_method_from_server1(#'channel.open_ok'{}, none, State) ->
     {noreply, rpc_bottom_half(ok, State)};
@@ -789,12 +738,6 @@ handle_method_from_server1(Method, none, State) ->
     {noreply, rpc_bottom_half(Method, State)};
 handle_method_from_server1(Method, Content, State) ->
     {noreply, rpc_bottom_half({Method, Content}, State)}.
-
-%% only used with manual consumer-to-queue flow control
-handle_method_from_server1(#'basic.deliver'{} = Deliver, AmqpMsg,
-                           DeliveryCtx, State) ->
-    ok = call_to_consumer(Deliver, AmqpMsg, DeliveryCtx, State),
-    {noreply, State}.
 
 %%---------------------------------------------------------------------------
 %% Other handle_* functions
@@ -976,9 +919,6 @@ handle_wait_for_confirms(From, Timeout,
 
 call_to_consumer(Method, Args, #state{consumer = Consumer}) ->
     amqp_gen_consumer:call_consumer(Consumer, Method, Args).
-
-call_to_consumer(Method, Args, DeliveryCtx, #state{consumer = Consumer}) ->
-    amqp_gen_consumer:call_consumer(Consumer, Method, Args, DeliveryCtx).
 
 safe_cancel_timer(undefined) -> ok;
 safe_cancel_timer(TRef)      -> erlang:cancel_timer(TRef).

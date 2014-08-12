@@ -88,10 +88,6 @@ handle_cast(init, State = #state{config = Config}) ->
     end,
 
     Remaining = remaining(InboundChan, Config),
-    case Remaining of
-        0 -> exit({shutdown, autodelete});
-        _ -> ok
-    end,
 
     #'basic.consume_ok'{} =
         amqp_channel:subscribe(
@@ -157,16 +153,12 @@ terminate(Reason, #state{inbound_conn = undefined, inbound_ch = undefined,
                          name = Name, type = Type}) ->
     rabbit_shovel_status:report(Name, Type, {terminated, Reason}),
     ok;
-terminate({shutdown, autodelete}, State = #state{name = {VHost, Name},
-                                                 type = dynamic}) ->
-    close_connections(State),
-    %% See rabbit_shovel_dyn_worker_sup_sup:stop_child/1
-    put(shovel_worker_autodelete, true),
-    rabbit_runtime_parameters:clear(VHost, <<"shovel">>, Name),
-    rabbit_shovel_status:remove({VHost, Name}),
-    ok;
 terminate(Reason, State) ->
-    close_connections(State),
+    maybe_autodelete(Reason, State),
+    catch amqp_connection:close(State#state.inbound_conn,
+                                ?MAX_CONNECTION_CLOSE_TIMEOUT),
+    catch amqp_connection:close(State#state.outbound_conn,
+                                ?MAX_CONNECTION_CLOSE_TIMEOUT),
     rabbit_shovel_status:report(State#state.name, State#state.type,
                                 {terminated, Reason}),
     ok.
@@ -236,14 +228,14 @@ make_conn_and_chan(URIs) ->
     {ok, Chan} = amqp_connection:open_channel(Conn),
     {Conn, Chan, list_to_binary(amqp_uri:remove_credentials(URI))}.
 
-remaining(_Ch, #shovel{delete_after = never}) ->
+remaining(Ch, #shovel{delete_after = never}) ->
     unlimited;
 remaining(Ch, #shovel{delete_after = 'queue-length', queue = Queue}) ->
     #'queue.declare_ok'{message_count = N} =
         amqp_channel:call(Ch, #'queue.declare'{queue   = Queue,
                                                passive = true}),
     N;
-remaining(_Ch, #shovel{delete_after = Count}) ->
+remaining(Ch, #shovel{delete_after = Count}) ->
     Count.
 
 decr_remaining(_N, State = #state{remaining = unlimited}) ->
@@ -261,8 +253,10 @@ decr_remaining_unacked(State = #state{remaining_unacked = 0}) ->
 decr_remaining_unacked(State = #state{remaining_unacked = N}) ->
     State#state{remaining_unacked = N - 1}.
 
-close_connections(State) ->
-    catch amqp_connection:close(State#state.inbound_conn,
-                                ?MAX_CONNECTION_CLOSE_TIMEOUT),
-    catch amqp_connection:close(State#state.outbound_conn,
-                                ?MAX_CONNECTION_CLOSE_TIMEOUT).
+maybe_autodelete({shutdown, autodelete}, #state{name = {VHost, Name},
+                                                type = dynamic}) ->
+    %% See rabbit_shovel_dyn_worker_sup_sup:stop_child/1
+    put(shovel_worker_autodelete, true),
+    rabbit_runtime_parameters:clear(VHost, <<"shovel">>, Name);
+maybe_autodelete(_Reason, _State) ->
+    ok.

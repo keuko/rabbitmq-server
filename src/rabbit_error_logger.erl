@@ -42,21 +42,11 @@
 
 start() ->
     {ok, DefaultVHost} = application:get_env(default_vhost),
-    case error_logger:add_report_handler(?MODULE, [DefaultVHost]) of
-        ok ->
-            ok;
-        {error, {no_such_vhost, DefaultVHost}} ->
-            rabbit_log:warning("Default virtual host '~s' not found; "
-                               "exchange '~s' disabled~n",
-                               [DefaultVHost, ?LOG_EXCH_NAME]),
-            ok
-    end.
+    ok = error_logger:add_report_handler(?MODULE, [DefaultVHost]).
 
 stop() ->
-    case error_logger:delete_report_handler(rabbit_error_logger) of
-        terminated_ok             -> ok;
-        {error, module_not_found} -> ok
-    end.
+    terminated_ok = error_logger:delete_report_handler(rabbit_error_logger),
+    ok.
 
 %%----------------------------------------------------------------------------
 

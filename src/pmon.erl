@@ -29,7 +29,7 @@
 
 -export_type([?MODULE/0]).
 
--opaque(?MODULE() :: #state{dict   :: dict:dict(),
+-opaque(?MODULE() :: #state{dict   :: dict(),
                             module :: atom()}).
 
 -type(item()         :: pid() | {atom(), node()}).

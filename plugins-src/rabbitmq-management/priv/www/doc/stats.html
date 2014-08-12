@@ -110,37 +110,14 @@
       set an age and an increment for the samples you want. The end of
       the range returned will always correspond to the present.
     </p>
-
     <p>
-      Different types of data take different query parameters to
-      return samples, as in the following table. You can specify more
-      than one set of parameters if the resource you are requesting
-      can generate more than one type of sample (for example, queues
-      can return message rates and queue lengths).
-    </p>
-
-    <table>
-      <tr>
-        <td>Messages sent and received</td>
-        <td><code>msg_rates_age</code> / <code>msg_rates_incr</code></td>
-      </tr>
-      <tr>
-        <td>Bytes sent and received</td>
-        <td><code>data_rates_age</code> / <code>data_rates_incr</code>
-        </td>
-      </tr>
-      <tr>
-        <td>Queue lengths</td>
-        <td><code>lengths_age</code> / <code>lengths_incr</code></td>
-      </tr>
-      <tr>
-        <td>Node statistics (e.g. file descriptors, disk space free)</td>
-        <td><code>node_stats_age</code> / <code>node_stats_incr</code></td>
-      </tr>
-    </table>
-
-    <p>
-      For example,
+      Use <code>msg_rates_age</code>
+      and <code>msg_rates_incr</code> to return samples for messages
+      sent and received, <code>data_rates_age</code>
+      and <code>data_rates_incr</code> to return samples for bytes
+      sent and received, and <code>lengths_age</code>
+      and <code>lengths_incr</code> to return samples for queue
+      lengths. For example,
       appending <code>?lengths_age=3600&lengths_incr=60</code> will
       return the last hour's data on queue lengths, with a sample for
       every minute.
@@ -238,15 +215,13 @@
 
     <h2>Detailed message stats objects</h2>
     <p>
-      In addition, queues, exchanges and channels can return a
+      In addition, queues, exchanges and channels will return a
       breakdown of message stats for each of their neighbours
       (i.e. adjacent objects in the chain: channel -> exchange ->
-      queue -> channel). This will only happen if
-      the <code>rates_mode</code> configuration item has been switched
-      to <code>detailed</code> from its default of <code>basic</code>.
+      queue -> channel).
     </p>
     <p>
-      As this possibly constitutes a large quantity of data, it is also
+      As this possibly constitutes a large quantity of data, it is
       only returned when querying a single channel, queue or exchange
       rather than a list. Note also that the default sample retention
       policy means that these detailed message stats do not retain
@@ -306,12 +281,6 @@
         <td>
           The name of the entire cluster, as set with <code>rabbitmqctl
           set_cluster_name</code>.
-        </td>
-      </tr>
-      <tr>
-        <td><code>contexts</code></td>
-        <td>
-          A list of web application contexts in the cluster.
         </td>
       </tr>
       <tr>
@@ -391,15 +360,15 @@
         </td>
       </tr>
       <tr>
-        <td><code>rates_mode</code></td>
-        <td>
-          'none', 'basic' or 'detailed'.
-        </td>
-      </tr>
-      <tr>
         <td><code>statistics_db_node</code></td>
         <td>
           Name of the cluster node hosting the management statistics database.
+        </td>
+      </tr>
+      <tr>
+        <td><code>statistics_level</code></td>
+        <td>
+          Whether the node is running fine or coarse statistics.
         </td>
       </tr>
     </table>
@@ -424,21 +393,9 @@
         </td>
       </tr>
       <tr>
-        <td><code>config_files</code></td>
-        <td>
-          List of config files read by the node.
-        </td>
-      </tr>
-      <tr>
         <td><code>contexts</code></td>
         <td>
           List of all HTTP listeners on the node.
-        </td>
-      </tr>
-      <tr>
-        <td><code>db_dir</code></td>
-        <td>
-          Location of the persistent storage used by the node.
         </td>
       </tr>
       <tr>
@@ -460,12 +417,6 @@
         </td>
       </tr>
       <tr>
-        <td><code>enabled_plugins</code></td>
-        <td>
-          List of plugins which are both explicitly enabled and running.
-        </td>
-      </tr>
-      <tr>
         <td><code>exchange_types</code></td>
         <td>
           Exchange types available on the node.
@@ -481,12 +432,6 @@
         <td><code>fd_used</code></td>
         <td>
           Used file descriptors.
-        </td>
-      </tr>
-      <tr>
-        <td><code>log_file</code></td>
-        <td>
-          Location of main log file.
         </td>
       </tr>
       <tr>
@@ -511,12 +456,6 @@
         <td><code>name</code></td>
         <td>
           Node name.
-        </td>
-      </tr>
-      <tr>
-        <td><code>net_ticktime</code></td>
-        <td>
-          Current kernel net_ticktime setting for the node.
         </td>
       </tr>
       <tr>
@@ -551,12 +490,6 @@
         </td>
       </tr>
       <tr>
-        <td><code>rates_mode</code></td>
-        <td>
-          'none', 'basic' or 'detailed'.
-        </td>
-      </tr>
-      <tr>
         <td><code>run_queue</code></td>
         <td>
           Average number of Erlang processes waiting to run.
@@ -570,12 +503,6 @@
         </td>
       </tr>
       <tr>
-        <td><code>sasl_log_file</code></td>
-        <td>
-          Location of <a href="http://www.erlang.org/doc/man/sasl_app.html">sasl</a> log file.
-        </td>
-      </tr>
-      <tr>
         <td><code>sockets_total</code></td>
         <td>
           File descriptors available for use as sockets.
@@ -585,6 +512,12 @@
         <td><code>sockets_used</code></td>
         <td>
           File descriptors used as sockets.
+        </td>
+      </tr>
+      <tr>
+        <td><code>statistics_level</code></td>
+        <td>
+          'fine' or 'coarse'.
         </td>
       </tr>
       <tr>
@@ -613,15 +546,6 @@
         <td>
           Detailed memory use statistics. Only appears
           if <code>?memory=true</code> is appended to the URL.
-        </td>
-      </tr>
-      <tr>
-        <td><code>binary</code></td>
-        <td>
-          Detailed breakdown of the owners of binary memory. Only
-          appears if <code>?binary=true</code> is appended to the
-          URL. Note that this can be an expensive query if there are
-          many small binaries in the system.
         </td>
       </tr>
     </table>

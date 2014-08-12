@@ -45,8 +45,7 @@
 
 -export([register_default_consumer/2]).
 -export([init/1, handle_consume_ok/3, handle_consume/3, handle_cancel_ok/3,
-         handle_cancel/2, handle_server_cancel/2,
-         handle_deliver/3, handle_deliver/4,
+         handle_cancel/2, handle_server_cancel/2, handle_deliver/3,
          handle_info/2, handle_call/3, terminate/2]).
 
 -record(state, {consumers             = dict:new(), %% Tag -> ConsumerPid
@@ -155,13 +154,8 @@ handle_server_cancel(Cancel = #'basic.cancel'{nowait = true}, State) ->
     {ok, State1}.
 
 %% @private
-handle_deliver(Method, Message, State) ->
-    deliver(Method, Message, State),
-    {ok, State}.
-
-%% @private
-handle_deliver(Method, Message, DeliveryCtx, State) ->
-    deliver(Method, Message, DeliveryCtx, State),
+handle_deliver(Deliver, Message, State) ->
+    deliver(Deliver, Message, State),
     {ok, State}.
 
 %% @private
@@ -207,25 +201,17 @@ terminate(_Reason, State) ->
 %% Internal plumbing
 %%---------------------------------------------------------------------------
 
-deliver_to_consumer_or_die(Method, Msg, State) ->
-    case resolve_consumer(tag(Method), State) of
-        {consumer, Pid} -> Pid ! Msg;
-        {default, Pid}  -> Pid ! Msg;
+deliver(Msg, State) ->
+    deliver(Msg, undefined, State).
+deliver(Msg, Message, State) ->
+    Combined = if Message =:= undefined -> Msg;
+                  true                  -> {Msg, Message}
+               end,
+    case resolve_consumer(tag(Msg), State) of
+        {consumer, Pid} -> Pid ! Combined;
+        {default, Pid}  -> Pid ! Combined;
         error           -> exit(unexpected_delivery_and_no_default_consumer)
     end.
-
-deliver(Method, State) ->
-    deliver(Method, undefined, State).
-deliver(Method, Message, State) ->
-    Combined = if Message =:= undefined -> Method;
-                  true                  -> {Method, Message}
-               end,
-    deliver_to_consumer_or_die(Method, Combined, State).
-deliver(Method, Message, DeliveryCtx, State) ->
-    Combined = if Message =:= undefined -> Method;
-                  true                  -> {Method, Message, DeliveryCtx}
-               end,
-    deliver_to_consumer_or_die(Method, Combined, State).
 
 do_cancel(Cancel, State = #state{consumers = Consumers,
                                  monitors  = Monitors}) ->
