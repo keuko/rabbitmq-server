@@ -5,6 +5,7 @@ rabbitmq-server (3.4.2-1) UNRELEASED; urgency=medium
     locations.
   * d/source/format: Switch packaging to source format 3.0 (quilt).
   * d/compat,control: Bump debhelper compat level to 9.
+  * d/*: wrap-and-sort.
 
  -- James Page <james.page@ubuntu.com>  Wed, 17 Dec 2014 11:42:05 +0000
 
