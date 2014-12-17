@@ -1,25 +1,21 @@
 #!/usr/bin/make -f
+# -*- makefile -*-
+#export DH_VERBOSE=1
 
-include /usr/share/cdbs/1/rules/debhelper.mk
-include /usr/share/cdbs/1/class/makefile.mk
+%:
+	dh $@ --parallel
 
-RABBIT_LIB=$(DEB_DESTDIR)usr/lib/rabbitmq/lib/rabbitmq_server-$(DEB_UPSTREAM_VERSION)/
-RABBIT_BIN=$(DEB_DESTDIR)usr/lib/rabbitmq/bin/
+DEB_UPSTREAM_VERSION=$(shell dpkg-parsechangelog | sed -rne 's,^Version: ([^+]+)-.*,\1,p')
+DEB_DESTDIR=debian/rabbitmq-server
+RABBIT_LIB=$(DEB_DESTDIR)/usr/lib/rabbitmq/lib/rabbitmq_server-$(DEB_UPSTREAM_VERSION)
+RABBIT_BIN=$(DEB_DESTDIR)/usr/lib/rabbitmq/bin
+DOCDIR=$(DEB_DESTDIR)/usr/share/doc/rabbitmq-server
 
-DOCDIR=$(DEB_DESTDIR)usr/share/doc/rabbitmq-server/
-DEB_MAKE_INSTALL_TARGET := install TARGET_DIR=$(RABBIT_LIB) SBIN_DIR=$(RABBIT_BIN) DOC_INSTALL_DIR=$(DOCDIR) MAN_DIR=$(DEB_DESTDIR)usr/share/man/
-DEB_MAKE_CLEAN_TARGET:= distclean
-DEB_INSTALL_DOCS_ALL=debian/README
+override_dh_auto_install:
+	dh_auto_install -- TARGET_DIR=$(RABBIT_LIB) SBIN_DIR=$(RABBIT_BIN) \
+		DOC_INSTALL_DIR=$(DOCDIR) MAN_DIR=$(DEB_DESTDIR)/usr/share/man
+	rm -f $(RABBIT_LIB)/LICENSE* $(RABBIT_LIB)/INSTALL*
 
-install/rabbitmq-server::
-	mkdir -p $(DOCDIR)
-	rm $(RABBIT_LIB)LICENSE* $(RABBIT_LIB)INSTALL*
-	for script in rabbitmqctl rabbitmq-server rabbitmq-plugins; do \
-		install -p -D -m 0755 debian/rabbitmq-script-wrapper $(DEB_DESTDIR)usr/sbin/$$script; \
-	done
-	sed -e 's|@RABBIT_LIB@|/usr/lib/rabbitmq/lib/rabbitmq_server-$(DEB_UPSTREAM_VERSION)|g' <debian/postrm.in >debian/postrm
-	install -p -D -m 0755 debian/rabbitmq-server.ocf $(DEB_DESTDIR)usr/lib/ocf/resource.d/rabbitmq/rabbitmq-server
-	install -p -D -m 0644 debian/rabbitmq-server.default $(DEB_DESTDIR)etc/default/rabbitmq-server
-
-clean::
-	rm -f plugins-src/rabbitmq-server debian/postrm plugins/README
+override_dh_auto_clean:
+	rm -f plugins-src/rabbitmq-server plugins/README
+	dh_auto_clean
