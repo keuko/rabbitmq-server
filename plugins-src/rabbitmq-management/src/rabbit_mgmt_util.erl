@@ -29,8 +29,7 @@
 -export([props_to_method/2, props_to_method/4]).
 -export([all_or_one_vhost/2, http_to_amqp/5, reply/3, filter_vhost/3]).
 -export([filter_conn_ch_list/3, filter_user/2, list_login_vhosts/1]).
--export([with_decode/5, decode/1, decode/2, redirect/2, set_resp_header/3,
-         args/1]).
+-export([with_decode/5, decode/1, decode/2, redirect/2, args/1]).
 -export([reply_list/3, reply_list/4, sort_list/2, destination_type/1]).
 -export([post_respond/1, columns/1, is_monitor/1]).
 -export([list_visible_vhosts/1, b64decode_or_throw/1, no_range/0, range/1,
@@ -40,9 +39,6 @@
 
 -include("rabbit_mgmt.hrl").
 -include_lib("amqp_client/include/amqp_client.hrl").
-
--include_lib("webmachine/include/wm_reqdata.hrl").
--include_lib("webmachine/include/wm_reqstate.hrl").
 
 -define(FRAMING, rabbit_framing_amqp_0_9_1).
 
@@ -120,7 +116,11 @@ is_authorized(ReqData, Context, Username, Password, ErrorMsg, Fun) ->
              end,
     case rabbit_access_control:check_user_pass_login(Username, Password) of
         {ok, User = #user{tags = Tags}} ->
-            IP = peer(ReqData),
+            IPStr = wrq:peer(ReqData),
+            %% inet_parse:address/1 is an undocumented function but
+            %% exists in old versions of Erlang. inet:parse_address/1
+            %% is a documented wrapper round it but introduced in R16B.
+            {ok, IP} = inet_parse:address(IPStr),
             case rabbit_access_control:check_user_loopback(Username, IP) of
                 ok ->
                     case is_mgmt_user(Tags) of
@@ -143,17 +143,6 @@ is_authorized(ReqData, Context, Username, Password, ErrorMsg, Fun) ->
             not_authorised(<<"Login failed">>, ReqData, Context)
     end.
 
-%% We can't use wrq:peer/1 because that trusts X-Forwarded-For.
-peer(ReqData) ->
-    WMState = ReqData#wm_reqdata.wm_state,
-    {ok, {IP,_Port}} = peername(WMState#wm_reqstate.socket),
-    IP.
-
-%% Like the one in rabbit_net, but we and webmachine have a different
-%% way of wrapping
-peername(Sock) when is_port(Sock) -> inet:peername(Sock);
-peername({ssl, SSL})              -> ssl:peername(SSL).
-
 vhost(ReqData) ->
     case id(vhost, ReqData) of
         none  -> none;
@@ -173,7 +162,7 @@ reply(Facts, ReqData, Context) ->
     reply0(extract_columns(Facts, ReqData), ReqData, Context).
 
 reply0(Facts, ReqData, Context) ->
-    ReqData1 = set_resp_header("Cache-Control", "no-cache", ReqData),
+    ReqData1 = wrq:set_resp_header("Cache-Control", "no-cache", ReqData),
     try
         {mochijson2:encode(Facts), ReqData1, Context}
     catch exit:{json_encode, E} ->
@@ -493,13 +482,8 @@ filter_conn_ch_list(List, ReqData, Context) ->
 
 redirect(Location, ReqData) ->
     wrq:do_redirect(true,
-                    set_resp_header("Location",
-                                    binary_to_list(Location), ReqData)).
-
-set_resp_header(K, V, ReqData) ->
-    wrq:set_resp_header(K, strip_crlf(V), ReqData).
-
-strip_crlf(Str) -> lists:append(string:tokens(Str, "\r\n")).
+                    wrq:set_resp_header("Location",
+                                        binary_to_list(Location), ReqData)).
 
 args({struct, L}) -> args(L);
 args(L)           -> rabbit_mgmt_format:to_amqp_table(L).
@@ -510,7 +494,7 @@ post_respond({true, ReqData, Context}) ->
 post_respond({{halt, Code}, ReqData, Context}) ->
     {{halt, Code}, ReqData, Context};
 post_respond({JSON, ReqData, Context}) ->
-    {true, set_resp_header(
+    {true, wrq:set_resp_header(
              "content-type", "application/json",
              wrq:append_to_response_body(JSON, ReqData)), Context}.
 
@@ -552,33 +536,25 @@ b64decode_or_throw(B64) ->
             throw({error, {not_base64, B64}})
     end.
 
-no_range() -> {no_range, no_range, no_range, no_range}.
+no_range() -> {no_range, no_range, no_range}.
 
 %% Take floor on queries so we make sure we only return samples
 %% for which we've finished receiving events. Fixes the "drop at
 %% the end" problem.
 range(ReqData) -> {range("lengths",    fun floor/2, ReqData),
                    range("msg_rates",  fun floor/2, ReqData),
-                   range("data_rates", fun floor/2, ReqData),
-                   range("node_stats", fun floor/2, ReqData)}.
+                   range("data_rates", fun floor/2, ReqData)}.
 
 %% ...but if we know only one event could have contributed towards
 %% what we are interested in, then let's take the ceiling instead and
-%% get slightly fresher data that will match up with any
-%% non-historical data we have (e.g. queue length vs queue messages in
-%% RAM, they should both come from the same snapshot or we might
-%% report more messages in RAM than total).
+%% get slightly fresher data.
 %%
-%% However, we only do this for queue lengths since a) it's the only
-%% thing where this ends up being really glaring and b) for other
-%% numbers we care more about the rate than the absolute value, and if
-%% we use ceil() we stand a 50:50 chance of looking up the last sample
-%% in the range before we get it, and thus deriving an instantaneous
-%% rate of 0.0.
+%% Why does msg_rates still use floor/2? Because in the cases where we
+%% call this function (for connections and queues) the msg_rates are still
+%% aggregated even though the lengths and data rates aren't.
 range_ceil(ReqData) -> {range("lengths",    fun ceil/2,  ReqData),
                         range("msg_rates",  fun floor/2, ReqData),
-                        range("data_rates", fun floor/2,  ReqData),
-                        range("node_stats", fun floor/2,  ReqData)}.
+                        range("data_rates", fun ceil/2,  ReqData)}.
 
 range(Prefix, Round, ReqData) ->
     Age0 = int(Prefix ++ "_age", ReqData),
@@ -587,7 +563,7 @@ range(Prefix, Round, ReqData) ->
         is_integer(Age0) andalso is_integer(Incr0) ->
             Age = Age0 * 1000,
             Incr = Incr0 * 1000,
-            Now = rabbit_mgmt_format:now_to_ms(os:timestamp()),
+            Now = rabbit_mgmt_format:timestamp_ms(erlang:now()),
             Last = Round(Now, Incr),
             #range{first = (Last - Age),
                    last  = Last,

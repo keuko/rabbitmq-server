@@ -87,10 +87,8 @@ safe_handle_event(HandleEvent, Event, State) ->
         HandleEvent(Event, State)
     catch
         _:Error ->
-            io:format(
-              "Error in log handler~n====================~n"
-              "Event: ~P~nError: ~P~nStack trace: ~p~n~n",
-              [Event, 30, Error, 30, erlang:get_stacktrace()]),
+            io:format("Event crashed log handler:~n~P~n~P~n",
+                      [Event, 30, Error, 30]),
             {ok, State}
     end.
 

@@ -51,27 +51,21 @@ full:
 	$(MAKE) prepare && \
 	{ $(MAKE) -C $(BROKER_DIR) run-tests || { OK=false; $(TESTS_FAILED); } } && \
 	{ $(MAKE) run-qpid-testsuite || { OK=false; $(TESTS_FAILED); } } && \
-	{ ( cd $(TEST_DIR) && MAKE=$(MAKE) ant test-suite ) || { OK=false; $(TESTS_FAILED); } } && \
+	{ ( cd $(TEST_DIR) && ant test-suite ) || { OK=false; $(TESTS_FAILED); } } && \
 	$(MAKE) cleanup && { $$OK || $(TESTS_FAILED); } && $$OK
-
-unit:
-	OK=true && \
-	$(MAKE) prepare && \
-	{ $(MAKE) -C $(BROKER_DIR) run-tests || OK=false; } && \
-	$(MAKE) cleanup && $$OK
 
 lite:
 	OK=true && \
 	$(MAKE) prepare && \
 	{ $(MAKE) -C $(BROKER_DIR) run-tests || OK=false; } && \
-	{ ( cd $(TEST_DIR) && MAKE=$(MAKE) ant test-suite ) || OK=false; } && \
+	{ ( cd $(TEST_DIR) && ant test-suite ) || OK=false; } && \
 	$(MAKE) cleanup && $$OK
 
 conformance16:
 	OK=true && \
 	$(MAKE) prepare && \
 	{ $(MAKE) -C $(BROKER_DIR) run-tests || OK=false; } && \
-	{ ( cd $(TEST_DIR) && MAKE=$(MAKE) ant test-suite ) || OK=false; } && \
+	{ ( cd $(TEST_DIR) && ant test-suite ) || OK=false; } && \
 	$(MAKE) cleanup && $$OK
 
 qpid_testsuite:
@@ -176,4 +170,3 @@ cleanup:
 
 create_ssl_certs:
 	$(MAKE) -C certs DIR=$(SSL_CERTS_DIR) clean all
-

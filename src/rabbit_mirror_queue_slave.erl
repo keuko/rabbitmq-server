@@ -24,13 +24,13 @@
 %% All instructions from the GM group must be processed in the order
 %% in which they're received.
 
--export([set_maximum_since_use/2, info/1, go/2]).
+-export([start_link/1, set_maximum_since_use/2, info/1, go/2]).
 
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
          code_change/3, handle_pre_hibernate/1, prioritise_call/4,
          prioritise_cast/3, prioritise_info/3, format_message_queue/2]).
 
--export([joined/2, members_changed/3, handle_msg/3, handle_terminate/2]).
+-export([joined/2, members_changed/3, handle_msg/3]).
 
 -behaviour(gen_server2).
 -behaviour(gm).
@@ -71,6 +71,8 @@
 
 %%----------------------------------------------------------------------------
 
+start_link(Q) -> gen_server2:start_link(?MODULE, Q, []).
+
 set_maximum_since_use(QPid, Age) ->
     gen_server2:cast(QPid, {set_maximum_since_use, Age}).
 
@@ -80,7 +82,7 @@ init(Q) ->
     ?store_proc_name(Q#amqqueue.name),
     {ok, {not_started, Q}, hibernate,
      {backoff, ?HIBERNATE_AFTER_MIN, ?HIBERNATE_AFTER_MIN,
-      ?DESIRED_HIBERNATE}, ?MODULE}.
+      ?DESIRED_HIBERNATE}}.
 
 go(SPid, sync)  -> gen_server2:call(SPid, go, infinity);
 go(SPid, async) -> gen_server2:cast(SPid, go).
@@ -120,7 +122,6 @@ handle_go(Q = #amqqueue{name = QName}) ->
                    Self, {rabbit_amqqueue, set_ram_duration_target, [Self]}),
             {ok, BQ} = application:get_env(backing_queue_module),
             Q1 = Q #amqqueue { pid = QPid },
-            ok = rabbit_queue_index:erase(QName), %% For crash recovery
             BQS = bq_init(BQ, Q1, new),
             State = #state { q                   = Q1,
                              gm                  = GM,
@@ -167,11 +168,11 @@ init_it(Self, GM, Node, QName) ->
             case [Pid || Pid <- [QPid | SPids], node(Pid) =:= Node] of
                 []     -> add_slave(Q, Self, GM),
                           {new, QPid, GMPids};
-                [QPid] -> case rabbit_mnesia:is_process_alive(QPid) of
+                [QPid] -> case rabbit_misc:is_process_alive(QPid) of
                               true  -> duplicate_live_master;
                               false -> {stale, QPid}
                           end;
-                [SPid] -> case rabbit_mnesia:is_process_alive(SPid) of
+                [SPid] -> case rabbit_misc:is_process_alive(SPid) of
                               true  -> existing;
                               false -> GMPids1 = [T || T = {_, S} <- GMPids,
                                                        S =/= SPid],
@@ -270,8 +271,8 @@ handle_cast({sync_start, Ref, Syncer},
            DD, Ref, TRef, Syncer, BQ, BQS,
            fun (BQN, BQSN) ->
                    BQSN1 = update_ram_duration(BQN, BQSN),
-                   TRefN = rabbit_misc:send_after(?RAM_DURATION_UPDATE_INTERVAL,
-                                                  self(), update_ram_duration),
+                   TRefN = erlang:send_after(?RAM_DURATION_UPDATE_INTERVAL,
+                                             self(), update_ram_duration),
                    {TRefN, BQSN1}
            end) of
         denied              -> noreply(State1);
@@ -317,15 +318,6 @@ handle_info({bump_credit, Msg}, State) ->
     credit_flow:handle_bump_msg(Msg),
     noreply(State);
 
-%% In the event of a short partition during sync we can detect the
-%% master's 'death', drop out of sync, and then receive sync messages
-%% which were still in flight. Ignore them.
-handle_info({sync_msg, _Ref, _Msg, _Props, _Unacked}, State) ->
-    noreply(State);
-
-handle_info({sync_complete, _Ref}, State) ->
-    noreply(State);
-
 handle_info(Msg, State) ->
     {stop, {unexpected_info, Msg}, State}.
 
@@ -347,7 +339,10 @@ terminate({shutdown, _} = R, State) ->
 terminate(Reason, State = #state{backing_queue       = BQ,
                                  backing_queue_state = BQS}) ->
     terminate_common(State),
-    BQ:delete_and_terminate(Reason, BQS).
+    BQ:delete_and_terminate(Reason, BQS);
+terminate([_SPid], _Reason) ->
+    %% gm case
+    ok.
 
 %% If the Reason is shutdown, or {shutdown, _}, it is not the queue
 %% being deleted: it's just the node going down. Even though we're a
@@ -443,9 +438,6 @@ handle_msg([SPid], _From, {sync_start, Ref, Syncer, SPids}) ->
     end;
 handle_msg([SPid], _From, Msg) ->
     ok = gen_server2:cast(SPid, {gm, Msg}).
-
-handle_terminate([_SPid], _Reason) ->
-    ok.
 
 %% ---------------------------------------------------------------------------
 %% Others
@@ -661,9 +653,8 @@ next_state(State = #state{backing_queue = BQ, backing_queue_state = BQS}) ->
         timed -> {ensure_sync_timer(State1), 0             }
     end.
 
-backing_queue_timeout(State = #state { backing_queue       = BQ,
-                                       backing_queue_state = BQS }) ->
-    State#state{backing_queue_state = BQ:timeout(BQS)}.
+backing_queue_timeout(State = #state { backing_queue = BQ }) ->
+    run_backing_queue(BQ, fun (M, BQS) -> M:timeout(BQS) end, State).
 
 ensure_sync_timer(State) ->
     rabbit_misc:ensure_timer(State, #state.sync_timer_ref,

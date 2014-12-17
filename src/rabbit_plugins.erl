@@ -18,7 +18,6 @@
 -include("rabbit.hrl").
 
 -export([setup/0, active/0, read_enabled/1, list/1, dependencies/3]).
--export([ensure/1]).
 
 %%----------------------------------------------------------------------------
 
@@ -32,56 +31,22 @@
 -spec(read_enabled/1 :: (file:filename()) -> [plugin_name()]).
 -spec(dependencies/3 :: (boolean(), [plugin_name()], [#plugin{}]) ->
                              [plugin_name()]).
--spec(ensure/1  :: (string()) -> {'ok', [atom()], [atom()]} | {error, any()}).
+
 -endif.
 
 %%----------------------------------------------------------------------------
 
-ensure(FileJustChanged0) ->
-    {ok, OurFile0} = application:get_env(rabbit, enabled_plugins_file),
-    FileJustChanged = filename:nativename(FileJustChanged0),
-    OurFile = filename:nativename(OurFile0),
-    case OurFile of
-        FileJustChanged ->
-            Enabled = read_enabled(OurFile),
-            Wanted = prepare_plugins(Enabled),
-            Current = active(),
-            Start = Wanted -- Current,
-            Stop = Current -- Wanted,
-            rabbit:start_apps(Start),
-            %% We need sync_notify here since mgmt will attempt to look at all
-            %% the modules for the disabled plugins - if they are unloaded
-            %% that won't work.
-            ok = rabbit_event:sync_notify(plugins_changed, [{enabled,  Start},
-                                                            {disabled, Stop}]),
-            rabbit:stop_apps(Stop),
-            clean_plugins(Stop),
-            rabbit_log:info("Plugins changed; enabled ~p, disabled ~p~n",
-                            [Start, Stop]),
-            {ok, Start, Stop};
-        _ ->
-            {error, {enabled_plugins_mismatch, FileJustChanged, OurFile}}
-    end.
-
 %% @doc Prepares the file system and installs all enabled plugins.
 setup() ->
+    {ok, PluginDir}   = application:get_env(rabbit, plugins_dir),
     {ok, ExpandDir}   = application:get_env(rabbit, plugins_expand_dir),
-
-    %% Eliminate the contents of the destination directory
-    case delete_recursively(ExpandDir) of
-        ok          -> ok;
-        {error, E1} -> throw({error, {cannot_delete_plugins_expand_dir,
-                                      [ExpandDir, E1]}})
-    end,
-
     {ok, EnabledFile} = application:get_env(rabbit, enabled_plugins_file),
-    Enabled = read_enabled(EnabledFile),
-    prepare_plugins(Enabled).
+    prepare_plugins(EnabledFile, PluginDir, ExpandDir).
 
 %% @doc Lists the plugins which are currently running.
 active() ->
     {ok, ExpandDir} = application:get_env(rabbit, plugins_expand_dir),
-    InstalledPlugins = plugin_names(list(ExpandDir)),
+    InstalledPlugins = [ P#plugin.name || P <- list(ExpandDir) ],
     [App || {App, _, _} <- rabbit_misc:which_applications(),
             lists:member(App, InstalledPlugins)].
 
@@ -99,10 +64,10 @@ list(PluginsDir) ->
                     [plugin_info(PluginsDir, Plug) || Plug <- EZs ++ FreeApps]),
     case Problems of
         [] -> ok;
-        _  -> rabbit_log:warning(
+        _  -> error_logger:warning_msg(
                 "Problem reading some plugins: ~p~n", [Problems])
     end,
-    ensure_dependencies(Plugins).
+    Plugins.
 
 %% @doc Read the list of enabled plugins from the supplied term file.
 read_enabled(PluginsFile) ->
@@ -121,10 +86,15 @@ read_enabled(PluginsFile) ->
 %% the resulting list, otherwise they're skipped.
 dependencies(Reverse, Sources, AllPlugins) ->
     {ok, G} = rabbit_misc:build_acyclic_graph(
-                fun ({App, _Deps}) -> [{App, App}] end,
-                fun ({App,  Deps}) -> [{App, Dep} || Dep <- Deps] end,
-                [{Name, Deps} || #plugin{name         = Name,
-                                         dependencies = Deps} <- AllPlugins]),
+                fun (App, _Deps) -> [{App, App}] end,
+                fun (App,  Deps) -> [{App, Dep} || Dep <- Deps] end,
+                lists:ukeysort(
+                  1, [{Name, Deps} ||
+                         #plugin{name         = Name,
+                                 dependencies = Deps} <- AllPlugins] ++
+                      [{Dep,   []} ||
+                          #plugin{dependencies = Deps} <- AllPlugins,
+                          Dep                          <- Deps])),
     Dests = case Reverse of
                 false -> digraph_utils:reachable(Sources, G);
                 true  -> digraph_utils:reaching(Sources, G)
@@ -132,69 +102,37 @@ dependencies(Reverse, Sources, AllPlugins) ->
     true = digraph:delete(G),
     Dests.
 
-%% Make sure we don't list OTP apps in here, and also that we detect
-%% missing dependencies.
-ensure_dependencies(Plugins) ->
-    Names = plugin_names(Plugins),
-    NotThere = [Dep || #plugin{dependencies = Deps} <- Plugins,
-                       Dep                          <- Deps,
-                       not lists:member(Dep, Names)],
-    {OTP, Missing} = lists:partition(fun is_loadable/1, lists:usort(NotThere)),
-    case Missing of
-        [] -> ok;
-        _  -> Blame = [Name || #plugin{name         = Name,
-                                       dependencies = Deps} <- Plugins,
-                               lists:any(fun (Dep) ->
-                                                 lists:member(Dep, Missing)
-                                         end, Deps)],
-              throw({error, {missing_dependencies, Missing, Blame}})
-    end,
-    [P#plugin{dependencies = Deps -- OTP}
-     || P = #plugin{dependencies = Deps} <- Plugins].
-
-is_loadable(App) ->
-    case application:load(App) of
-        {error, {already_loaded, _}} -> true;
-        ok                           -> application:unload(App),
-                                        true;
-        _                            -> false
-   end.
-
 %%----------------------------------------------------------------------------
 
-prepare_plugins(Enabled) ->
-    {ok, PluginsDistDir} = application:get_env(rabbit, plugins_dir),
-    {ok, ExpandDir} = application:get_env(rabbit, plugins_expand_dir),
-
+prepare_plugins(EnabledFile, PluginsDistDir, ExpandDir) ->
     AllPlugins = list(PluginsDistDir),
-    Wanted = dependencies(false, Enabled, AllPlugins),
-    WantedPlugins = lookup_plugins(Wanted, AllPlugins),
+    Enabled = read_enabled(EnabledFile),
+    ToUnpack = dependencies(false, Enabled, AllPlugins),
+    ToUnpackPlugins = lookup_plugins(ToUnpack, AllPlugins),
 
+    case Enabled -- plugin_names(ToUnpackPlugins) of
+        []      -> ok;
+        Missing -> error_logger:warning_msg(
+                     "The following enabled plugins were not found: ~p~n",
+                     [Missing])
+    end,
+
+    %% Eliminate the contents of the destination directory
+    case delete_recursively(ExpandDir) of
+        ok          -> ok;
+        {error, E1} -> throw({error, {cannot_delete_plugins_expand_dir,
+                                      [ExpandDir, E1]}})
+    end,
     case filelib:ensure_dir(ExpandDir ++ "/") of
         ok          -> ok;
         {error, E2} -> throw({error, {cannot_create_plugins_expand_dir,
                                       [ExpandDir, E2]}})
     end,
 
-    [prepare_plugin(Plugin, ExpandDir) || Plugin <- WantedPlugins],
+    [prepare_plugin(Plugin, ExpandDir) || Plugin <- ToUnpackPlugins],
 
     [prepare_dir_plugin(PluginAppDescPath) ||
-        PluginAppDescPath <- filelib:wildcard(ExpandDir ++ "/*/ebin/*.app")],
-    Wanted.
-
-clean_plugins(Plugins) ->
-    {ok, ExpandDir} = application:get_env(rabbit, plugins_expand_dir),
-    [clean_plugin(Plugin, ExpandDir) || Plugin <- Plugins].
-
-clean_plugin(Plugin, ExpandDir) ->
-    {ok, Mods} = application:get_key(Plugin, modules),
-    application:unload(Plugin),
-    [begin
-         code:soft_purge(Mod),
-         code:delete(Mod),
-         false = code:is_loaded(Mod)
-     end || Mod <- Mods],
-    delete_recursively(rabbit_misc:format("~s/~s", [ExpandDir, Plugin])).
+        PluginAppDescPath <- filelib:wildcard(ExpandDir ++ "/*/ebin/*.app")].
 
 prepare_dir_plugin(PluginAppDescPath) ->
     code:add_path(filename:dirname(PluginAppDescPath)),
@@ -234,7 +172,8 @@ plugin_info(Base, {app, App0}) ->
 mkplugin(Name, Props, Type, Location) ->
     Version = proplists:get_value(vsn, Props, "0"),
     Description = proplists:get_value(description, Props, ""),
-    Dependencies = proplists:get_value(applications, Props, []),
+    Dependencies =
+        filter_applications(proplists:get_value(applications, Props, [])),
     #plugin{name = Name, version = Version, description = Description,
             dependencies = Dependencies, location = Location, type = Type}.
 
@@ -265,6 +204,18 @@ parse_binary(Bin) ->
         Term
     catch
         Err -> {error, {invalid_app, Err}}
+    end.
+
+filter_applications(Applications) ->
+    [Application || Application <- Applications,
+                    not is_available_app(Application)].
+
+is_available_app(Application) ->
+    case application:load(Application) of
+        {error, {already_loaded, _}} -> true;
+        ok                           -> application:unload(Application),
+                                        true;
+        _                            -> false
     end.
 
 plugin_names(Plugins) ->

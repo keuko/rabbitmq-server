@@ -21,14 +21,13 @@
 -export([cluster/2, cluster_ab/1, cluster_abc/1, start_ab/1, start_abc/1]).
 -export([start_connections/1, build_cluster/1]).
 -export([ha_policy_all/1, ha_policy_two_pos/1]).
--export([start_nodes/2, start_nodes/3, add_to_cluster/2,
-         rabbitmqctl/2, rabbitmqctl_fail/2]).
+-export([start_nodes/2, start_nodes/3, add_to_cluster/2]).
 -export([stop_nodes/1, start_node/1, stop_node/1, kill_node/1, restart_node/1,
-         start_node_fail/1, execute/1]).
+         execute/1]).
 -export([cover_work_factor/2]).
 
 -import(rabbit_test_util, [set_ha_policy/3, set_ha_policy/4, a2b/1]).
--import(rabbit_misc, [pget/2, pget/3]).
+-import(rabbit_misc, [pget/2]).
 
 -define(INITIAL_KEYS, [cover, base, server, plugins]).
 -define(NON_RUNNING_KEYS, ?INITIAL_KEYS ++ [nodename, port]).
@@ -69,23 +68,54 @@ strip_non_initial(Cfg) ->
 strip_running(Cfg) ->
     [{K, V} || {K, V} <- Cfg, lists:member(K, ?NON_RUNNING_KEYS)].
 
-enable_plugins(Cfg) ->
-    enable_plugins(pget(plugins, Cfg), pget(server, Cfg), Cfg).
+enable_plugins(Cfg) -> enable_plugins(pget(plugins, Cfg), pget(server, Cfg)).
 
-enable_plugins(none, _Server, _Cfg) -> ok;
-enable_plugins(_Dir, Server, Cfg) ->
-    R = execute(Cfg, Server ++ "/scripts/rabbitmq-plugins list -m"),
-    Plugins = string:join(string:tokens(R, "\n"), " "),
-    execute(Cfg, {Server ++ "/scripts/rabbitmq-plugins set --offline ~s",
-                  [Plugins]}),
+enable_plugins(none, _Server) -> ok;
+enable_plugins(Dir, Server) ->
+    Env = plugins_env(Dir),
+    R = execute(Env, Server ++ "/scripts/rabbitmq-plugins list -m"),
+    Plugins = string:tokens(R, "\n"),
+    [execute(Env, {Server ++ "/scripts/rabbitmq-plugins enable ~s", [Plugin]})
+     || Plugin <- Plugins],
     ok.
 
-start_node(Cfg0) ->
-    Node = rabbit_nodes:make(pget(nodename, Cfg0)),
-    Cfg = [{node, Node} | Cfg0],
+plugins_env(none) ->
+    [{"RABBITMQ_ENABLED_PLUGINS_FILE", "/does-not-exist"}];
+plugins_env(Dir) ->
+    [{"RABBITMQ_PLUGINS_DIR",          {"~s/plugins", [Dir]}},
+     {"RABBITMQ_PLUGINS_EXPAND_DIR",   {"~s/expand", [Dir]}},
+     {"RABBITMQ_ENABLED_PLUGINS_FILE", {"~s/enabled_plugins", [Dir]}}].
+
+start_node(Cfg) ->
+    Nodename = pget(nodename, Cfg),
+    Port = pget(port, Cfg),
+    Base = pget(base, Cfg),
     Server = pget(server, Cfg),
-    Linked = execute_bg(Cfg, Server ++ "/scripts/rabbitmq-server"),
-    rabbitmqctl(Cfg, {"wait ~s", [pid_file(Cfg)]}),
+    PidFile = rabbit_misc:format("~s/~s.pid", [Base, Nodename]),
+    Linked =
+        execute_bg(
+          [{"RABBITMQ_MNESIA_BASE", {"~s/rabbitmq-~s-mnesia", [Base,Nodename]}},
+           {"RABBITMQ_LOG_BASE",    {"~s", [Base]}},
+           {"RABBITMQ_NODENAME",    {"~s", [Nodename]}},
+           {"RABBITMQ_NODE_PORT",   {"~B", [Port]}},
+           {"RABBITMQ_PID_FILE",    PidFile},
+           {"RABBITMQ_CONFIG_FILE", "/some/path/which/does/not/exist"},
+           {"RABBITMQ_ALLOW_INPUT", "1"}, %% Needed to make it close on our exit
+           %% Bit of a hack - only needed for mgmt tests.
+           {"RABBITMQ_SERVER_START_ARGS",
+            {"-rabbitmq_management listener [{port,1~B}]", [Port]}},
+           {"RABBITMQ_SERVER_ERL_ARGS",
+            %% Next two lines are defaults
+            {"+K true +A30 +P 1048576 "
+             "-kernel inet_default_connect_options [{nodelay,true}] "
+             %% Some tests need to be able to make distribution unhappy
+             "-pa ~s/../rabbitmq-test/ebin "
+             "-proto_dist inet_proxy", [Server]}}
+           | plugins_env(pget(plugins, Cfg))],
+          Server ++ "/scripts/rabbitmq-server"),
+    execute({Server ++ "/scripts/rabbitmqctl -n ~s wait ~s",
+             [Nodename, PidFile]}),
+    Node = rabbit_nodes:make(Nodename),
     OSPid = rpc:call(Node, os, getpid, []),
     %% The cover system thinks all nodes with the same name are the
     %% same node and will automaticaly re-establish cover as soon as
@@ -95,15 +125,10 @@ start_node(Cfg0) ->
         {true, false} -> cover:start([Node]);
         _             -> ok
     end,
-    [{os_pid,     OSPid},
+    [{node,       Node},
+     {pid_file,   PidFile}, 
+     {os_pid,     OSPid},
      {linked_pid, Linked} | Cfg].
-
-start_node_fail(Cfg0) ->
-    Node = rabbit_nodes:make(pget(nodename, Cfg0)),
-    Cfg = [{node, Node}, {acceptable_exit_codes, lists:seq(1, 255)} | Cfg0],
-    Server = pget(server, Cfg),
-    execute(Cfg, Server ++ "/scripts/rabbitmq-server"),
-    ok.
 
 build_cluster([First | Rest]) ->
     add_to_cluster([First], Rest).
@@ -114,21 +139,14 @@ add_to_cluster([First | _] = Existing, New) ->
 
 cluster_with(Cfg, NewCfg) ->
     Node = pget(node, Cfg),
-    rabbitmqctl(NewCfg, stop_app),
-    rabbitmqctl(NewCfg, {"join_cluster ~s", [Node]}),
-    rabbitmqctl(NewCfg, start_app).
-
-rabbitmqctl(Cfg, Str) ->
-    Node = pget(node, Cfg),
+    NewNodename = pget(nodename, NewCfg),
     Server = pget(server, Cfg),
-    Cmd = case Node of
-              undefined -> {"~s", [fmt(Str)]};
-              _         -> {"-n ~s ~s", [Node, fmt(Str)]}
-          end,
-    execute(Cfg, {Server ++ "/scripts/rabbitmqctl ~s", [fmt(Cmd)]}).
-
-rabbitmqctl_fail(Cfg, Str) ->
-    rabbitmqctl([{acceptable_exit_codes, lists:seq(1, 255)} | Cfg], Str).
+    execute({Server ++ "/scripts/rabbitmqctl -n ~s stop_app",
+             [NewNodename]}),
+    execute({Server ++ "/scripts/rabbitmqctl -n ~s join_cluster ~s",
+             [NewNodename, Node]}),
+    execute({Server ++ "/scripts/rabbitmqctl -n ~s start_app",
+             [NewNodename]}).   
 
 ha_policy_all([Cfg | _] = Cfgs) ->
     set_ha_policy(Cfg, <<".*">>, <<"all">>),
@@ -137,11 +155,9 @@ ha_policy_all([Cfg | _] = Cfgs) ->
 ha_policy_two_pos([Cfg | _] = Cfgs) ->
     Members = [a2b(pget(node, C)) || C <- Cfgs],
     TwoNodes = [M || M <- lists:sublist(Members, 2)],
-    set_ha_policy(Cfg, <<"^ha.two.">>, {<<"nodes">>, TwoNodes},
-                  [{<<"ha-promote-on-shutdown">>, <<"always">>}]),
+    set_ha_policy(Cfg, <<"^ha.two.">>, {<<"nodes">>, TwoNodes}, []),
     set_ha_policy(Cfg, <<"^ha.auto.">>, {<<"nodes">>, TwoNodes},
-                  [{<<"ha-sync-mode">>,           <<"automatic">>},
-                   {<<"ha-promote-on-shutdown">>, <<"always">>}]),
+                  [{<<"ha-sync-mode">>, <<"automatic">>}]),
     Cfgs.
 
 start_connections(Nodes) -> [start_connection(Node) || Node <- Nodes].
@@ -155,13 +171,15 @@ start_connection(Cfg) ->
 stop_nodes(Nodes) -> [stop_node(Node) || Node <- Nodes].
 
 stop_node(Cfg) ->
+    Server = pget(server, Cfg),
     maybe_flush_cover(Cfg),
-    catch rabbitmqctl(Cfg, {"stop ~s", [pid_file(Cfg)]}),
+    catch execute({Server ++ "/scripts/rabbitmqctl -n ~s stop ~s",
+                   [pget(nodename, Cfg), pget(pid_file, Cfg)]}),
     strip_running(Cfg).
 
 kill_node(Cfg) ->
     maybe_flush_cover(Cfg),
-    catch execute(Cfg, {"kill -9 ~s", [pget(os_pid, Cfg)]}),
+    catch execute({"kill -9 ~s", [pget(os_pid, Cfg)]}),
     strip_running(Cfg).
 
 restart_node(Cfg) ->
@@ -183,81 +201,34 @@ cover_work_factor(Without, Cfg) ->
 
 %%----------------------------------------------------------------------------
 
-execute(Cmd) ->
-    execute([], Cmd, [0]).
+execute(Cmd) -> execute([], Cmd).
 
-execute(Cfg, Cmd) ->
-    %% code 137 -> killed with SIGKILL which we do in some tests
-    execute(environment(Cfg), Cmd, pget(acceptable_exit_codes, Cfg, [0, 137])).
-
-execute(Env0, Cmd0, AcceptableExitCodes) ->
-    Env = [{"RABBITMQ_" ++ K, fmt(V)} || {K, V} <- Env0],
+execute(Env0, Cmd0) ->
+    Env = [{K, fmt(V)} || {K, V} <- Env0],
     Cmd = fmt(Cmd0),
     Port = erlang:open_port(
              {spawn, "/usr/bin/env sh -c \"" ++ Cmd ++ "\""},
              [{env, Env}, exit_status,
               stderr_to_stdout, use_stdio]),
-    port_receive_loop(Port, "", AcceptableExitCodes).
+    port_receive_loop(Port, "").
 
-environment(Cfg) ->
-    Nodename = pget(nodename, Cfg),
-    Plugins = pget(plugins, Cfg),
-    case Nodename of
-        undefined ->
-            plugins_env(Plugins);
-        _         ->
-            Port = pget(port, Cfg),
-            Base = pget(base, Cfg),
-            Server = pget(server, Cfg),
-            [{"MNESIA_BASE", {"~s/rabbitmq-~s-mnesia", [Base, Nodename]}},
-             {"LOG_BASE",    {"~s", [Base]}},
-             {"NODENAME",    {"~s", [Nodename]}},
-             {"NODE_PORT",   {"~B", [Port]}},
-             {"PID_FILE",    pid_file(Cfg)},
-             {"CONFIG_FILE", "/some/path/which/does/not/exist"},
-             {"ALLOW_INPUT", "1"}, %% Needed to make it close on exit
-             %% Bit of a hack - only needed for mgmt tests.
-             {"SERVER_START_ARGS",
-              {"-rabbitmq_management listener [{port,1~B}]", [Port]}},
-             {"SERVER_ERL_ARGS",
-              %% Next two lines are defaults
-              {"+K true +A30 +P 1048576 "
-               "-kernel inet_default_connect_options [{nodelay,true}] "
-               %% Some tests need to be able to make distribution unhappy
-               "-pa ~s/../rabbitmq-test/ebin "
-               "-proto_dist inet_proxy", [Server]}}
-             | plugins_env(Plugins)]
-    end.
-
-plugins_env(none) ->
-    [{"ENABLED_PLUGINS_FILE", "/does-not-exist"}];
-plugins_env(Dir) ->
-    [{"PLUGINS_DIR",          {"~s/plugins", [Dir]}},
-     {"PLUGINS_EXPAND_DIR",   {"~s/expand", [Dir]}},
-     {"ENABLED_PLUGINS_FILE", {"~s/enabled_plugins", [Dir]}}].
-
-pid_file(Cfg) ->
-    rabbit_misc:format("~s/~s.pid", [pget(base, Cfg), pget(nodename, Cfg)]).
-
-port_receive_loop(Port, Stdout, AcceptableExitCodes) ->
+port_receive_loop(Port, Stdout) ->
     receive
-        {Port, {exit_status, X}} ->
-            case lists:member(X, AcceptableExitCodes) of
-                true  -> Stdout;
-                false -> exit({exit_status, X, AcceptableExitCodes, Stdout})
-            end;
-        {Port, {data, Out}} ->
-            %%io:format(user, "~s", [Out]),
-            port_receive_loop(Port, Stdout ++ Out, AcceptableExitCodes)
+        {Port, {exit_status, 0}}   -> Stdout;
+        {Port, {exit_status, 137}} -> Stdout; %% [0]
+        {Port, {exit_status, X}}   -> exit({exit_status, X, Stdout});
+        {Port, {data, Out}}        -> %%io:format(user, "~s", [Out]),
+                                      port_receive_loop(Port, Stdout ++ Out)
     end.
 
-execute_bg(Cfg, Cmd) ->
+%% [0] code 137 -> killed with SIGKILL which we do in some tests
+
+execute_bg(Env, Cmd) ->
     spawn_link(fun () ->
-                       execute(Cfg, Cmd),
+                       execute(Env, Cmd),
                        {links, Links} = process_info(self(), links),
                        [unlink(L) || L <- Links]
                end).
 
 fmt({Fmt, Args}) -> rabbit_misc:format(Fmt, Args);
 fmt(Str)         -> Str.
-

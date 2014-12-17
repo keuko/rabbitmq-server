@@ -21,30 +21,21 @@
 -include_lib("rabbit_common/include/rabbit.hrl").
 
 -export([validate/5, notify/4, notify_clear/3]).
--export([register/0, unregister/0, validate_policy/1, adjust/1]).
-
--define(RUNTIME_PARAMETERS,
-        [{runtime_parameter, <<"federation">>},
-         {runtime_parameter, <<"federation-upstream">>},
-         {runtime_parameter, <<"federation-upstream-set">>},
-         {policy_validator,  <<"federation-upstream">>},
-         {policy_validator,  <<"federation-upstream-set">>}]).
+-export([register/0, validate_policy/1, adjust/1]).
 
 -rabbit_boot_step({?MODULE,
                    [{description, "federation parameters"},
                     {mfa, {rabbit_federation_parameters, register, []}},
                     {requires, rabbit_registry},
-                    {cleanup, {rabbit_federation_parameters, unregister, []}},
                     {enables, recovery}]}).
 
 register() ->
     [rabbit_registry:register(Class, Name, ?MODULE) ||
-        {Class, Name} <- ?RUNTIME_PARAMETERS],
-    ok.
-
-unregister() ->
-    [rabbit_registry:unregister(Class, Name) ||
-        {Class, Name} <- ?RUNTIME_PARAMETERS],
+        {Class, Name} <- [{runtime_parameter, <<"federation">>},
+                          {runtime_parameter, <<"federation-upstream">>},
+                          {runtime_parameter, <<"federation-upstream-set">>},
+                          {policy_validator,  <<"federation-upstream">>},
+                          {policy_validator,  <<"federation-upstream-set">>}]],
     ok.
 
 validate(_VHost, <<"federation-upstream-set">>, Name, Term, _User) ->

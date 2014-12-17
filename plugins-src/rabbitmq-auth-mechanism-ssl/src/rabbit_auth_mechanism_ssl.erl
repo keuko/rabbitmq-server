@@ -29,9 +29,7 @@
                     {mfa,         {rabbit_registry, register,
                                    [auth_mechanism, <<"EXTERNAL">>, ?MODULE]}},
                     {requires,    rabbit_registry},
-                    {enables,     kernel_ready},
-                    {cleanup,     {rabbit_registry, unregister,
-                                   [auth_mechanism, <<"EXTERNAL">>]}}]}).
+                    {enables,     kernel_ready}]}).
 
 -record(state, {username = undefined}).
 

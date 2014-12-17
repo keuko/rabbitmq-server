@@ -308,7 +308,6 @@ internal_send_command_async(MethodRecord, Content,
                                             pending   = Pending}) ->
     Frames = assemble_frames(Channel, MethodRecord, Content, FrameMax,
                              Protocol),
-    rabbit_basic:maybe_gc_large_msg(Content),
     maybe_flush(State#wstate{pending = [Frames | Pending]}).
 
 %% This magic number is the tcp-over-ethernet MSS (1460) minus the

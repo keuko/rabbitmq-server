@@ -33,9 +33,7 @@
      {mfa,         {rabbit_registry, register,
                     [exchange, <<"x-consistent-hash">>, ?MODULE]}},
      {requires,    rabbit_registry},
-     {enables,     kernel_ready},
-     {cleanup,     {rabbit_registry, unregister,
-                    [exchange, <<"x-consistent-hash">>]}}]}).
+     {enables,     kernel_ready}]}).
 
 -rabbit_boot_step(
    {rabbit_exchange_type_consistent_hash_mnesia,
