@@ -3,6 +3,7 @@ rabbitmq-server (3.4.2-1) UNRELEASED; urgency=medium
   * New upstream point release.
   * d/control: Update for new maintainer information, add VCS repository
     locations.
+  * d/source/format: Switch packaging to source format 3.0 (quilt).
 
  -- James Page <james.page@ubuntu.com>  Wed, 17 Dec 2014 11:42:05 +0000
 
