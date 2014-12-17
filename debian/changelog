@@ -7,6 +7,8 @@ rabbitmq-server (3.4.2-1) UNRELEASED; urgency=medium
   * d/compat,control: Bump debhelper compat level to 9.
   * d/*: wrap-and-sort.
   * d/*: Move to standard debhelper, drop use of cdbs.
+  * d/rules,control,rabbitmq-server.service: Add systemd service
+    configuration.
 
  -- James Page <james.page@ubuntu.com>  Wed, 17 Dec 2014 11:42:05 +0000
 
