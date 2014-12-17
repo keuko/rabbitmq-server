@@ -2,14 +2,6 @@ Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: RabbitMQ
 Source: http://www.rabbitmq.com/
 
-
-
-This package was debianized by Tony Garnock-Jones <tonyg@rabbitmq.com> on
-Wed,  3 Jan 2007 15:43:44 +0000.
-
-It was downloaded from http://www.rabbitmq.com/
-
-
 Files: debian/*
 Copyright: (c) 2007-2013, GoPivotal, Inc.
            (c) 2007, Tony Garnock-Jones <tonyg@rabbitmq.com>
