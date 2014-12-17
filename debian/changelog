@@ -1,8 +1,9 @@
-rabbitmq-server (3.3.5-2) testing-proposed-updates; urgency=medium
+rabbitmq-server (3.3.5-1.1) testing-proposed-updates; urgency=medium
 
-  * Taking over the package with previous agreement from current maintainer.
+  * Non-maintainer upload.
+  * Do not trust X-Forwarded-For (Closes: #773134).
 
- -- Thomas Goirand <zigo@debian.org>  Wed, 17 Dec 2014 14:46:01 +0000
+ -- Matt Kraai <kraai@debian.org>  Sun, 14 Dec 2014 14:51:41 -0800
 
 rabbitmq-server (3.3.5-1) unstable; urgency=low
 
