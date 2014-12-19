@@ -1,5 +1,6 @@
 rabbitmq-server (3.4.2-1) UNRELEASED; urgency=medium
 
+  [ James Page ]
   * New upstream point release.
   * d/control: Update for new maintainer information, add VCS repository
     locations.
@@ -10,6 +11,9 @@ rabbitmq-server (3.4.2-1) UNRELEASED; urgency=medium
   * d/rules,control,rabbitmq-server.service: Add systemd service
     configuration.
   * d/control: Bumped Standards-Version 3.9.6, no changes.
+
+  [ Thomas Goirand ]
+  * d/copyright: Rewrote as format 1.0.
 
  -- James Page <james.page@ubuntu.com>  Wed, 17 Dec 2014 11:42:05 +0000
 
