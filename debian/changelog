@@ -9,6 +9,7 @@ rabbitmq-server (3.4.2-1) UNRELEASED; urgency=medium
   * d/*: Move to standard debhelper, drop use of cdbs.
   * d/rules,control,rabbitmq-server.service: Add systemd service
     configuration.
+  * d/control: Bumped Standards-Version 3.9.6, no changes.
 
  -- James Page <james.page@ubuntu.com>  Wed, 17 Dec 2014 11:42:05 +0000
 
