@@ -1,4 +1,4 @@
-rabbitmq-server (3.4.2-1) UNRELEASED; urgency=medium
+rabbitmq-server (3.4.2-1) unstable; urgency=medium
 
   [ James Page ]
   * New upstream point release.
@@ -15,7 +15,7 @@ rabbitmq-server (3.4.2-1) UNRELEASED; urgency=medium
   [ Thomas Goirand ]
   * d/copyright: Rewrote as format 1.0.
 
- -- James Page <james.page@ubuntu.com>  Wed, 17 Dec 2014 11:42:05 +0000
+ -- James Page <james.page@ubuntu.com>  Fri, 19 Dec 2014 11:09:20 +0000
 
 rabbitmq-server (3.4.1-1) unstable; urgency=high
 
