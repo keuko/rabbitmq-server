@@ -1,3 +1,4 @@
 usr/lib/erlang/lib
 var/lib/rabbitmq/mnesia
 var/log/rabbitmq
+etc/rabbitmq
