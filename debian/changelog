@@ -1,6 +1,7 @@
 rabbitmq-server (3.4.2-3) unstable; urgency=medium
 
   * Removes debian/README which is useless (Closes: #703021).
+  * Provides a default /etc/rabbitmq/rabbitmq-env.conf (Closes: #543638).
 
  -- Thomas Goirand <zigo@debian.org>  Tue, 27 Jan 2015 15:08:08 +0100
 

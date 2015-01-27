@@ -1,2 +1,3 @@
 debian/ocf/rabbitmq-server /usr/lib/ocf/resource.d/rabbitmq/
 debian/rabbitmq-script-wrapper /usr/lib/rabbitmq/bin
+debian/rabbitmq-env.conf	/etc/rabbitmq
