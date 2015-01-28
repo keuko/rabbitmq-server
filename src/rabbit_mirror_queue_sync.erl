@@ -156,17 +156,28 @@ syncer(Ref, Log, MPid, SPids) ->
     %% We wait for a reply from the slaves so that we know they are in
     %% a receive block and will thus receive messages we send to them
     %% *without* those messages ending up in their gen_server2 pqueue.
-    case [SPid || SPid <- SPids,
-                  receive
-                      {sync_ready, Ref, SPid}       -> true;
-                      {sync_deny,  Ref, SPid}       -> false;
-                      {'DOWN', _, process, SPid, _} -> false
-                  end] of
+    case await_slaves(Ref, SPids) of
         []     -> Log("all slaves already synced", []);
         SPids1 -> MPid ! {ready, self()},
                   Log("mirrors ~p to sync", [[node(SPid) || SPid <- SPids1]]),
                   syncer_loop(Ref, MPid, SPids1)
     end.
+
+await_slaves(Ref, SPids) ->
+    [SPid || SPid <- SPids,
+             rabbit_mnesia:on_running_node(SPid) andalso %% [0]
+                 receive
+                     {sync_ready, Ref, SPid}       -> true;
+                     {sync_deny,  Ref, SPid}       -> false;
+                     {'DOWN', _, process, SPid, _} -> false
+                 end].
+%% [0] This check is in case there's been a partition which has then
+%% healed in between the master retrieving the slave pids from Mnesia
+%% and sending 'sync_start' over GM. If so there might be slaves on the
+%% other side of the partition which we can monitor (since they have
+%% rejoined the distributed system with us) but which did not get the
+%% 'sync_start' and so will not reply. We need to act as though they are
+%% down.
 
 syncer_loop(Ref, MPid, SPids) ->
     MPid ! {next, Ref},
@@ -240,6 +251,9 @@ slave_sync_loop(Args = {Ref, MRef, Syncer, BQ, UpdateRamDuration, Parent},
             slave_sync_loop(Args, State);
         {'$gen_cast', {set_ram_duration_target, Duration}} ->
             BQS1 = BQ:set_ram_duration_target(Duration, BQS),
+            slave_sync_loop(Args, {MA, TRef, BQS1});
+        {'$gen_cast', {run_backing_queue, Mod, Fun}} ->
+            BQS1 = BQ:invoke(Mod, Fun, BQS),
             slave_sync_loop(Args, {MA, TRef, BQS1});
         update_ram_duration ->
             {TRef1, BQS1} = UpdateRamDuration(BQ, BQS),

@@ -18,35 +18,33 @@
 
 -behaviour(supervisor2).
 
--export([start_link/0, start_child/2]).
+-export([start_link/2]).
 
 -export([init/1]).
 
 -include("rabbit.hrl").
 
--define(SERVER, ?MODULE).
-
 %%----------------------------------------------------------------------------
 
 -ifdef(use_specs).
 
--spec(start_link/0 :: () -> rabbit_types:ok_pid_or_error()).
--spec(start_child/2 ::
-        (node(), [any()]) -> rabbit_types:ok(pid() | undefined) |
-                             rabbit_types:ok({pid(), any()}) |
-                             rabbit_types:error(any())).
+-spec(start_link/2 :: (rabbit_types:amqqueue(), rabbit_prequeue:start_mode()) ->
+                           {'ok', pid(), pid()}).
 
 -endif.
 
 %%----------------------------------------------------------------------------
 
-start_link() ->
-    supervisor2:start_link({local, ?SERVER}, ?MODULE, []).
+start_link(Q, StartMode) ->
+    Marker = spawn_link(fun() -> receive stop -> ok end end),
+    ChildSpec = {rabbit_amqqueue,
+                 {rabbit_prequeue, start_link, [Q, StartMode, Marker]},
+                 intrinsic, ?MAX_WAIT, worker, [rabbit_amqqueue_process,
+                                                rabbit_mirror_queue_slave]},
+    {ok, SupPid} = supervisor2:start_link(?MODULE, []),
+    {ok, QPid} = supervisor2:start_child(SupPid, ChildSpec),
+    unlink(Marker),
+    Marker ! stop,
+    {ok, SupPid, QPid}.
 
-start_child(Node, Args) ->
-    supervisor2:start_child({?SERVER, Node}, Args).
-
-init([]) ->
-    {ok, {{simple_one_for_one, 10, 10},
-          [{rabbit_amqqueue, {rabbit_amqqueue_process, start_link, []},
-            temporary, ?MAX_WAIT, worker, [rabbit_amqqueue_process]}]}}.
+init([]) -> {ok, {{one_for_one, 5, 10}, []}}.

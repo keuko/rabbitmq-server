@@ -34,25 +34,39 @@ function fmt_si_prefix(num0, max0, thousand, allow_fractions) {
             num.toFixed(0)) + powers[power];
 }
 
-function fmt_memory(memory, key) {
-    return '<div class="colour-key memory_' + key + '"></div>' +
-        fmt_bytes(memory[key]);
-}
-
-function fmt_boolean(b) {
-    if (b == undefined) return UNKNOWN_REPR;
+function fmt_boolean(b, unknown) {
+    if (unknown == undefined) unknown = UNKNOWN_REPR;
+    if (b == undefined) return unknown;
 
     return b ? "&#9679;" : "&#9675;";
 }
 
 function fmt_date(d) {
+    var res = fmt_date0(d);
+    return res[0] + ' ' + res[1];
+}
+
+function fmt_date_mini(d) {
+    var res = fmt_date0(d);
+    return res[1] + '<sub>' + res[0] + '</sub>';
+}
+
+function fmt_date0(d) {
     function f(i) {
         return i < 10 ? "0" + i : i;
     }
 
-    return d.getFullYear() + "-" + f(d.getMonth() + 1) + "-" +
-        f(d.getDate()) + " " + f(d.getHours()) + ":" + f(d.getMinutes()) +
-        ":" + f(d.getSeconds());
+    return [d.getFullYear() + "-" + f(d.getMonth() + 1) + "-" +
+            f(d.getDate()), f(d.getHours()) + ":" + f(d.getMinutes()) +
+        ":" + f(d.getSeconds())];
+}
+
+function fmt_timestamp(ts) {
+    return fmt_date(new Date(ts));
+}
+
+function fmt_timestamp_mini(ts) {
+    return fmt_date_mini(new Date(ts));
 }
 
 function fmt_time(t, suffix) {
@@ -64,24 +78,39 @@ function fmt_millis(millis) {
     return Math.round(millis / 1000) + "s";
 }
 
-function fmt_parameters(obj) {
-    return fmt_table_short(args_to_params(obj));
+function fmt_features(obj) {
+    return fmt_table_short(args_to_features(obj));
 }
 
-function fmt_parameters_short(obj) {
+function fmt_policy_short(obj) {
+    if (obj.policy != undefined && obj.policy != '') {
+        return '<acronym class="policy" title="Policy: ' +
+            fmt_escape_html(obj.policy) + '">' +
+            fmt_escape_html(obj.policy) + '</acronym> ';
+    } else {
+        return '';
+    }
+}
+
+function fmt_features_short(obj) {
     var res = '';
-    var params = args_to_params(obj);
+    var features = args_to_features(obj);
+
+    if (obj.owner_pid_details != undefined) {
+        res += '<acronym title="Exclusive queue: click for owning connection">'
+            + link_conn(obj.owner_pid_details.name, "Excl") + '</acronym> ';
+    }
 
     for (var k in ALL_ARGS) {
-        if (params[k] != undefined) {
-            res += '<acronym title="' + k + ': ' + fmt_string(params[k]) +
+        if (features[k] != undefined) {
+            res += '<acronym title="' + k + ': ' + fmt_string(features[k]) +
                 '">' + ALL_ARGS[k].short + '</acronym> ';
         }
     }
 
-    if (params.arguments) {
-        res += '<acronym title="' + fmt_table_flat(params.arguments) +
-        '">Args</acronym>';
+    if (features.arguments) {
+        res += '<acronym title="' + fmt_table_flat(features.arguments) +
+        '">Args</acronym> ';
     }
     return res;
 }
@@ -98,7 +127,7 @@ function short_chan(name) {
     return (match != null && match.length == 3) ? match[1] + match[2] : name;
 }
 
-function args_to_params(obj) {
+function args_to_features(obj) {
     var res = {};
     for (var k in obj.arguments) {
         if (k in KNOWN_ARGS) {
@@ -177,14 +206,6 @@ function fmt_color(r, thresholds) {
     return 'green';
 }
 
-function fmt_deliver_rate(obj, show_redeliver) {
-    var res = fmt_rate(obj, 'deliver_get');
-    if (show_redeliver) {
-        res += '<sub>' + fmt_rate(obj, 'redeliver') + '</sub>';
-    }
-    return res;
-}
-
 function fmt_rate_num(num) {
     if (num == undefined) return UNKNOWN_REPR;
     else if (num < 1)     return num.toFixed(2);
@@ -216,6 +237,14 @@ function fmt_rate_bytes(obj, name, mode) {
     var raw = fmt_rate0(obj, name, mode, fmt_bytes);
     return raw == '' ? '' : (raw + '/s' +
                              '<sub>(' + fmt_bytes(obj[name]) + ' total)</sub>');
+}
+
+function fmt_bytes_obj(obj, name, mode) {
+    return fmt_bytes(obj[name]);
+}
+
+function fmt_num_obj(obj, name, mode) {
+    return obj[name];
 }
 
 function fmt_rate_large(obj, name, mode) {
@@ -262,32 +291,24 @@ function fmt_rate_axis(num, max) {
     return fmt_si_prefix(num, max, 1000, true) + '/s';
 }
 
-function fmt_msgs_axis(num, max) {
+function fmt_num_axis(num, max) {
     return fmt_si_prefix(num, max, 1000, true);
 }
 
-function fmt_rate_bytes_axis(num, max) {
+function fmt_bytes_axis(num, max) {
     num = parseInt(num);
-    return fmt_bytes(isNaN(num) ? 0 : num) + '/s';
+    return fmt_bytes(isNaN(num) ? 0 : num);
 }
 
-function is_stat_empty(obj, name) {
-    if (obj == undefined
-        || obj[name] == undefined
-        || obj[name + '_details'] == undefined
-        || obj[name + '_details'].rate < 0.00001) return true;
-    return false;
+
+function fmt_rate_bytes_axis(num, max) {
+    return fmt_bytes_axis(num, max) + '/s';
 }
 
-function is_col_empty(objects, name, accessor) {
-    if (accessor == undefined) accessor = function(o) {return o.message_stats;};
-    for (var i = 0; i < objects.length; i++) {
-        var object = objects[i];
-        if (!is_stat_empty(accessor(object), name)) {
-            return false;
-        }
-    }
-    return true;
+function fmt_maybe_vhost(name) {
+    return vhosts_interesting ?
+        ' in virtual host <b>' + fmt_escape_html(name) + '</b>'
+        : '';
 }
 
 function fmt_exchange(name) {
@@ -319,15 +340,6 @@ function fmt_download_filename(host) {
         (now.getMonth() + 1) + "-" + now.getDate() + ".json";
 }
 
-function fmt_fd_used(used, total) {
-    if (used == 'install_handle_from_sysinternals') {
-        return '<p class="c">handle.exe missing <span class="help" id="handle-exe"></span><sub>' + total + ' available</sub></p>';
-    }
-    else {
-        return used;
-    }
-}
-
 function fmt_table_short(table) {
     return '<table class="mini">' + fmt_table_body(table, ':') + '</table>';
 }
@@ -340,8 +352,8 @@ function fmt_table_long(table) {
 function fmt_table_body(table, x) {
     var res = '';
     for (k in table) {
-        res += '<tr><th>' + k + x + '</th><td>' + fmt_amqp_value(table[k]) +
-            '</td>';
+        res += '<tr><th>' + fmt_escape_html(k) + x + '</th>' +
+            '<td>' + fmt_amqp_value(table[k]) + '</td>';
     }
     return res;
 }
@@ -369,7 +381,7 @@ function fmt_amqp_value(val) {
 function fmt_table_flat(table) {
     var res = [];
     for (k in table) {
-        res.push(k + ': ' + fmt_amqp_value_flat(table[k]));
+        res.push(fmt_escape_html(k) + ': ' + fmt_amqp_value_flat(table[k]));
     }
     return res.join(', ');
 }
@@ -403,6 +415,30 @@ function fmt_uptime(u) {
         return hour + 'h ' + min + 'm';
     else
         return min + 'm ' + sec + 's';
+}
+
+function fmt_plugins_small(node) {
+    if (node.applications === undefined) return '';
+    var plugins = [];
+    for (var i = 0; i < node.applications.length; i++) {
+        var application = node.applications[i];
+        if (node.enabled_plugins.indexOf(application.name) != -1) {
+            plugins.push(application.name);
+        }
+    }
+    return '<acronym title="Plugins: ' + plugins.join(", ") + '">' +
+        plugins.length + '</acronym>';
+}
+
+function get_plugins_list(node) {
+    var result = [];
+    for (var i = 0; i < node.applications.length; i++) {
+        var application = node.applications[i];
+        if (node.enabled_plugins.indexOf(application.name) != -1) {
+            result.push(application);
+        }
+    }
+    return result;
 }
 
 function fmt_rabbit_version(applications) {
@@ -453,7 +489,7 @@ function fmt_node(node_host) {
     var both = node_host.split('@');
     var node = both.slice(0, 1);
     var host = both.slice(1);
-    return '<small>' + node + '@</small>' + host;
+    return node == 'rabbit' ? host : (node + '@' + host);
 }
 
 function fmt_object_state(obj) {
@@ -481,6 +517,16 @@ function fmt_object_state(obj) {
         colour = 'yellow';
         explanation = 'Publishing rate recently restricted by server.';
     }
+    else if (obj.state == 'down') {
+        colour = 'red';
+        explanation = 'The queue is located on a cluster node or nodes that ' +
+            'are down.';
+    }
+    else if (obj.state == 'crashed') {
+        colour = 'red';
+        explanation = 'The queue has crashed repeatedly and been unable to ' +
+            'restart.';
+    }
 
     return fmt_state(colour, text, explanation);
 }
@@ -496,44 +542,6 @@ function fmt_state(colour, text, explanation) {
     }
 
     return '<div class="colour-key status-key-' + colour + '"></div>' + key;
-}
-
-function fmt_resource_bar(used_label, limit_label, ratio, colour, help) {
-    var width = 120;
-
-    var res = '';
-    var other_colour = colour;
-    if (ratio > 1) {
-        ratio = 1 / ratio;
-        inverted = true;
-        colour += '-dark';
-    }
-    else {
-        other_colour += '-dark';
-    }
-    var offset = Math.round(width * (1 - ratio));
-
-    res += '<div class="status-bar" style="width: ' + width + 'px;">';
-    res += '<div class="status-bar-main ' + colour + '" style="background-image: url(img/bg-' + other_colour + '.png); background-position: -' + offset + 'px 0px; background-repeat: no-repeat;">';
-    res += used_label;
-    if (help != null) {
-        res += ' <span class="help" id="' + help + '"></span>';
-    }
-    res += '</div>'; // status-bar-main
-    if (limit_label != null) {
-        res += '<sub>' + limit_label + '</sub>';
-    }
-    res += '</div>'; // status-bar
-    return res;
-}
-
-function fmt_resource_bar_count(used, total, thresholds) {
-    if (typeof used == 'number') {
-        return fmt_resource_bar(used, total + ' available', used / total,
-                                fmt_color(used / total, thresholds));
-    } else {
-        return used;
-    }
 }
 
 function fmt_shortened_uri(uri) {
@@ -572,8 +580,9 @@ function fmt_client_name(properties) {
 
 function fmt_trunc(str, max_length) {
     return str.length > max_length ?
-        ('<acronym class="normal" title="' + str + '">' +
-         str.substring(0, max_length) + '...</acronym>') : str;
+        ('<acronym class="normal" title="' + fmt_escape_html(str) + '">' +
+         fmt_escape_html(str.substring(0, max_length)) + '...</acronym>') :
+        fmt_escape_html(str);
 }
 
 function alt_rows(i, args) {
@@ -662,115 +671,6 @@ function fmt_highlight_filter(text) {
     }
 }
 
-function message_rates(id, stats) {
-    var items = [['Publish', 'publish'], ['Confirm', 'confirm'],
-                 ['Publish (In)', 'publish_in'],
-                 ['Publish (Out)', 'publish_out'],
-                 ['Deliver', 'deliver'],
-                 ['Redelivered', 'redeliver'],
-                 ['Acknowledge', 'ack'],
-                 ['Get', 'get'], ['Deliver (noack)', 'deliver_no_ack'],
-                 ['Get (noack)', 'get_no_ack'],
-                 ['Return', 'return_unroutable']];
-    return rates_chart_or_text(id, stats, items, fmt_rate, fmt_rate_large, fmt_rate_axis, true, 'Message rates', 'message-rates');
-}
-
-function queue_lengths(id, stats) {
-    var items = [['Ready', 'messages_ready'],
-                 ['Unacknowledged', 'messages_unacknowledged'],
-                 ['Total', 'messages']];
-    return rates_chart_or_text(id, stats, items, fmt_msgs, fmt_msgs_large, fmt_msgs_axis, false, 'Queued messages', 'queued-messages');
-}
-
-function data_rates(id, stats) {
-    var items = [['From client', 'recv_oct'], ['To client', 'send_oct']];
-    return rates_chart_or_text(id, stats, items, fmt_rate_bytes, fmt_rate_bytes_large, fmt_rate_bytes_axis, true, 'Data rates');
-}
-
-function rates_chart_or_text(id, stats, items, chart_fmt, text_fmt, axis_fmt, chart_rates,
-                             heading, heading_help) {
-    var mode = get_pref('rate-mode-' + id);
-    var range = get_pref('chart-range-' + id);
-    var prefix = '<h3>' + heading +
-        ' <span class="rate-options updatable" title="Click to change" for="'
-        + id + '">(' + prefix_title(mode, range) + ')</span>' +
-        (heading_help == undefined ? '' :
-         ' <span class="help" id="' + heading_help + '"></span>') +
-        '</h3>';
-    var res;
-
-    if (keys(stats).length > 0) {
-        if (mode == 'chart') {
-            res = rates_chart(id, items, stats, chart_fmt, axis_fmt, chart_rates);
-        }
-        else {
-            res = rates_text(items, stats, mode, text_fmt);
-        }
-        if (res == "") res = '<p>Waiting for data...</p>';
-    }
-    else {
-        res = '<p>Currently idle</p>';
-    }
-    return prefix + '<div class="updatable">' + res + '</div>';
-}
-
-function prefix_title(mode, range) {
-    var desc = CHART_PERIODS[range];
-    if (mode == 'chart') {
-        return 'chart: ' + desc.toLowerCase();
-    }
-    else if (mode == 'curr') {
-        return 'current value';
-    }
-    else {
-        return 'moving average: ' + desc.toLowerCase();
-    }
-}
-
-function rates_chart(id, items, stats, rate_fmt, axis_fmt, chart_rates) {
-    var size = get_pref('chart-size-' + id);
-    var show = [];
-    chart_data[id] = {};
-    chart_data[id]['data'] = {};
-    chart_data[id]['fmt'] = axis_fmt;
-    for (var i in items) {
-        var name = items[i][0];
-        var key = items[i][1];
-        var key_details = key + '_details';
-        if (key_details in stats) {
-            chart_data[id]['data'][name] = stats[key_details];
-            show.push([name, rate_fmt(stats, key)]);
-        }
-    }
-    var html = '<div class="box"><div id="chart-' + id +
-        '" class="chart chart-' + size +
-        (chart_rates ? ' chart-rates' : '') + '"></div>';
-    html += '<table class="facts facts-fixed-width">';
-    for (var i = 0; i < show.length; i++) {
-        html += '<tr><th>' + show[i][0] + '</th><td>';
-        html += '<div class="colour-key" style="background: ' + chart_colors[i];
-        html += ';"></div>' + show[i][1] + '</td></tr>'
-    }
-    html += '</table></div>';
-    return show.length > 0 ? html : '';
-}
-
-function rates_text(items, stats, mode, rate_fmt) {
-    var res = '';
-    for (var i in items) {
-        var name = items[i][0];
-        var key = items[i][1];
-        var key_details = key + '_details';
-        if (key_details in stats) {
-            var details = stats[key_details];
-            res += '<div class="highlight">' + name;
-            res += rate_fmt(stats, key, mode);
-            res += '</div>';
-        }
-    }
-    return res == '' ? '' : '<div class="box">' + res + '</div>';
-}
-
 function filter_ui(items) {
     current_truncate = (current_truncate == null) ?
         parseInt(get_pref('truncate')) : current_truncate;
@@ -850,12 +750,36 @@ function fmt_sort(display, sort) {
     return '<a class="sort" sort="' + sort + '">' + prefix + display + '</a>';
 }
 
+function group_count(mode, group, bools) {
+    var count = 0;
+    for (var i = 0; i < bools.length; i++) {
+        if (bools[i]) count++;
+    }
+
+    var options = COLUMNS[mode][group];
+    for (var i = 0; i < options.length; i++) {
+        var column = options[i][0];
+        if (show_column(mode, column)) count++;
+    }
+    return count;
+}
+
+function group_heading(mode, group, bools) {
+    var count = group_count(mode, group, bools);
+    if (count == 0) {
+        return '';
+    }
+    else {
+        return '<th colspan="' + count + '">' + group + '</th>';
+    }
+}
+
 function fmt_permissions(obj, permissions, lookup, show, warning) {
     var res = [];
     for (var i in permissions) {
         var permission = permissions[i];
         if (permission[lookup] == obj.name) {
-            res.push(permission[show]);
+            res.push(fmt_escape_html(permission[show]));
         }
     }
     return res.length == 0 ? warning : res.join(', ');
@@ -866,10 +790,16 @@ var radio_id = 0;
 function fmt_radio(name, text, value, current) {
     radio_id++;
     return '<label class="radio" for="radio-' + radio_id + '">' +
-        '<input type="radio" id="radio-' + radio_id + '" name="' + name + 
+        '<input type="radio" id="radio-' + radio_id + '" name="' + name +
         '" value="' + value + '"' +
         ((value == current) ? ' checked="checked"' : '') +
         '>' + text + '</label>';
+}
+
+function fmt_checkbox(name, text, current) {
+    return '<label class="checkbox" for="checkbox-' + name + '">' +
+        '<input type="checkbox" id="checkbox-' + name + '" name="' + name +
+        '"' + (current ? ' checked="checked"' : '') + '>' + text + '</label>';
 }
 
 function properties_size(obj) {

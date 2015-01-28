@@ -17,7 +17,7 @@
 
 -export([load_applications/1, start_applications/1, start_applications/2,
          stop_applications/1, stop_applications/2, app_dependency_order/2,
-         wait_for_applications/1]).
+         app_dependencies/1]).
 
 -ifdef(use_specs).
 
@@ -28,8 +28,8 @@
 -spec stop_applications([atom()])                   -> 'ok'.
 -spec start_applications([atom()], error_handler()) -> 'ok'.
 -spec stop_applications([atom()], error_handler())  -> 'ok'.
--spec wait_for_applications([atom()])               -> 'ok'.
 -spec app_dependency_order([atom()], boolean())     -> [digraph:vertex()].
+-spec app_dependencies(atom())                      -> [atom()].
 
 -endif.
 
@@ -62,20 +62,22 @@ start_applications(Apps, ErrorHandler) ->
 
 stop_applications(Apps, ErrorHandler) ->
     manage_applications(fun lists:foldr/3,
-                        fun application:stop/1,
+                        %% Mitigation for bug 26467. TODO remove when we fix it.
+                        fun (mnesia) ->
+                                timer:sleep(1000),
+                                application:stop(mnesia);
+                            (App) ->
+                                application:stop(App)
+                        end,
                         fun application:start/1,
                         not_started,
                         ErrorHandler,
                         Apps).
 
-
-wait_for_applications(Apps) ->
-    [wait_for_application(App) || App <- Apps], ok.
-
 app_dependency_order(RootApps, StripUnreachable) ->
     {ok, G} = rabbit_misc:build_acyclic_graph(
-                fun (App, _Deps) -> [{App, App}] end,
-                fun (App,  Deps) -> [{Dep, App} || Dep <- Deps] end,
+                fun ({App, _Deps}) -> [{App, App}] end,
+                fun ({App,  Deps}) -> [{Dep, App} || Dep <- Deps] end,
                 [{App, app_dependencies(App)} ||
                     {App, _Desc, _Vsn} <- application:loaded_applications()]),
     try
@@ -91,13 +93,6 @@ app_dependency_order(RootApps, StripUnreachable) ->
 
 %%---------------------------------------------------------------------------
 %% Private API
-
-wait_for_application(Application) ->
-    case lists:keymember(Application, 1, rabbit_misc:which_applications()) of
-         true  -> ok;
-         false -> timer:sleep(1000),
-                  wait_for_application(Application)
-    end.
 
 load_applications(Worklist, Loaded) ->
     case queue:out(Worklist) of

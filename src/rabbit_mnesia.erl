@@ -23,9 +23,12 @@
          update_cluster_nodes/1,
          change_cluster_node_type/1,
          forget_cluster_node/2,
+         force_load_next_boot/0,
 
          status/0,
          is_clustered/0,
+         on_running_node/1,
+         is_process_alive/1,
          cluster_nodes/1,
          node_type/0,
          dir/0,
@@ -63,12 +66,15 @@
 -spec(update_cluster_nodes/1 :: (node()) -> 'ok').
 -spec(change_cluster_node_type/1 :: (node_type()) -> 'ok').
 -spec(forget_cluster_node/2 :: (node(), boolean()) -> 'ok').
+-spec(force_load_next_boot/0 :: () -> 'ok').
 
 %% Various queries to get the status of the db
 -spec(status/0 :: () -> [{'nodes', [{node_type(), [node()]}]} |
                          {'running_nodes', [node()]} |
                          {'partitions', [{node(), [node()]}]}]).
 -spec(is_clustered/0 :: () -> boolean()).
+-spec(on_running_node/1 :: (pid()) -> boolean()).
+-spec(is_process_alive/1 :: (pid()) -> boolean()).
 -spec(cluster_nodes/1 :: ('all' | 'disc' | 'ram' | 'running') -> [node()]).
 -spec(node_type/0 :: () -> node_type()).
 -spec(dir/0 :: () -> file:filename()).
@@ -114,7 +120,7 @@ init_from_config() ->
                                                  true  -> disc;
                                                  false -> ram
                                              end},
-                error_logger:warning_msg(
+                rabbit_log:warning(
                   "Converting legacy 'cluster_nodes' configuration~n    ~w~n"
                   "to~n    ~w.~n~n"
                   "Please update the configuration to the new format "
@@ -125,17 +131,22 @@ init_from_config() ->
             {ok, Config} ->
                 Config
         end,
-    case find_good_node(nodes_excl_me(TryNodes)) of
+    case TryNodes of
+        [] -> init_db_and_upgrade([node()], disc, false);
+        _  -> auto_cluster(TryNodes, NodeType)
+    end.
+
+auto_cluster(TryNodes, NodeType) ->
+    case find_auto_cluster_node(nodes_excl_me(TryNodes)) of
         {ok, Node} ->
-            rabbit_log:info("Node '~p' selected for clustering from "
-                            "configuration~n", [Node]),
+            rabbit_log:info("Node '~p' selected for auto-clustering~n", [Node]),
             {ok, {_, DiscNodes, _}} = discover_cluster0(Node),
             init_db_and_upgrade(DiscNodes, NodeType, true),
             rabbit_node_monitor:notify_joined_cluster();
         none ->
-            rabbit_log:warning("Could not find any suitable node amongst the "
-                               "ones provided in the configuration: ~p~n",
-                               [TryNodes]),
+            rabbit_log:warning(
+              "Could not find any node for auto-clustering from: ~p~n"
+              "Starting blank node...~n", [TryNodes]),
             init_db_and_upgrade([node()], disc, false)
     end.
 
@@ -163,21 +174,27 @@ join_cluster(DiscoveryNode, NodeType) ->
     {ClusterNodes, _, _} = discover_cluster([DiscoveryNode]),
     case me_in_nodes(ClusterNodes) of
         false ->
-            %% reset the node. this simplifies things and it will be needed in
-            %% this case - we're joining a new cluster with new nodes which
-            %% are not in synch with the current node. I also lifts the burden
-            %% of reseting the node from the user.
-            reset_gracefully(),
+            case check_cluster_consistency(DiscoveryNode, false) of
+                {ok, _} ->
+                    %% reset the node. this simplifies things and it
+                    %% will be needed in this case - we're joining a new
+                    %% cluster with new nodes which are not in synch
+                    %% with the current node. It also lifts the burden
+                    %% of resetting the node from the user.
+                    reset_gracefully(),
 
-            %% Join the cluster
-            rabbit_misc:local_info_msg("Clustering with ~p as ~p node~n",
-                                       [ClusterNodes, NodeType]),
-            ok = init_db_with_mnesia(ClusterNodes, NodeType, true, true),
-            rabbit_node_monitor:notify_joined_cluster(),
-            ok;
+                    %% Join the cluster
+                    rabbit_log:info("Clustering with ~p as ~p node~n",
+                                    [ClusterNodes, NodeType]),
+                    ok = init_db_with_mnesia(ClusterNodes, NodeType,
+                                             true, true),
+                    rabbit_node_monitor:notify_joined_cluster(),
+                    ok;
+                {error, Reason} ->
+                    {error, Reason}
+            end;
         true ->
-            rabbit_misc:local_info_msg("Already member of cluster: ~p~n",
-                                       [ClusterNodes]),
+            rabbit_log:info("Already member of cluster: ~p~n", [ClusterNodes]),
             {ok, already_member}
     end.
 
@@ -186,12 +203,12 @@ join_cluster(DiscoveryNode, NodeType) ->
 %% persisted messages
 reset() ->
     ensure_mnesia_not_running(),
-    rabbit_misc:local_info_msg("Resetting Rabbit~n", []),
+    rabbit_log:info("Resetting Rabbit~n", []),
     reset_gracefully().
 
 force_reset() ->
     ensure_mnesia_not_running(),
-    rabbit_misc:local_info_msg("Resetting Rabbit forcefully~n", []),
+    rabbit_log:info("Resetting Rabbit forcefully~n", []),
     wipe().
 
 reset_gracefully() ->
@@ -247,8 +264,8 @@ update_cluster_nodes(DiscoveryNode) ->
             %% nodes
             mnesia:delete_schema([node()]),
             rabbit_node_monitor:write_cluster_status(Status),
-            rabbit_misc:local_info_msg("Updating cluster nodes from ~p~n",
-                                       [DiscoveryNode]),
+            rabbit_log:info("Updating cluster nodes from ~p~n",
+                            [DiscoveryNode]),
             init_db_with_mnesia(AllNodes, node_type(), true, true);
         false ->
             e(inconsistent_cluster)
@@ -271,7 +288,7 @@ forget_cluster_node(Node, RemoveWhenOffline) ->
         {true,  false} -> remove_node_offline_node(Node);
         {true,   true} -> e(online_node_offline_flag);
         {false, false} -> e(offline_node_no_offline_flag);
-        {false,  true} -> rabbit_misc:local_info_msg(
+        {false,  true} -> rabbit_log:info(
                             "Removing node ~p from cluster~n", [Node]),
                           case remove_node_if_mnesia_running(Node) of
                               ok               -> ok;
@@ -303,7 +320,6 @@ remove_node_offline_node(Node) ->
             e(removing_node_from_offline_node)
     end.
 
-
 %%----------------------------------------------------------------------------
 %% Queries
 %%----------------------------------------------------------------------------
@@ -330,6 +346,16 @@ is_running() -> mnesia:system_info(is_running) =:= yes.
 
 is_clustered() -> AllNodes = cluster_nodes(all),
                   AllNodes =/= [] andalso AllNodes =/= [node()].
+
+on_running_node(Pid) -> lists:member(node(Pid), cluster_nodes(running)).
+
+%% This requires the process be in the same running cluster as us
+%% (i.e. not partitioned or some random node).
+%%
+%% See also rabbit_misc:is_process_alive/1 which does not.
+is_process_alive(Pid) ->
+    on_running_node(Pid) andalso
+        rpc:call(node(Pid), erlang, is_process_alive, [Pid]) =:= true.
 
 cluster_nodes(WhichNodes) -> cluster_status(WhichNodes).
 
@@ -386,7 +412,7 @@ cluster_status(WhichNodes) ->
     end.
 
 node_info() ->
-    {erlang:system_info(otp_release), rabbit_misc:version(),
+    {rabbit_misc:otp_release(), rabbit_misc:version(),
      cluster_status_from_mnesia()}.
 
 node_type() ->
@@ -526,7 +552,7 @@ maybe_force_load() ->
 check_cluster_consistency() ->
     %% We want to find 0 or 1 consistent nodes.
     case lists:foldl(
-           fun (Node,  {error, _})    -> check_cluster_consistency(Node);
+           fun (Node,  {error, _})    -> check_cluster_consistency(Node, true);
                (_Node, {ok, Status})  -> {ok, Status}
            end, {error, not_found}, nodes_excl_me(cluster_nodes(all)))
     of
@@ -556,16 +582,21 @@ check_cluster_consistency() ->
             throw(E)
     end.
 
-check_cluster_consistency(Node) ->
+check_cluster_consistency(Node, CheckNodesConsistency) ->
     case rpc:call(Node, rabbit_mnesia, node_info, []) of
         {badrpc, _Reason} ->
             {error, not_found};
         {_OTP, _Rabbit, {error, _}} ->
             {error, not_found};
-        {OTP, Rabbit, {ok, Status}} ->
+        {OTP, Rabbit, {ok, Status}} when CheckNodesConsistency ->
             case check_consistency(OTP, Rabbit, Node, Status) of
                 {error, _} = E -> E;
                 {ok, Res}      -> {ok, Res}
+            end;
+        {OTP, Rabbit, {ok, Status}} ->
+            case check_consistency(OTP, Rabbit) of
+                {error, _} = E -> E;
+                ok             -> {ok, Status}
             end;
         {_OTP, Rabbit, _Hash, _Status} ->
             %% delegate hash checking implies version mismatch
@@ -618,10 +649,10 @@ schema_ok_or_move() ->
         {error, Reason} ->
             %% NB: we cannot use rabbit_log here since it may not have been
             %% started yet
-            error_logger:warning_msg("schema integrity check failed: ~p~n"
-                                     "moving database to backup location "
-                                     "and recreating schema from scratch~n",
-                                     [Reason]),
+            rabbit_log:warning("schema integrity check failed: ~p~n"
+                               "moving database to backup location "
+                               "and recreating schema from scratch~n",
+                               [Reason]),
             ok = move_db(),
             ok = create_schema()
     end.
@@ -647,8 +678,8 @@ move_db() ->
         ok ->
             %% NB: we cannot use rabbit_log here since it may not have
             %% been started yet
-            error_logger:warning_msg("moved database from ~s to ~s~n",
-                                     [MnesiaDir, BackupDir]),
+            rabbit_log:warning("moved database from ~s to ~s~n",
+                               [MnesiaDir, BackupDir]),
             ok;
         {error, Reason} -> throw({error, {cannot_backup_mnesia,
                                           MnesiaDir, BackupDir, Reason}})
@@ -694,7 +725,7 @@ leave_cluster(Node) ->
     end.
 
 wait_for(Condition) ->
-    error_logger:info_msg("Waiting for ~p...~n", [Condition]),
+    rabbit_log:info("Waiting for ~p...~n", [Condition]),
     timer:sleep(1000).
 
 start_mnesia(CheckConsistency) ->
@@ -759,7 +790,7 @@ version_error(Name, This, Remote) ->
                                 "remote node ~s", [Name, This, Remote])}}.
 
 check_otp_consistency(Remote) ->
-    check_version_consistency(erlang:system_info(otp_release), Remote, "OTP").
+    check_version_consistency(rabbit_misc:otp_release(), Remote, "OTP").
 
 check_rabbit_consistency(Remote) ->
     check_version_consistency(
@@ -787,17 +818,24 @@ is_virgin_node() ->
             false
     end.
 
-find_good_node([]) ->
+find_auto_cluster_node([]) ->
     none;
-find_good_node([Node | Nodes]) ->
+find_auto_cluster_node([Node | Nodes]) ->
+    Fail = fun (Fmt, Args) ->
+                   rabbit_log:warning(
+                     "Could not auto-cluster with ~s: " ++ Fmt, [Node | Args]),
+                   find_auto_cluster_node(Nodes)
+           end,
     case rpc:call(Node, rabbit_mnesia, node_info, []) of
-        {badrpc, _Reason}         -> find_good_node(Nodes);
+        {badrpc, _} = Reason         -> Fail("~p~n", [Reason]);
         %% old delegate hash check
-        {_OTP, _Rabbit, _Hash, _} -> find_good_node(Nodes);
-        {OTP, Rabbit, _}          -> case check_consistency(OTP, Rabbit) of
-                                         {error, _} -> find_good_node(Nodes);
-                                         ok         -> {ok, Node}
-                                     end
+        {_OTP, RMQ, _Hash, _}        -> Fail("version ~s~n", [RMQ]);
+        {_OTP, _RMQ, {error, _} = E} -> Fail("~p~n", [E]);
+        {OTP, RMQ, _}                -> case check_consistency(OTP, RMQ) of
+                                            {error, _} -> Fail("versions ~p~n",
+                                                               [{OTP, RMQ}]);
+                                            ok         -> {ok, Node}
+                                        end
     end.
 
 is_only_clustered_disc_node() ->

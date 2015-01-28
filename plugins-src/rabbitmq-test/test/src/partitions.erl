@@ -30,11 +30,11 @@
 ignore_with() -> ?CONFIG.
 ignore(Cfgs) ->
     [A, B, C] = [pget(node, Cfg) || Cfg <- Cfgs],
-    block_unblock([{B, C}]),
+    block_unblock([{A, B}, {A, C}]),
     timer:sleep(?DELAY),
-    [] = partitions(A),
-    [C] = partitions(B),
-    [B] = partitions(C),
+    [B, C] = partitions(A),
+    [A] = partitions(B),
+    [A] = partitions(C),
     ok.
 
 pause_on_down_with() -> ?CONFIG.
@@ -164,13 +164,23 @@ prompt_disconnect_detection([CfgA, CfgB]) ->
     [] = rpc(CfgA, rabbit_amqqueue, info_all, [<<"/">>], ?DELAY),
     ok.
 
+ctl_ticktime_sync_with() -> [start_ab, short_ticktime(1)].
+ctl_ticktime_sync([CfgA | _]) ->
+    %% Server has 1s net_ticktime, make sure ctl doesn't get disconnected
+    "ok\n" = rabbit_test_configs:rabbitmqctl(CfgA, "eval 'timer:sleep(5000).'"),
+    ok.
+
+%% NB: we test full and partial partitions here.
 autoheal_with() -> ?CONFIG.
 autoheal(Cfgs) ->
     [A, B, C] = [pget(node, Cfg) || Cfg <- Cfgs],
     set_mode(Cfgs, autoheal),
     Test = fun (Pairs) ->
                    block_unblock(Pairs),
-                   [await_running(N, true) || N <- [A, B, C]],
+                   %% Sleep to make sure all the partitions are noticed
+                   %% ?DELAY for the net_tick timeout
+                   timer:sleep(?DELAY),
+                   [await_listening(N, true) || N <- [A, B, C]],
                    [] = partitions(A),
                    [] = partitions(B),
                    [] = partitions(C)
@@ -178,6 +188,55 @@ autoheal(Cfgs) ->
     Test([{B, C}]),
     Test([{A, C}, {B, C}]),
     Test([{A, B}, {A, C}, {B, C}]),
+    ok.
+
+partial_false_positive_with() -> ?CONFIG.
+partial_false_positive(Cfgs) ->
+    [A, B, C] = [pget(node, Cfg) || Cfg <- Cfgs],
+    block([{A, B}]),
+    timer:sleep(1000),
+    block([{A, C}]),
+    timer:sleep(?DELAY),
+    unblock([{A, B}, {A, C}]),
+    timer:sleep(?DELAY),
+    %% When B times out A's connection, it will check with C. C will
+    %% not have timed out A yet, but already it can't talk to it. We
+    %% need to not consider this a partial partition; B and C should
+    %% still talk to each other.
+    [B, C] = partitions(A),
+    [A] = partitions(B),
+    [A] = partitions(C),
+    ok.
+
+partial_to_full_with() -> ?CONFIG.
+partial_to_full(Cfgs) ->
+    [A, B, C] = [pget(node, Cfg) || Cfg <- Cfgs],
+    block_unblock([{A, B}]),
+    timer:sleep(?DELAY),
+    %% There are several valid ways this could go, depending on how
+    %% the DOWN messages race: either A gets disconnected first and BC
+    %% stay together, or B gets disconnected first and AC stay
+    %% together, or both make it through and all three get
+    %% disconnected.
+    case {partitions(A), partitions(B), partitions(C)} of
+        {[B, C], [A],    [A]}    -> ok;
+        {[B],    [A, C], [B]}    -> ok;
+        {[B, C], [A, C], [A, B]} -> ok;
+        Partitions               -> exit({partitions, Partitions})
+    end.
+
+partial_pause_with() -> ?CONFIG.
+partial_pause(Cfgs) ->
+    [A, B, C] = [pget(node, Cfg) || Cfg <- Cfgs],
+    set_mode(Cfgs, pause_minority),
+    block([{A, B}]),
+    [await_running(N, false) || N <- [A, B]],
+    await_running(C, true),
+    unblock([{A, B}]),
+    [await_listening(N, true) || N <- [A, B, C]],
+    [] = partitions(A),
+    [] = partitions(B),
+    [] = partitions(C),
     ok.
 
 set_mode(Cfgs, Mode) ->
@@ -195,7 +254,14 @@ block(Pairs)   -> [block(X, Y) || {X, Y} <- Pairs].
 unblock(Pairs) -> [allow(X, Y) || {X, Y} <- Pairs].
 
 partitions(Node) ->
-    rpc:call(Node, rabbit_node_monitor, partitions, []).
+    case rpc:call(Node, rabbit_node_monitor, partitions, []) of
+        {badrpc, {'EXIT', E}} = R -> case rabbit_misc:is_abnormal_exit(E) of
+                                         true  -> R;
+                                         false -> timer:sleep(1000),
+                                                  partitions(Node)
+                                     end;
+        Partitions                -> Partitions
+    end.
 
 block(X, Y) ->
     rpc:call(X, inet_tcp_proxy, block, [Y]),

@@ -227,6 +227,9 @@ INCLUDE_DIRS+=$(UPSTREAM_INCLUDE_DIRS)
 
 define package_rules
 
+# We use --no-backup-if-mismatch to prevent .orig files ending up in
+# source builds and causing warnings on Debian if the patches have
+# fuzz.
 ifdef UPSTREAM_GIT
 $(CLONE_DIR)/.done:
 	rm -rf $(CLONE_DIR)
@@ -234,7 +237,7 @@ $(CLONE_DIR)/.done:
 	# Work around weird github breakage (bug 25264)
 	cd $(CLONE_DIR) && git pull
 	$(if $(UPSTREAM_REVISION),cd $(CLONE_DIR) && git checkout $(UPSTREAM_REVISION))
-	$(if $(WRAPPER_PATCHES),$(foreach F,$(WRAPPER_PATCHES),patch -d $(CLONE_DIR) -p1 <$(PACKAGE_DIR)/$(F) &&) :)
+	$(if $(WRAPPER_PATCHES),$(foreach F,$(WRAPPER_PATCHES),patch --no-backup-if-mismatch -d $(CLONE_DIR) -p1 <$(PACKAGE_DIR)/$(F) &&) :)
 	touch $$@
 endif # UPSTREAM_GIT
 
@@ -242,7 +245,7 @@ ifdef UPSTREAM_HG
 $(CLONE_DIR)/.done:
 	rm -rf $(CLONE_DIR)
 	hg clone -r $(or $(UPSTREAM_REVISION),default) $(UPSTREAM_HG) $(CLONE_DIR)
-	$(if $(WRAPPER_PATCHES),$(foreach F,$(WRAPPER_PATCHES),patch -d $(CLONE_DIR) -p1 <$(PACKAGE_DIR)/$(F) &&) :)
+	$(if $(WRAPPER_PATCHES),$(foreach F,$(WRAPPER_PATCHES),patch --no-backup-if-mismatch -d $(CLONE_DIR) -p1 <$(PACKAGE_DIR)/$(F) &&) :)
 	touch $$@
 endif # UPSTREAM_HG
 
@@ -299,15 +302,12 @@ define run_broker
 	cp -p $(PACKAGE_DIR)/dist/*.ez $(TEST_TMPDIR)/plugins
 	$(call copy,$(3),$(TEST_TMPDIR)/plugins)
 	rm -f $(TEST_TMPDIR)/plugins/rabbit_common*.ez
-	for plugin in \
-	  $$$$(RABBITMQ_PLUGINS_DIR=$(TEST_TMPDIR)/plugins \
-            RABBITMQ_ENABLED_PLUGINS_FILE=$(TEST_TMPDIR)/enabled_plugins \
-	    $(UMBRELLA_BASE_DIR)/rabbitmq-server/scripts/rabbitmq-plugins list -m); do \
-	    RABBITMQ_PLUGINS_DIR=$(TEST_TMPDIR)/plugins \
+	RABBITMQ_PLUGINS_DIR=$(TEST_TMPDIR)/plugins \
 	    RABBITMQ_ENABLED_PLUGINS_FILE=$(TEST_TMPDIR)/enabled_plugins \
 	    $(UMBRELLA_BASE_DIR)/rabbitmq-server/scripts/rabbitmq-plugins \
-	    enable $$$$plugin; \
-	done
+	    set --offline $$$$(RABBITMQ_PLUGINS_DIR=$(TEST_TMPDIR)/plugins \
+            RABBITMQ_ENABLED_PLUGINS_FILE=$(TEST_TMPDIR)/enabled_plugins \
+	    $(UMBRELLA_BASE_DIR)/rabbitmq-server/scripts/rabbitmq-plugins list -m | tr '\n' ' ')
 	RABBITMQ_PLUGINS_DIR=$(TEST_TMPDIR)/plugins \
 	  RABBITMQ_ENABLED_PLUGINS_FILE=$(TEST_TMPDIR)/enabled_plugins \
 	  RABBITMQ_LOG_BASE=$(TEST_TMPDIR)/log \

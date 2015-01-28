@@ -25,7 +25,7 @@
 -export([info_keys/0, info/1, info/2, info_all/1, info_all/2]).
 %% these must all be run inside a mnesia tx
 -export([has_for_source/1, remove_for_source/1,
-         remove_for_destination/1, remove_transient_for_destination/1]).
+         remove_for_destination/2, remove_transient_for_destination/1]).
 
 %%----------------------------------------------------------------------------
 
@@ -52,7 +52,9 @@
                    rabbit_types:ok_or_error(rabbit_types:amqp_error()))).
 -type(bindings() :: [rabbit_types:binding()]).
 
--opaque(deletions() :: dict()).
+%% TODO this should really be opaque but that seems to confuse 17.1's
+%% dialyzer into objecting to everything that uses it.
+-type(deletions() :: dict:dict()).
 
 -spec(recover/2 :: ([rabbit_exchange:name()], [rabbit_amqqueue:name()]) ->
                         'ok').
@@ -78,8 +80,8 @@
                    -> [rabbit_types:infos()]).
 -spec(has_for_source/1 :: (rabbit_types:binding_source()) -> boolean()).
 -spec(remove_for_source/1 :: (rabbit_types:binding_source()) -> bindings()).
--spec(remove_for_destination/1 ::
-        (rabbit_types:binding_destination()) -> deletions()).
+-spec(remove_for_destination/2 ::
+        (rabbit_types:binding_destination(), boolean()) -> deletions()).
 -spec(remove_transient_for_destination/1 ::
         (rabbit_types:binding_destination()) -> deletions()).
 -spec(process_deletions/1 :: (deletions()) -> rabbit_misc:thunk('ok')).
@@ -215,7 +217,8 @@ remove(Binding, InnerFun) ->
 remove(Src, Dst, B) ->
     ok = sync_route(#route{binding = B}, durable(Src), durable(Dst),
                     fun mnesia:delete_object/3),
-    Deletions = maybe_auto_delete(B#binding.source, [B], new_deletions()),
+    Deletions = maybe_auto_delete(
+                  B#binding.source, [B], new_deletions(), false),
     process_deletions(Deletions).
 
 list(VHostPath) ->
@@ -298,11 +301,11 @@ remove_for_source(SrcName) ->
         mnesia:match_object(rabbit_route, Match, write) ++
             mnesia:match_object(rabbit_semi_durable_route, Match, write))).
 
-remove_for_destination(DstName) ->
-    remove_for_destination(DstName, fun remove_routes/1).
+remove_for_destination(DstName, OnlyDurable) ->
+    remove_for_destination(DstName, OnlyDurable, fun remove_routes/1).
 
 remove_transient_for_destination(DstName) ->
-    remove_for_destination(DstName, fun remove_transient_routes/1).
+    remove_for_destination(DstName, false, fun remove_transient_routes/1).
 
 %%----------------------------------------------------------------------------
 
@@ -362,7 +365,7 @@ not_found_or_absent_errs(Names) ->
 
 absent_errs_only(Names) ->
     Errs = [E || Name <- Names,
-                 {absent, _Q} = E <- [not_found_or_absent(Name)]],
+                 {absent, _Q, _Reason} = E <- [not_found_or_absent(Name)]],
     rabbit_misc:const(case Errs of
                           [] -> ok;
                           _  -> {error, {resources_missing, Errs}}
@@ -375,8 +378,8 @@ not_found_or_absent(#resource{kind = exchange} = Name) ->
     {not_found, Name};
 not_found_or_absent(#resource{kind = queue}    = Name) ->
     case rabbit_amqqueue:not_found_or_absent(Name) of
-        not_found        -> {not_found, Name};
-        {absent, _Q} = R -> R
+        not_found                 -> {not_found, Name};
+        {absent, _Q, _Reason} = R -> R
     end.
 
 contains(Table, MatchHead) ->
@@ -428,36 +431,50 @@ remove_transient_routes(Routes) ->
          R#route.binding
      end || R <- Routes].
 
-remove_for_destination(DstName, Fun) ->
+remove_for_destination(DstName, OnlyDurable, Fun) ->
     lock_route_tables(),
-    Match = reverse_route(
-              #route{binding = #binding{destination = DstName, _ = '_'}}),
-    Routes = [reverse_route(R) || R <- mnesia:match_object(
-                                         rabbit_reverse_route, Match, write)],
+    MatchFwd = #route{binding = #binding{destination = DstName, _ = '_'}},
+    MatchRev = reverse_route(MatchFwd),
+    Routes = case OnlyDurable of
+                 false -> [reverse_route(R) ||
+                              R <- mnesia:match_object(
+                                     rabbit_reverse_route, MatchRev, write)];
+                 true  -> lists:usort(
+                            mnesia:match_object(
+                              rabbit_durable_route, MatchFwd, write) ++
+                                mnesia:match_object(
+                                  rabbit_semi_durable_route, MatchFwd, write))
+             end,
     Bindings = Fun(Routes),
-    group_bindings_fold(fun maybe_auto_delete/3, new_deletions(),
-                        lists:keysort(#binding.source, Bindings)).
+    group_bindings_fold(fun maybe_auto_delete/4, new_deletions(),
+                        lists:keysort(#binding.source, Bindings), OnlyDurable).
 
 %% Requires that its input binding list is sorted in exchange-name
 %% order, so that the grouping of bindings (for passing to
 %% group_bindings_and_auto_delete1) works properly.
-group_bindings_fold(_Fun, Acc, []) ->
+group_bindings_fold(_Fun, Acc, [], _OnlyDurable) ->
     Acc;
-group_bindings_fold(Fun, Acc, [B = #binding{source = SrcName} | Bs]) ->
-    group_bindings_fold(Fun, SrcName, Acc, Bs, [B]).
+group_bindings_fold(Fun, Acc, [B = #binding{source = SrcName} | Bs],
+                    OnlyDurable) ->
+    group_bindings_fold(Fun, SrcName, Acc, Bs, [B], OnlyDurable).
 
 group_bindings_fold(
-  Fun, SrcName, Acc, [B = #binding{source = SrcName} | Bs], Bindings) ->
-    group_bindings_fold(Fun, SrcName, Acc, Bs, [B | Bindings]);
-group_bindings_fold(Fun, SrcName, Acc, Removed, Bindings) ->
+  Fun, SrcName, Acc, [B = #binding{source = SrcName} | Bs], Bindings,
+  OnlyDurable) ->
+    group_bindings_fold(Fun, SrcName, Acc, Bs, [B | Bindings], OnlyDurable);
+group_bindings_fold(Fun, SrcName, Acc, Removed, Bindings, OnlyDurable) ->
     %% Either Removed is [], or its head has a non-matching SrcName.
-    group_bindings_fold(Fun, Fun(SrcName, Bindings, Acc), Removed).
+    group_bindings_fold(Fun, Fun(SrcName, Bindings, Acc, OnlyDurable), Removed,
+                        OnlyDurable).
 
-maybe_auto_delete(XName, Bindings, Deletions) ->
+maybe_auto_delete(XName, Bindings, Deletions, OnlyDurable) ->
     {Entry, Deletions1} =
-        case mnesia:read({rabbit_exchange, XName}) of
+        case mnesia:read({case OnlyDurable of
+                              true  -> rabbit_durable_exchange;
+                              false -> rabbit_exchange
+                          end, XName}) of
             []  -> {{undefined, not_deleted, Bindings}, Deletions};
-            [X] -> case rabbit_exchange:maybe_auto_delete(X) of
+            [X] -> case rabbit_exchange:maybe_auto_delete(X, OnlyDurable) of
                        not_deleted ->
                            {{X, not_deleted, Bindings}, Deletions};
                        {deleted, Deletions2} ->

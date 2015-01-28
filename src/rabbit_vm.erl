@@ -16,7 +16,7 @@
 
 -module(rabbit_vm).
 
--export([memory/0]).
+-export([memory/0, binary/0]).
 
 -define(MAGIC_PLUGINS, ["mochiweb", "webmachine", "cowboy", "sockjs",
                         "rfc4627_jsonrpc"]).
@@ -26,6 +26,7 @@
 -ifdef(use_specs).
 
 -spec(memory/0 :: () -> rabbit_types:infos()).
+-spec(binary/0 :: () -> rabbit_types:infos()).
 
 -endif.
 
@@ -33,22 +34,18 @@
 
 %% Like erlang:memory(), but with awareness of rabbit-y things
 memory() ->
-    ConnProcs     = [rabbit_tcp_client_sup, ssl_connection_sup, amqp_sup],
-    QProcs        = [rabbit_amqqueue_sup, rabbit_mirror_queue_slave_sup],
-    MsgIndexProcs = [msg_store_transient, msg_store_persistent],
-    MgmtDbProcs   = [rabbit_mgmt_sup_sup],
-    PluginProcs   = plugin_sups(),
+    All = interesting_sups(),
+    {Sums, _Other} = sum_processes(
+                       lists:append(All), distinguishers(), [memory]),
 
-    All = [ConnProcs, QProcs, MsgIndexProcs, MgmtDbProcs, PluginProcs],
-
-    {Sums, _Other} = sum_processes(lists:append(All), [memory]),
-
-    [Conns, Qs, MsgIndexProc, MgmtDbProc, Plugins] =
-        [aggregate_memory(Names, Sums) || Names <- All],
+    [Qs, QsSlave, ConnsReader, ConnsWriter, ConnsChannel, ConnsOther,
+     MsgIndexProc, MgmtDbProc, Plugins] =
+        [aggregate(Names, Sums, memory, fun (X) -> X end)
+         || Names <- distinguished_interesting_sups()],
 
     Mnesia       = mnesia_memory(),
-    MsgIndexETS  = ets_memory(rabbit_msg_store_ets_index),
-    MgmtDbETS    = ets_memory(rabbit_mgmt_db),
+    MsgIndexETS  = ets_memory([msg_store_persistent, msg_store_transient]),
+    MgmtDbETS    = ets_memory([rabbit_mgmt_db]),
 
     [{total,     Total},
      {processes, Processes},
@@ -59,26 +56,57 @@ memory() ->
      {system,    System}] =
         erlang:memory([total, processes, ets, atom, binary, code, system]),
 
-    OtherProc = Processes - Conns - Qs - MsgIndexProc - Plugins - MgmtDbProc,
+    OtherProc = Processes
+        - ConnsReader - ConnsWriter - ConnsChannel - ConnsOther
+        - Qs - QsSlave - MsgIndexProc - Plugins - MgmtDbProc,
 
-    [{total,            Total},
-     {connection_procs, Conns},
-     {queue_procs,      Qs},
-     {plugins,          Plugins},
-     {other_proc,       lists:max([0, OtherProc])}, %% [1]
-     {mnesia,           Mnesia},
-     {mgmt_db,          MgmtDbETS + MgmtDbProc},
-     {msg_index,        MsgIndexETS + MsgIndexProc},
-     {other_ets,        ETS - Mnesia - MsgIndexETS - MgmtDbETS},
-     {binary,           Bin},
-     {code,             Code},
-     {atom,             Atom},
-     {other_system,     System - ETS - Atom - Bin - Code}].
+    [{total,              Total},
+     {connection_readers,  ConnsReader},
+     {connection_writers,  ConnsWriter},
+     {connection_channels, ConnsChannel},
+     {connection_other,    ConnsOther},
+     {queue_procs,         Qs},
+     {queue_slave_procs,   QsSlave},
+     {plugins,             Plugins},
+     {other_proc,          lists:max([0, OtherProc])}, %% [1]
+     {mnesia,              Mnesia},
+     {mgmt_db,             MgmtDbETS + MgmtDbProc},
+     {msg_index,           MsgIndexETS + MsgIndexProc},
+     {other_ets,           ETS - Mnesia - MsgIndexETS - MgmtDbETS},
+     {binary,              Bin},
+     {code,                Code},
+     {atom,                Atom},
+     {other_system,        System - ETS - Atom - Bin - Code}].
 
 %% [1] - erlang:memory(processes) can be less than the sum of its
 %% parts. Rather than display something nonsensical, just silence any
 %% claims about negative memory. See
 %% http://erlang.org/pipermail/erlang-questions/2012-September/069320.html
+
+binary() ->
+    All = interesting_sups(),
+    {Sums, Rest} =
+        sum_processes(
+          lists:append(All),
+          fun (binary, Info, Acc) ->
+                  lists:foldl(fun ({Ptr, Sz, _RefCnt}, Acc0) ->
+                                      sets:add_element({Ptr, Sz}, Acc0)
+                              end, Acc, Info)
+          end, distinguishers(), [{binary, sets:new()}]),
+    [Other, Qs, QsSlave, ConnsReader, ConnsWriter, ConnsChannel, ConnsOther,
+     MsgIndexProc, MgmtDbProc, Plugins] =
+        [aggregate(Names, [{other, Rest} | Sums], binary, fun sum_binary/1)
+         || Names <- [[other] | distinguished_interesting_sups()]],
+    [{connection_readers,  ConnsReader},
+     {connection_writers,  ConnsWriter},
+     {connection_channels, ConnsChannel},
+     {connection_other,    ConnsOther},
+     {queue_procs,         Qs},
+     {queue_slave_procs,   QsSlave},
+     {plugins,             Plugins},
+     {mgmt_db,             MgmtDbProc},
+     {msg_index,           MsgIndexProc},
+     {other,               Other}].
 
 %%----------------------------------------------------------------------------
 
@@ -89,12 +117,37 @@ mnesia_memory() ->
         _   -> 0
     end.
 
-ets_memory(Name) ->
+ets_memory(OwnerNames) ->
+    Owners = [whereis(N) || N <- OwnerNames],
     lists:sum([bytes(ets:info(T, memory)) || T <- ets:all(),
-                                             N <- [ets:info(T, name)],
-                                             N =:= Name]).
+                                             O <- [ets:info(T, owner)],
+                                             lists:member(O, Owners)]).
 
 bytes(Words) ->  Words * erlang:system_info(wordsize).
+
+interesting_sups() ->
+    [[rabbit_amqqueue_sup_sup], conn_sups() | interesting_sups0()].
+
+interesting_sups0() ->
+    MsgIndexProcs = [msg_store_transient, msg_store_persistent],
+    MgmtDbProcs   = [rabbit_mgmt_sup_sup],
+    PluginProcs   = plugin_sups(),
+    [MsgIndexProcs, MgmtDbProcs, PluginProcs].
+
+conn_sups()     -> [rabbit_tcp_client_sup, ssl_connection_sup, amqp_sup].
+conn_sups(With) -> [{Sup, With} || Sup <- conn_sups()].
+
+distinguishers() -> [{rabbit_amqqueue_sup_sup, fun queue_type/1} |
+                     conn_sups(fun conn_type/1)].
+
+distinguished_interesting_sups() ->
+    [[{rabbit_amqqueue_sup_sup, master}],
+     [{rabbit_amqqueue_sup_sup, slave}],
+     conn_sups(reader),
+     conn_sups(writer),
+     conn_sups(channel),
+     conn_sups(other)]
+        ++ interesting_sups0().
 
 plugin_sups() ->
     lists:append([plugin_sup(App) ||
@@ -120,13 +173,31 @@ process_name(Pid) ->
 is_plugin("rabbitmq_" ++ _) -> true;
 is_plugin(App)              -> lists:member(App, ?MAGIC_PLUGINS).
 
-aggregate_memory(Names, Sums) ->
-    lists:sum([extract_memory(Name, Sums) || Name <- Names]).
+aggregate(Names, Sums, Key, Fun) ->
+    lists:sum([extract(Name, Sums, Key, Fun) || Name <- Names]).
 
-extract_memory(Name, Sums) ->
-    {value, {_, Accs}} = lists:keysearch(Name, 1, Sums),
-    {value, {memory, V}} = lists:keysearch(memory, 1, Accs),
-    V.
+extract(Name, Sums, Key, Fun) ->
+    case keyfind(Name, Sums) of
+        {value, Accs} -> Fun(keyfetch(Key, Accs));
+        false         -> 0
+    end.
+
+sum_binary(Set) ->
+    sets:fold(fun({_Pt, Sz}, Acc) -> Acc + Sz end, 0, Set).
+
+queue_type(PDict) ->
+    case keyfind(process_name, PDict) of
+        {value, {rabbit_mirror_queue_slave, _}} -> slave;
+        _                                       -> master
+    end.
+
+conn_type(PDict) ->
+    case keyfind(process_name, PDict) of
+        {value, {rabbit_reader,  _}} -> reader;
+        {value, {rabbit_writer,  _}} -> writer;
+        {value, {rabbit_channel, _}} -> channel;
+        _                            -> other
+    end.
 
 %%----------------------------------------------------------------------------
 
@@ -139,14 +210,17 @@ extract_memory(Name, Sums) ->
 -type(info_item() :: {info_key(), info_value()}).
 -type(accumulate() :: fun ((info_key(), info_value(), info_value()) ->
                                   info_value())).
--spec(sum_processes/2 :: ([process()], [info_key()]) ->
+-type(distinguisher() :: fun (([{term(), term()}]) -> atom())).
+-type(distinguishers() :: [{info_key(), distinguisher()}]).
+-spec(sum_processes/3 :: ([process()], distinguishers(), [info_key()]) ->
                               {[{process(), [info_item()]}], [info_item()]}).
--spec(sum_processes/3 :: ([process()], accumulate(), [info_item()]) ->
+-spec(sum_processes/4 :: ([process()], accumulate(), distinguishers(),
+                          [info_item()]) ->
                               {[{process(), [info_item()]}], [info_item()]}).
 -endif.
 
-sum_processes(Names, Items) ->
-    sum_processes(Names, fun (_, X, Y) -> X + Y end,
+sum_processes(Names, Distinguishers, Items) ->
+    sum_processes(Names, fun (_, X, Y) -> X + Y end, Distinguishers,
                   [{Item, 0} || Item <- Items]).
 
 %% summarize the process_info of all processes based on their
@@ -180,10 +254,8 @@ sum_processes(Names, Items) ->
 %% these must match whatever is contained in the '$ancestor' process
 %% dictionary entry. Generally that means for all registered processes
 %% the name should be used.
-sum_processes(Names, Fun, Acc0) ->
-    Items = [Item || {Item, _Val0} <- Acc0],
-    Acc0Dict  = orddict:from_list(Acc0),
-    NameAccs0 = orddict:from_list([{Name, Acc0Dict} || Name <- Names]),
+sum_processes(Names, Fun, Distinguishers, Acc0) ->
+    Items = [Item || {Item, _Blank0} <- Acc0],
     {NameAccs, OtherAcc} =
         lists:foldl(
           fun (Pid, Acc) ->
@@ -199,10 +271,15 @@ sum_processes(Names, Fun, Acc0) ->
                                       [] -> [];
                                       N  -> [N]
                                   end,
-                          accumulate(find_ancestor(Extra, D, Names), Fun,
-                                     orddict:from_list(Vals), Acc)
+                          Name0 = find_ancestor(Extra, D, Names),
+                          Name = case keyfind(Name0, Distinguishers) of
+                                     {value, DistFun} -> {Name0, DistFun(D)};
+                                     false            -> Name0
+                                 end,
+                          accumulate(
+                            Name, Fun, orddict:from_list(Vals), Acc, Acc0)
                   end
-          end, {NameAccs0, Acc0Dict}, processes()),
+          end, {orddict:new(), Acc0}, processes()),
     %% these conversions aren't strictly necessary; we do them simply
     %% for the sake of encapsulating the representation.
     {[{Name, orddict:to_list(Accs)} ||
@@ -210,9 +287,9 @@ sum_processes(Names, Fun, Acc0) ->
      orddict:to_list(OtherAcc)}.
 
 find_ancestor(Extra, D, Names) ->
-    Ancestors = case lists:keysearch('$ancestors', 1, D) of
-                    {value, {_, Ancs}} -> Ancs;
-                    false              -> []
+    Ancestors = case keyfind('$ancestors', D) of
+                    {value, Ancs} -> Ancs;
+                    false         -> []
                 end,
     case lists:splitwith(fun (A) -> not lists:member(A, Names) end,
                          Extra ++ Ancestors) of
@@ -220,8 +297,19 @@ find_ancestor(Extra, D, Names) ->
         {_, [Name | _]} -> Name
     end.
 
-accumulate(undefined, Fun, ValsDict, {NameAccs, OtherAcc}) ->
+accumulate(undefined, Fun, ValsDict, {NameAccs, OtherAcc}, _Acc0) ->
     {NameAccs, orddict:merge(Fun, ValsDict, OtherAcc)};
-accumulate(Name,      Fun, ValsDict, {NameAccs, OtherAcc}) ->
+accumulate(Name,      Fun, ValsDict, {NameAccs, OtherAcc}, Acc0) ->
     F = fun (NameAcc) -> orddict:merge(Fun, ValsDict, NameAcc) end,
-    {orddict:update(Name, F, NameAccs), OtherAcc}.
+    {case orddict:is_key(Name, NameAccs) of
+         true  -> orddict:update(Name, F,       NameAccs);
+         false -> orddict:store( Name, F(Acc0), NameAccs)
+     end, OtherAcc}.
+
+keyfetch(K, L) -> {value, {_, V}} = lists:keysearch(K, 1, L),
+                  V.
+
+keyfind(K, L) -> case lists:keysearch(K, 1, L) of
+                     {value, {_, V}} -> {value, V};
+                     false           -> false
+                 end.

@@ -23,6 +23,14 @@ set TDP0=%~dp0
 set STAR=%*
 setlocal enabledelayedexpansion
 
+if "!RABBITMQ_USE_LONGNAME!"=="" (
+    set RABBITMQ_NAME_TYPE="-sname"
+)
+
+if "!RABBITMQ_USE_LONGNAME!"=="true" (
+    set RABBITMQ_NAME_TYPE="-name"
+)
+
 if "!RABBITMQ_BASE!"=="" (
     set RABBITMQ_BASE=!APPDATA!\RabbitMQ
 )
@@ -104,7 +112,7 @@ set RABBITMQ_EBIN_ROOT=!TDP0!..\ebin
         -pa "!RABBITMQ_EBIN_ROOT!" ^
         -noinput -hidden ^
         -s rabbit_prelaunch ^
-        -sname rabbitmqprelaunch!RANDOM!!TIME:~9! ^
+        !RABBITMQ_NAME_TYPE! rabbitmqprelaunch!RANDOM!!TIME:~9! ^
         -extra "!RABBITMQ_NODENAME!"
 
 if ERRORLEVEL 2 (
@@ -140,13 +148,14 @@ if not "!RABBITMQ_NODE_IP_ADDRESS!"=="" (
 -boot start_sasl ^
 -s rabbit boot ^
 !RABBITMQ_CONFIG_ARG! ^
--sname !RABBITMQ_NODENAME! ^
+!RABBITMQ_NAME_TYPE! !RABBITMQ_NODENAME! ^
 +W w ^
 +A30 ^
 +P 1048576 ^
 -kernel inet_default_connect_options "[{nodelay, true}]" ^
 !RABBITMQ_LISTEN_ARG! ^
 !RABBITMQ_SERVER_ERL_ARGS! ^
+!RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS! ^
 -sasl errlog_type error ^
 -sasl sasl_error_logger false ^
 -rabbit error_logger {file,\""!LOGS:\=/!"\"} ^

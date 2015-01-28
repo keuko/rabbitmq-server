@@ -16,28 +16,14 @@
 
 -module(rabbit_control_main).
 -include("rabbit.hrl").
+-include("rabbit_cli.hrl").
 
 -export([start/0, stop/0, parse_arguments/2, action/5,
          sync_queue/1, cancel_sync_queue/1]).
 
--define(RPC_TIMEOUT, infinity).
+-import(rabbit_cli, [rpc_call/4]).
+
 -define(EXTERNAL_CHECK_INTERVAL, 1000).
-
--define(QUIET_OPT, "-q").
--define(NODE_OPT, "-n").
--define(VHOST_OPT, "-p").
--define(PRIORITY_OPT, "--priority").
--define(APPLY_TO_OPT, "--apply-to").
--define(RAM_OPT, "--ram").
--define(OFFLINE_OPT, "--offline").
-
--define(QUIET_DEF, {?QUIET_OPT, flag}).
--define(NODE_DEF(Node), {?NODE_OPT, {option, Node}}).
--define(VHOST_DEF, {?VHOST_OPT, {option, "/"}}).
--define(PRIORITY_DEF, {?PRIORITY_OPT, {option, "0"}}).
--define(APPLY_TO_DEF, {?APPLY_TO_OPT, {option, "all"}}).
--define(RAM_DEF, {?RAM_OPT, flag}).
--define(OFFLINE_DEF, {?OFFLINE_OPT, flag}).
 
 -define(GLOBAL_DEFS(Node), [?QUIET_DEF, ?NODE_DEF(Node)]).
 
@@ -54,6 +40,7 @@
          change_cluster_node_type,
          update_cluster_nodes,
          {forget_cluster_node, [?OFFLINE_DEF]},
+         force_boot,
          cluster_status,
          {sync_queue, [?VHOST_DEF]},
          {cancel_sync_queue, [?VHOST_DEF]},
@@ -114,6 +101,12 @@
          {"Policies",   rabbit_policy,             list_formatted, info_keys},
          {"Parameters", rabbit_runtime_parameters, list_formatted, info_keys}]).
 
+-define(COMMANDS_NOT_REQUIRING_APP,
+        [stop, stop_app, start_app, wait, reset, force_reset, rotate_logs,
+         join_cluster, change_cluster_node_type, update_cluster_nodes,
+         forget_cluster_node, cluster_status, status, environment, eval,
+         force_boot]).
+
 %%----------------------------------------------------------------------------
 
 -ifdef(use_specs).
@@ -124,86 +117,31 @@
         (atom(), node(), [string()], [{string(), any()}],
          fun ((string(), [any()]) -> 'ok'))
         -> 'ok').
--spec(usage/0 :: () -> no_return()).
 
 -endif.
 
 %%----------------------------------------------------------------------------
 
 start() ->
-    {ok, [[NodeStr|_]|_]} = init:get_argument(nodename),
-    {Command, Opts, Args} =
-        case parse_arguments(init:get_plain_arguments(), NodeStr) of
-            {ok, Res}  -> Res;
-            no_command -> print_error("could not recognise command", []),
-                          usage()
-        end,
-    Quiet = proplists:get_bool(?QUIET_OPT, Opts),
-    Node = proplists:get_value(?NODE_OPT, Opts),
-    Inform = case Quiet of
-                 true  -> fun (_Format, _Args1) -> ok end;
-                 false -> fun (Format, Args1) ->
-                                  io:format(Format ++ " ...~n", Args1)
-                          end
-             end,
-    PrintInvalidCommandError =
-        fun () ->
-                print_error("invalid command '~s'",
-                            [string:join([atom_to_list(Command) | Args], " ")])
-        end,
+    start_distribution(),
+    rabbit_cli:main(
+      fun (Args, NodeStr) ->
+              parse_arguments(Args, NodeStr)
+      end,
+      fun (Command, Node, Args, Opts) ->
+              Quiet = proplists:get_bool(?QUIET_OPT, Opts),
+              Inform = case Quiet of
+                           true  -> fun (_Format, _Args1) -> ok end;
+                           false -> fun (Format, Args1) ->
+                                            io:format(Format ++ " ...~n", Args1)
+                                    end
+                       end,
+              do_action(Command, Node, Args, Opts, Inform)
+      end, rabbit_ctl_usage).
 
-    %% The reason we don't use a try/catch here is that rpc:call turns
-    %% thrown errors into normal return values
-    case catch action(Command, Node, Args, Opts, Inform) of
-        ok ->
-            case Quiet of
-                true  -> ok;
-                false -> io:format("...done.~n")
-            end,
-            rabbit_misc:quit(0);
-        {ok, Info} ->
-            case Quiet of
-                true  -> ok;
-                false -> io:format("...done (~p).~n", [Info])
-            end,
-            rabbit_misc:quit(0);
-        {'EXIT', {function_clause, [{?MODULE, action, _}    | _]}} -> %% < R15
-            PrintInvalidCommandError(),
-            usage();
-        {'EXIT', {function_clause, [{?MODULE, action, _, _} | _]}} -> %% >= R15
-            PrintInvalidCommandError(),
-            usage();
-        {'EXIT', {badarg, _}} ->
-            print_error("invalid parameter: ~p", [Args]),
-            usage();
-        {error, {Problem, Reason}} when is_atom(Problem), is_binary(Reason) ->
-            %% We handle this common case specially to avoid ~p since
-            %% that has i18n issues
-            print_error("~s: ~s", [Problem, Reason]),
-            rabbit_misc:quit(2);
-        {error, Reason} ->
-            print_error("~p", [Reason]),
-            rabbit_misc:quit(2);
-        {error_string, Reason} ->
-            print_error("~s", [Reason]),
-            rabbit_misc:quit(2);
-        {badrpc, {'EXIT', Reason}} ->
-            print_error("~p", [Reason]),
-            rabbit_misc:quit(2);
-        {badrpc, Reason} ->
-            print_error("unable to connect to node ~w: ~w", [Node, Reason]),
-            print_badrpc_diagnostics([Node]),
-            rabbit_misc:quit(2);
-        {badrpc_multi, Reason, Nodes} ->
-            print_error("unable to connect to nodes ~p: ~w", [Nodes, Reason]),
-            print_badrpc_diagnostics(Nodes),
-            rabbit_misc:quit(2);
-        Other ->
-            print_error("~p", [Other]),
-            rabbit_misc:quit(2)
-    end.
-
-fmt_stderr(Format, Args) -> rabbit_misc:format_stderr(Format ++ "~n", Args).
+parse_arguments(CmdLine, NodeStr) ->
+    rabbit_cli:parse_arguments(
+      ?COMMANDS, ?GLOBAL_DEFS(NodeStr), ?NODE_OPT, CmdLine).
 
 print_report(Node, {Descr, Module, InfoFun, KeysFun}) ->
     io:format("~s:~n", [Descr]),
@@ -222,32 +160,19 @@ print_report0(Node, {Module, InfoFun, KeysFun}, VHostArg) ->
     end,
     io:nl().
 
-print_error(Format, Args) -> fmt_stderr("Error: " ++ Format, Args).
-
-print_badrpc_diagnostics(Nodes) ->
-    fmt_stderr(rabbit_nodes:diagnostics(Nodes), []).
-
 stop() ->
     ok.
 
-usage() ->
-    io:format("~s", [rabbit_ctl_usage:usage()]),
-    rabbit_misc:quit(1).
-
-parse_arguments(CmdLine, NodeStr) ->
-    case rabbit_misc:parse_arguments(
-           ?COMMANDS, ?GLOBAL_DEFS(NodeStr), CmdLine) of
-        {ok, {Cmd, Opts0, Args}} ->
-            Opts = [case K of
-                        ?NODE_OPT -> {?NODE_OPT, rabbit_nodes:make(V)};
-                        _         -> {K, V}
-                    end || {K, V} <- Opts0],
-            {ok, {Cmd, Opts, Args}};
-        E ->
-            E
-    end.
-
 %%----------------------------------------------------------------------------
+
+do_action(Command, Node, Args, Opts, Inform) ->
+    case lists:member(Command, ?COMMANDS_NOT_REQUIRING_APP) of
+        false -> case ensure_app_running(Node) of
+                     ok -> action(Command, Node, Args, Opts, Inform);
+                     E  -> E
+                 end;
+        true  -> action(Command, Node, Args, Opts, Inform)
+    end.
 
 action(stop, Node, Args, _Opts, Inform) ->
     Inform("Stopping and halting node ~p", [Node]),
@@ -302,8 +227,19 @@ action(forget_cluster_node, Node, [ClusterNodeS], Opts, Inform) ->
     ClusterNode = list_to_atom(ClusterNodeS),
     RemoveWhenOffline = proplists:get_bool(?OFFLINE_OPT, Opts),
     Inform("Removing node ~p from cluster", [ClusterNode]),
-    rpc_call(Node, rabbit_mnesia, forget_cluster_node,
-             [ClusterNode, RemoveWhenOffline]);
+    case RemoveWhenOffline of
+        true  -> become(Node),
+                 rabbit_mnesia:forget_cluster_node(ClusterNode, true);
+        false -> rpc_call(Node, rabbit_mnesia, forget_cluster_node,
+                          [ClusterNode, false])
+    end;
+
+action(force_boot, Node, [], _Opts, Inform) ->
+    Inform("Forcing boot for Mnesia dir ~s", [mnesia:system_info(directory)]),
+    case rabbit:is_running(Node) of
+        false -> rabbit_mnesia:force_load_next_boot();
+        true  -> {error, rabbit_running}
+    end;
 
 action(sync_queue, Node, [Q], Opts, Inform) ->
     VHost = proplists:get_value(?VHOST_OPT, Opts),
@@ -650,6 +586,28 @@ exit_loop(Port) ->
         {Port, _}                 -> exit_loop(Port)
     end.
 
+start_distribution() ->
+    CtlNodeName = rabbit_misc:format("rabbitmqctl-~s", [os:getpid()]),
+    {ok, _} = net_kernel:start([list_to_atom(CtlNodeName), name_type()]).
+
+become(BecomeNode) ->
+    case net_adm:ping(BecomeNode) of
+        pong -> exit({node_running, BecomeNode});
+        pang -> io:format("  * Impersonating node: ~s...", [BecomeNode]),
+                error_logger:tty(false),
+                ok = net_kernel:stop(),
+                {ok, _} = net_kernel:start([BecomeNode, name_type()]),
+                io:format(" done~n", []),
+                Dir = mnesia:system_info(directory),
+                io:format("  * Mnesia directory  : ~s~n", [Dir])
+    end.
+
+name_type() ->
+    case os:getenv("RABBITMQ_USE_LONGNAME") of
+        "true" -> longnames;
+        _      -> shortnames
+    end.
+
 %%----------------------------------------------------------------------------
 
 default_if_empty(List, Default) when is_list(List) ->
@@ -715,6 +673,17 @@ unsafe_rpc(Node, Mod, Fun, Args) ->
         Normal            -> Normal
     end.
 
+ensure_app_running(Node) ->
+    case call(Node, {rabbit, is_running, []}) of
+        true  -> ok;
+        false -> {error_string,
+                  rabbit_misc:format(
+                    "rabbit application is not running on node ~s.~n"
+                    " * Suggestion: start it with \"rabbitmqctl start_app\" "
+                    "and try again", [Node])};
+        Other -> Other
+    end.
+
 call(Node, {Mod, Fun, Args}) ->
     rpc_call(Node, Mod, Fun, lists:map(fun list_to_binary_utf8/1, Args)).
 
@@ -724,9 +693,6 @@ list_to_binary_utf8(L) ->
         ok    -> B;
         error -> throw({error, {not_utf_8, L}})
     end.
-
-rpc_call(Node, Mod, Fun, Args) ->
-    rpc:call(Node, Mod, Fun, Args, ?RPC_TIMEOUT).
 
 %% escape does C-style backslash escaping of non-printable ASCII
 %% characters.  We don't escape characters above 127, since they may

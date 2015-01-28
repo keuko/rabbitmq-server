@@ -62,7 +62,7 @@
 %%
 %% leave/1
 %% Provide the Pid. Removes the Pid from the group. The callback
-%% terminate/2 function will be called.
+%% handle_terminate/2 function will be called.
 %%
 %% broadcast/2
 %% Provide the Pid and a Message. The message will be sent to all
@@ -388,6 +388,9 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
          code_change/3, prioritise_info/3]).
 
+%% For INSTR_MOD callbacks
+-export([call/3, cast/2, monitor/1, demonitor/1]).
+
 -ifndef(use_specs).
 -export([behaviour_info/1]).
 -endif.
@@ -490,13 +493,13 @@
 
 %% Called on gm member termination as per rules in gen_server, with
 %% the Args provided in start_link plus the termination Reason.
--callback terminate(Args :: term(), Reason :: term()) ->
+-callback handle_terminate(Args :: term(), Reason :: term()) ->
     ok | term().
 
 -else.
 
 behaviour_info(callbacks) ->
-    [{joined, 2}, {members_changed, 3}, {handle_msg, 3}, {terminate, 2}];
+    [{joined, 2}, {members_changed, 3}, {handle_msg, 3}, {handle_terminate, 2}];
 behaviour_info(_Other) ->
     undefined.
 
@@ -616,6 +619,16 @@ handle_call({add_on_right, NewMember}, _From,
                                             members_state = MembersState1 }),
     handle_callback_result({Result, {ok, Group}, State1}).
 
+%% add_on_right causes a catchup to be sent immediately from the left,
+%% so we can never see this from the left neighbour. However, it's
+%% possible for the right neighbour to send us a check_neighbours
+%% immediately before that. We can't possibly handle it, but if we're
+%% in this state we know a catchup is coming imminently anyway. So
+%% just ignore it.
+handle_cast({?TAG, _ReqVer, check_neighbours},
+            State = #state { members_state = undefined }) ->
+    noreply(State);
+
 handle_cast({?TAG, ReqVer, Msg},
             State = #state { view          = View,
                              members_state = MembersState,
@@ -707,6 +720,14 @@ handle_info({'DOWN', MRef, process, _Pid, Reason},
         {_, {shutdown, ring_shutdown}} ->
             noreply(State);
         _ ->
+            %% In the event of a partial partition we could see another member
+            %% go down and then remove them from Mnesia. While they can
+            %% recover from this they'd have to restart the queue - not
+            %% ideal. So let's sleep here briefly just in case this was caused
+            %% by a partial partition; in which case by the time we record the
+            %% member death in Mnesia we will probably be in a full
+            %% partition and will not be assassinating another member.
+            timer:sleep(100),
             View1 = group_to_view(record_dead_member_in_group(
                                     Member, GroupName, TxnFun)),
             handle_callback_result(
@@ -724,7 +745,7 @@ handle_info({'DOWN', MRef, process, _Pid, Reason},
 terminate(Reason, State = #state { module        = Module,
                                    callback_args = Args }) ->
     flush_broadcast_buffer(State),
-    Module:terminate(Args, Reason).
+    Module:handle_terminate(Args, Reason).
 
 
 code_change(_OldVsn, State, _Extra) ->
@@ -1177,8 +1198,8 @@ can_erase_view_member(Self, Self, _LA, _LP) -> false;
 can_erase_view_member(_Self, _Id,   N,   N) -> true;
 can_erase_view_member(_Self, _Id, _LA, _LP) -> false.
 
-neighbour_cast(N, Msg) -> gen_server2:cast(get_pid(N), Msg).
-neighbour_call(N, Msg) -> gen_server2:call(get_pid(N), Msg, infinity).
+neighbour_cast(N, Msg) -> ?INSTR_MOD:cast(get_pid(N), Msg).
+neighbour_call(N, Msg) -> ?INSTR_MOD:call(get_pid(N), Msg, infinity).
 
 %% ---------------------------------------------------------------------------
 %% View monitoring and maintanence
@@ -1192,7 +1213,7 @@ ensure_neighbour(Ver, Self, {Self, undefined}, RealNeighbour) ->
 ensure_neighbour(_Ver, _Self, {RealNeighbour, MRef}, RealNeighbour) ->
     {RealNeighbour, MRef};
 ensure_neighbour(Ver, Self, {RealNeighbour, MRef}, Neighbour) ->
-    true = erlang:demonitor(MRef),
+    true = ?INSTR_MOD:demonitor(MRef),
     Msg = {?TAG, Ver, check_neighbours},
     ok = neighbour_cast(RealNeighbour, Msg),
     ok = case Neighbour of
@@ -1202,7 +1223,7 @@ ensure_neighbour(Ver, Self, {RealNeighbour, MRef}, Neighbour) ->
     {Neighbour, maybe_monitor(Neighbour, Self)}.
 
 maybe_monitor( Self,  Self) -> undefined;
-maybe_monitor(Other, _Self) -> erlang:monitor(process, get_pid(Other)).
+maybe_monitor(Other, _Self) -> ?INSTR_MOD:monitor(get_pid(Other)).
 
 check_neighbours(State = #state { self             = Self,
                                   left             = Left,
@@ -1461,3 +1482,12 @@ last_pub(  [], LP) -> LP;
 last_pub(List, LP) -> {PubNum, _Msg} = lists:last(List),
                       true = PubNum > LP, %% ASSERTION
                       PubNum.
+
+%% ---------------------------------------------------------------------------
+
+%% Uninstrumented versions
+
+call(Pid, Msg, Timeout) -> gen_server2:call(Pid, Msg, Timeout).
+cast(Pid, Msg)          -> gen_server2:cast(Pid, Msg).
+monitor(Pid)            -> erlang:monitor(process, Pid).
+demonitor(MRef)         -> erlang:demonitor(MRef).
