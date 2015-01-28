@@ -1,3 +1,11 @@
+rabbitmq-server (3.4.2-4) unstable; urgency=medium
+
+  * Re-added /usr/lib/erlang/lib /var/lib/rabbitmq/mnesia and
+    /var/log/rabbitmq which I removed form the package by mistake on the last
+    upload.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 28 Jan 2015 13:11:02 +0000
+
 rabbitmq-server (3.4.2-3) unstable; urgency=medium
 
   * Removes debian/README which is useless (Closes: #703021).
