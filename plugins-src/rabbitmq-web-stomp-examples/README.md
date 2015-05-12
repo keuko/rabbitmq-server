@@ -1,4 +1,3 @@
-
 RabbitMQ-Web-Stomp-Examples plugin
 ==================================
 

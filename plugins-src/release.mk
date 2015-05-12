@@ -10,8 +10,8 @@ SIGNING_KEY=056E8E56
 SIGNING_USER_EMAIL=info@rabbitmq.com
 SIGNING_USER_ID=RabbitMQ Release Signing Key <info@rabbitmq.com>
 
-# Misc options to pass to hg commands
-HG_OPTS=
+# Misc options to pass to git commands
+GIT_OPTS=
 
 # Misc options to pass to ssh commands
 SSH_OPTS=
@@ -35,10 +35,10 @@ SKIP_EMULATOR_VERSION_CHECK=
 
 REPOS:=rabbitmq-codegen rabbitmq-server rabbitmq-java-client rabbitmq-dotnet-client rabbitmq-test
 
-HGREPOBASE:=$(shell dirname `hg paths default 2>/dev/null` 2>/dev/null)
+GITREPOBASE:=$(shell dirname `git remote -v 2>/dev/null | awk '/^origin\t.+ \(fetch\)$$/ { print $$2; }'` 2>/dev/null)
 
-ifeq ($(HGREPOBASE),)
-HGREPOBASE=ssh://hg@hg.rabbitmq.com
+ifeq ($(GITREPOBASE),)
+GITREPOBASE=https://github.com/rabbitmq
 endif
 
 .PHONY: all
@@ -130,6 +130,7 @@ rabbitmq-server-windows-packaging: rabbitmq-server-srcdist
 
 .PHONY: rabbitmq-server-windows-exe-packaging
 rabbitmq-server-windows-exe-packaging: rabbitmq-server-windows-packaging
+	$(MAKE) -C rabbitmq-server/packaging/windows-exe clean
 	$(MAKE) -C rabbitmq-server/packaging/windows-exe dist VERSION=$(VERSION)
 	cp rabbitmq-server/packaging/windows-exe/rabbitmq-server-*.exe $(SERVER_PACKAGES_DIR)
 
