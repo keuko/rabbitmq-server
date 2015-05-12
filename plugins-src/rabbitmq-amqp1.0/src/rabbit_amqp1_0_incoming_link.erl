@@ -47,10 +47,10 @@ attach(#'v1_0.attach'{name = Name,
     case ensure_target(Target,
                        #incoming_link{
                          name        = Name,
-                         route_state = rabbit_routing_util:init_state() },
+                         route_state = rabbit_routing_util:init_state(),
+                         delivery_count = InitTransfer },
                        DCh) of
-        {ok, ServerTarget,
-         IncomingLink = #incoming_link{ delivery_count = InitTransfer }} ->
+        {ok, ServerTarget, IncomingLink} ->
             {_, _Outcomes} = rabbit_amqp1_0_link_util:outcomes(Source),
             %% Default is mixed
             Confirm =
@@ -81,7 +81,6 @@ attach(#'v1_0.attach'{name = Name,
                 IncomingLink#incoming_link{recv_settle_mode = RcvSettleMode},
             {ok, [Attach, Flow], IncomingLink1, Confirm};
         {error, Reason} ->
-            rabbit_log:warning("AMQP 1.0 attach rejected ~p~n", [Reason]),
             %% TODO proper link establishment protocol here?
             protocol_error(?V_1_0_AMQP_ERROR_INVALID_FIELD,
                                "Attach rejected: ~p", [Reason])
@@ -194,7 +193,8 @@ ensure_target(Target = #'v1_0.target'{address       = Address,
                                       timeout       = _Timeout},
               Link = #incoming_link{ route_state = RouteState }, DCh) ->
     DeclareParams = [{durable, rabbit_amqp1_0_link_util:durable(Durable)},
-                     {check_exchange, true}],
+                     {check_exchange, true},
+                     {nowait, false}],
     case Dynamic of
         true ->
             protocol_error(?V_1_0_AMQP_ERROR_NOT_IMPLEMENTED,
@@ -226,7 +226,7 @@ ensure_target(Target = #'v1_0.target'{address       = Address,
                     E
             end;
         _Else ->
-            {error, {unknown_address, Address}}
+            {error, {address_not_utf8_string, Address}}
     end.
 
 incoming_flow(#incoming_link{ delivery_count = Count }, Handle) ->
