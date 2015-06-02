@@ -7,8 +7,8 @@ Type=simple
 User=rabbitmq
 SyslogIdentifier=rabbitmq
 LimitNOFILE=65536
-EnvironmentFile=-/etc/default/rabbitmq-server
 ExecStart=/usr/sbin/rabbitmq-server
+ExecStartPost=/usr/lib/rabbitmq/bin/rabbitmq-server-wait
 ExecStop=/usr/sbin/rabbitmqctl stop
 
 [Install]
