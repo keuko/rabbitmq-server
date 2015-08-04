@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2014 GoPivotal, Inc.  All rights reserved.
+%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
 %%
 
 %% stomp_frame implements the STOMP framing protocol "version 1.0", as
@@ -151,9 +151,11 @@ insert_header(Headers, Name, Value) ->
         false -> [{Name, Value} | Headers]
     end.
 
-parse_body(Content, Frame) ->
-    parse_body(Content, Frame, [],
-               integer_header(Frame, ?HEADER_CONTENT_LENGTH, unknown)).
+parse_body(Content, Frame = #stomp_frame{command = Command}) ->
+    case Command of
+        "SEND" -> parse_body(Content, Frame, [], integer_header(Frame, ?HEADER_CONTENT_LENGTH, unknown));
+        _ -> parse_body(Content, Frame, [], unknown)
+    end.
 
 parse_body(Content, Frame, Chunks, unknown) ->
     parse_body2(Content, Frame, Chunks, case firstnull(Content) of
@@ -231,7 +233,7 @@ serialize(#stomp_frame{command = Command,
          Len > 0 -> [?HEADER_CONTENT_LENGTH ++ ":", integer_to_list(Len), ?LF];
          true    -> []
      end,
-     ?LF, BodyFragments, 0].
+     ?LF, BodyFragments, 0, ?LF].
 
 serialize_header({K, V}) when is_integer(V) -> hdr(escape(K), integer_to_list(V));
 serialize_header({K, V}) when is_list(V)    -> hdr(escape(K), escape(V)).

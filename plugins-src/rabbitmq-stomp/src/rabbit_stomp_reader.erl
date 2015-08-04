@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2014 GoPivotal, Inc.  All rights reserved.
+%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_stomp_reader).
@@ -74,15 +74,18 @@ go(SupHelperPid, ProcessorPid, Configuration) ->
                             catch _:Ex ->
                                 log_network_error(ConnStr, Ex),
                                 rabbit_net:fast_close(Sock),
+                                rabbit_stomp_processor:flush_and_die(ProcessorPid),
                                 exit(normal)
                             end,
                             done;
                         {error, enotconn} ->
                             rabbit_net:fast_close(Sock0),
+                            rabbit_stomp_processor:flush_and_die(ProcessorPid),
                             exit(normal);
                         {error, Reason} ->
                             log_network_error(ConnStr, Reason),
                             rabbit_net:fast_close(Sock0),
+                            rabbit_stomp_processor:flush_and_die(ProcessorPid),
                             exit(normal)
                         end
             end

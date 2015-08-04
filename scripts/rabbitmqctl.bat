@@ -12,9 +12,10 @@ REM
 REM  The Original Code is RabbitMQ.
 REM
 REM  The Initial Developer of the Original Code is GoPivotal, Inc.
-REM  Copyright (c) 2007-2014 GoPivotal, Inc.  All rights reserved.
+REM  Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
 REM
 
+REM Scopes the variables to the current batch file
 setlocal
 
 rem Preserve values that might contain exclamation marks before
@@ -22,26 +23,6 @@ rem enabling delayed expansion
 set TDP0=%~dp0
 set STAR=%*
 setlocal enabledelayedexpansion
-
-if "!RABBITMQ_BASE!"=="" (
-    set RABBITMQ_BASE=!APPDATA!\RabbitMQ
-)
-
-if "!COMPUTERNAME!"=="" (
-    set COMPUTERNAME=localhost
-)
-
-if "!RABBITMQ_NODENAME!"=="" (
-    set RABBITMQ_NODENAME=rabbit@!COMPUTERNAME!
-)
-
-if "!RABBITMQ_MNESIA_BASE!"=="" (
-    set RABBITMQ_MNESIA_BASE=!RABBITMQ_BASE!/db
-)
-
-if "!RABBITMQ_MNESIA_DIR!"=="" (
-    set RABBITMQ_MNESIA_DIR=!RABBITMQ_MNESIA_BASE!/!RABBITMQ_NODENAME!-mnesia
-)
 
 if not exist "!ERLANG_HOME!\bin\erl.exe" (
     echo.
@@ -54,6 +35,10 @@ if not exist "!ERLANG_HOME!\bin\erl.exe" (
     echo.
     exit /B 1
 )
+
+REM Get default settings with user overrides for (RABBITMQ_)<var_name>
+REM Non-empty defaults should be set in rabbitmq-env
+call "%TDP0%\rabbitmq-env.bat"
 
 "!ERLANG_HOME!\bin\erl.exe" ^
 -pa "!TDP0!..\ebin" ^

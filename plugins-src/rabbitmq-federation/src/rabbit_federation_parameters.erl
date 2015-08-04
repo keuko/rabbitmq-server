@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2014 GoPivotal, Inc.  All rights reserved.
+%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_federation_parameters).
@@ -91,7 +91,8 @@ shared_validation() ->
      {<<"trust-user-id">>,  fun rabbit_parameter_validation:boolean/2, optional},
      {<<"ack-mode">>,       rabbit_parameter_validation:enum(
                               ['no-ack', 'on-publish', 'on-confirm']), optional},
-     {<<"ha-policy">>,      fun rabbit_parameter_validation:binary/2, optional}].
+     {<<"ha-policy">>,      fun rabbit_parameter_validation:binary/2, optional},
+     {<<"bind-nowait">>,    fun rabbit_parameter_validation:boolean/2, optional}].
 
 validate_uri(Name, Term) when is_binary(Term) ->
     case rabbit_parameter_validation:binary(Name, Term) of
