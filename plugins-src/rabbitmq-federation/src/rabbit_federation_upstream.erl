@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ Federation.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2014 GoPivotal, Inc.  All rights reserved.
+%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_federation_upstream).
@@ -131,7 +131,8 @@ from_upstream_or_set(US, Name, U, XorQ) ->
                                   binary_to_list(
                                     bget('ack-mode', US, U, <<"on-confirm">>))),
               ha_policy       = bget('ha-policy',       US, U, none),
-              name            = Name}.
+              name            = Name,
+              bind_nowait     = bget('bind-nowait',     US, U, false)}.
 
 %%----------------------------------------------------------------------------
 

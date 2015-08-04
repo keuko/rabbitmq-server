@@ -29,6 +29,9 @@ USAGES_ERL=$(foreach XML, $(USAGES_XML), $(call usage_xml_to_erl, $(XML)))
 ifeq ($(shell python -c 'import simplejson' 2>/dev/null && echo yes),yes)
 PYTHON=python
 else
+ifeq ($(shell python2.7 -c 'import json' 2>/dev/null && echo yes),yes)
+PYTHON=python2.7
+else
 ifeq ($(shell python2.6 -c 'import simplejson' 2>/dev/null && echo yes),yes)
 PYTHON=python2.6
 else
@@ -37,6 +40,7 @@ PYTHON=python2.5
 else
 # Hmm. Missing simplejson?
 PYTHON=python
+endif
 endif
 endif
 endif
@@ -226,7 +230,7 @@ run-background-node: all
 	$(BASIC_SCRIPT_ENVIRONMENT_SETTINGS) \
 		RABBITMQ_NODE_ONLY=true \
 		RABBITMQ_SERVER_START_ARGS="$(RABBITMQ_SERVER_START_ARGS)" \
-		./scripts/rabbitmq-server
+		./scripts/rabbitmq-server -detached
 
 run-tests: all
 	echo 'code:add_path("$(TEST_EBIN_DIR)").' | $(ERL_CALL)
@@ -242,7 +246,12 @@ run-qc: all
 start-background-node: all
 	-rm -f $(RABBITMQ_MNESIA_DIR).pid
 	mkdir -p $(RABBITMQ_MNESIA_DIR)
-	nohup sh -c "$(MAKE) run-background-node > $(RABBITMQ_MNESIA_DIR)/startup_log 2> $(RABBITMQ_MNESIA_DIR)/startup_err" > /dev/null &
+	$(BASIC_SCRIPT_ENVIRONMENT_SETTINGS) \
+		RABBITMQ_NODE_ONLY=true \
+		RABBITMQ_SERVER_START_ARGS="$(RABBITMQ_SERVER_START_ARGS)" \
+		./scripts/rabbitmq-server \
+		> $(RABBITMQ_MNESIA_DIR)/startup_log \
+		2> $(RABBITMQ_MNESIA_DIR)/startup_err &
 	./scripts/rabbitmqctl -n $(RABBITMQ_NODENAME) wait $(RABBITMQ_MNESIA_DIR).pid kernel
 
 start-rabbit-on-node: all

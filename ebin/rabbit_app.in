@@ -1,7 +1,7 @@
 {application, rabbit,           %% -*- erlang -*-
  [{description, "RabbitMQ"},
   {id, "RabbitMQ"},
-  {vsn, "3.5.1"},
+  {vsn, "3.5.4"},
   {modules, []},
   {registered, [rabbit_amqqueue_sup,
                 rabbit_log,
@@ -79,5 +79,7 @@
            mnesia_lib, rpc, mnesia_tm, qlc, sofs, proplists, credit_flow,
            pmon, ssl_connection, tls_connection, ssl_record, tls_record,
            gen_fsm, ssl]},
-         {ssl_apps, [asn1, crypto, public_key, ssl]}
+         {ssl_apps, [asn1, crypto, public_key, ssl]},
+         %% see rabbitmq-server#114
+         {mirroring_flow_control, true}
         ]}]}.

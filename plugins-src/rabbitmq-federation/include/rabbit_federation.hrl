@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ Federation.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2014 GoPivotal, Inc.  All rights reserved.
+%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -record(upstream, {uris,
@@ -25,7 +25,8 @@
                    trust_user_id,
                    ack_mode,
                    ha_policy,
-                   name}).
+                   name,
+                   bind_nowait}).
 
 -record(upstream_params,
         {uri,

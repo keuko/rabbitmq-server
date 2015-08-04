@@ -11,7 +11,7 @@
 %%   The Original Code is RabbitMQ Management Console.
 %%
 %%   The Initial Developer of the Original Code is GoPivotal, Inc.
-%%   Copyright (c) 2010-2014 GoPivotal, Inc.  All rights reserved.
+%%   Copyright (c) 2010-2015 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_mgmt_db_handler).
@@ -42,27 +42,38 @@ add_handler() ->
 gc() ->
     erlang:garbage_collect(whereis(rabbit_event)).
 
+%% some people have reasons to only run with the agent enabled:
+%% make it possible for them to configure key management app
+%% settings such as rates_mode.
+get_management_env(Key) ->
+    rabbit_misc:get_env(
+      rabbitmq_management, Key,
+      rabbit_misc:get_env(rabbitmq_management_agent, Key, undefined)).
+
 rates_mode() ->
-    case application:get_env(rabbitmq_management, rates_mode) of
-        {ok, Mode} -> Mode;
-        _          -> basic
+    case get_management_env(rates_mode) of
+        undefined -> basic;
+        Mode      -> Mode
+    end.
+
+handle_force_fine_statistics() ->
+    case get_management_env(force_fine_statistics) of
+        undefined ->
+            ok;
+        X ->
+            rabbit_log:warning(
+              "force_fine_statistics set to ~p; ignored.~n"
+              "Replaced by {rates_mode, none} in the rabbitmq_management "
+              "application.~n", [X])
     end.
 
 %%----------------------------------------------------------------------------
 
 ensure_statistics_enabled() ->
     ForceStats = rates_mode() =/= none,
-    case application:get_env(rabbitmq_management_agent,
-                             force_fine_statistics) of
-        {ok, X} ->
-            rabbit_log:warning(
-              "force_fine_statistics set to ~p; ignored.~n"
-              "Replaced by {rates_mode, none} in the rabbitmq_management "
-              "application.~n", [X]);
-        undefined ->
-            ok
-    end,
+    handle_force_fine_statistics(),
     {ok, StatsLevel} = application:get_env(rabbit, collect_statistics),
+    rabbit_log:info("Management plugin: using rates mode '~p'~n", [rates_mode()]),
     case {ForceStats, StatsLevel} of
         {true,  fine} ->
             ok;

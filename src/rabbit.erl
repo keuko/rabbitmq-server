@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2014 GoPivotal, Inc.  All rights reserved.
+%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit).
@@ -40,6 +40,13 @@
                     {requires,    pre_boot},
                     {enables,     external_infrastructure}]}).
 
+%% rabbit_alarm currently starts memory and disk space monitors
+-rabbit_boot_step({rabbit_alarm,
+                   [{description, "alarm handler"},
+                    {mfa,         {rabbit_alarm, start, []}},
+                    {requires,    pre_boot},
+                    {enables,     external_infrastructure}]}).
+
 -rabbit_boot_step({database,
                    [{mfa,         {rabbit_mnesia, init, []}},
                     {requires,    file_handle_cache},
@@ -54,7 +61,8 @@
 -rabbit_boot_step({file_handle_cache,
                    [{description, "file handle cache server"},
                     {mfa,         {rabbit, start_fhc, []}},
-                    {requires,    pre_boot},
+                    %% FHC needs memory monitor to be running
+                    {requires,    rabbit_alarm},
                     {enables,     worker_pool}]}).
 
 -rabbit_boot_step({worker_pool,
@@ -84,12 +92,6 @@
 -rabbit_boot_step({kernel_ready,
                    [{description, "kernel ready"},
                     {requires,    external_infrastructure}]}).
-
--rabbit_boot_step({rabbit_alarm,
-                   [{description, "alarm handler"},
-                    {mfa,         {rabbit_alarm, start, []}},
-                    {requires,    kernel_ready},
-                    {enables,     core_initialized}]}).
 
 -rabbit_boot_step({rabbit_memory_monitor,
                    [{description, "memory monitor"},
@@ -883,6 +885,33 @@ config_setting() ->
 %% We don't want this in fhc since it references rabbit stuff. And we can't put
 %% this in the bootstep directly.
 start_fhc() ->
-    rabbit_sup:start_restartable_child(
+    ok = rabbit_sup:start_restartable_child(
       file_handle_cache,
-      [fun rabbit_alarm:set_alarm/1, fun rabbit_alarm:clear_alarm/1]).
+      [fun rabbit_alarm:set_alarm/1, fun rabbit_alarm:clear_alarm/1]),
+    ensure_working_fhc().
+
+ensure_working_fhc() ->
+    %% To test the file handle cache, we simply read a file we know it
+    %% exists (Erlang kernel's .app file).
+    %%
+    %% To avoid any pollution of the application process' dictionary by
+    %% file_handle_cache, we spawn a separate process.
+    Parent = self(),
+    TestFun = fun() ->
+        Filename = filename:join(code:lib_dir(kernel, ebin), "kernel.app"),
+        {ok, Fd} = file_handle_cache:open(Filename, [raw, binary, read], []),
+        {ok, _} = file_handle_cache:read(Fd, 1),
+        ok = file_handle_cache:close(Fd),
+        Parent ! fhc_ok
+    end,
+    TestPid = spawn_link(TestFun),
+    %% Because we are waiting for the test fun, abuse the
+    %% 'mnesia_table_loading_timeout' parameter to find a sane timeout
+    %% value.
+    Timeout = rabbit_table:wait_timeout(),
+    receive
+        fhc_ok                       -> ok;
+        {'EXIT', TestPid, Exception} -> throw({ensure_working_fhc, Exception})
+    after Timeout ->
+            throw({ensure_working_fhc, {timeout, TestPid}})
+    end.

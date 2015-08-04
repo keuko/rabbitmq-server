@@ -57,6 +57,10 @@ endif
 
 VERSION:=0.0.0
 
+ifndef VERBOSE
+QUIET:=@
+endif
+
 #----------------------------------
 
 all:
@@ -118,14 +122,18 @@ up_c: named_update
 #----------------------------------
 
 $(REPOS):
-	retries=5; \
-	while ! git clone $(GIT_CORE_REPOBASE_FETCH)/$@$(GIT_CORE_SUFFIX_FETCH); do \
+	$(QUIET)retries=5; \
+	umbrella_branch="$$(git branch | awk '/^\* / { print $$2; }')"; \
+	if test "$$umbrella_branch" = "stable"; then \
+	  branch_arg="-b $$umbrella_branch"; \
+	fi; \
+	while ! git clone $$branch_arg $(GIT_CORE_REPOBASE_FETCH)/$@$(GIT_CORE_SUFFIX_FETCH); do \
 	  retries=$$((retries - 1)); \
 	  if test "$$retries" = 0; then break; fi; \
 	  sleep 1; \
 	done
-	test -d $@
-	global_user_name="$$(git config --global user.name)"; \
+	$(QUIET)test -d $@
+	$(QUIET)global_user_name="$$(git config --global user.name)"; \
 	global_user_email="$$(git config --global user.email)"; \
 	user_name="$$(git config user.name)"; \
 	user_email="$$(git config user.email)"; \
@@ -160,7 +168,7 @@ sync-gituser:
 sync-gitremote:
 	@for repo in $(REPOS); do \
 	cd $$repo && \
-	git remote set-url --fetch origin $(GIT_CORE_REPOBASE_FETCH)/$$repo$(GIT_CORE_SUFFIX_FETCH) && \
+	git remote set-url origin $(GIT_CORE_REPOBASE_FETCH)/$$repo$(GIT_CORE_SUFFIX_FETCH) && \
 	git remote set-url --push origin $(GIT_CORE_REPOBASE_PUSH)/$$repo$(GIT_CORE_SUFFIX_PUSH) && \
 	cd ..; done
 
@@ -200,7 +208,8 @@ status: checkout
 pull: $(foreach DIR,. $(REPOS),$(DIR)+pull)
 
 $(eval $(call repo_targets,. $(REPOS),pull,| %,\
-	(cd % && git pull --ff-only)))
+	(cd % && git fetch -p && \
+	 (! git symbolic-ref -q HEAD || git pull --ff-only))))
 
 .PHONY: update
 update: pull
@@ -210,8 +219,7 @@ named_update: $(foreach DIR,. $(REPOS),$(DIR)+named_update)
 
 $(eval $(call repo_targets,. $(REPOS),named_update,| %,\
 	(cd % && git fetch -p && git checkout $(BRANCH) && \
-	 (test "$$$$(git branch | grep '^*')" = "* (detached from $(BRANCH))" || \
-	 git pull --ff-only))))
+	 (! git symbolic-ref -q HEAD || git pull --ff-only))))
 
 .PHONY: tag
 tag: $(foreach DIR,. $(REPOS),$(DIR)+tag)

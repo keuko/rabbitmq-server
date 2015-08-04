@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2014 GoPivotal, Inc.  All rights reserved.
+%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(file_handle_cache).
@@ -148,7 +148,7 @@
          copy/3, set_maximum_since_use/1, delete/1, clear/1]).
 -export([obtain/0, obtain/1, release/0, release/1, transfer/1, transfer/2,
          set_limit/1, get_limit/0, info_keys/0, with_handle/1, with_handle/2,
-         info/0, info/1]).
+         info/0, info/1, clear_read_cache/0]).
 -export([ulimit/0]).
 
 -export([start_link/0, start_link/2, init/1, handle_call/3, handle_cast/2,
@@ -163,6 +163,8 @@
 -define(OBTAIN_LIMIT(LIMIT), trunc((LIMIT * 0.9) - 2)).
 -define(CLIENT_ETS_TABLE, file_handle_cache_client).
 -define(ELDERS_ETS_TABLE, file_handle_cache_elders).
+
+-include("rabbit.hrl"). % For #amqqueue record definition.
 
 %%----------------------------------------------------------------------------
 
@@ -353,6 +355,7 @@ read(Ref, Count) ->
                                          read_buffer_rem   = BufRem - Count,
                                          read_buffer_usage = BufUsg + Count }]};
           ([Handle0]) ->
+              maybe_reduce_read_cache([Ref]),
               Handle = #handle{read_buffer      = Buf,
                                read_buffer_pos  = BufPos,
                                read_buffer_rem  = BufRem,
@@ -579,6 +582,42 @@ info_keys() -> ?INFO_KEYS.
 
 info() -> info(?INFO_KEYS).
 info(Items) -> gen_server2:call(?SERVER, {info, Items}, infinity).
+
+clear_read_cache() ->
+    gen_server2:cast(?SERVER, clear_read_cache),
+    clear_vhost_read_cache(rabbit_vhost:list()).
+
+clear_vhost_read_cache([]) ->
+    ok;
+clear_vhost_read_cache([VHost | Rest]) ->
+    clear_queue_read_cache(rabbit_amqqueue:list(VHost)),
+    clear_vhost_read_cache(Rest).
+
+clear_queue_read_cache([]) ->
+    ok;
+clear_queue_read_cache([#amqqueue{pid = MPid, slave_pids = SPids} | Rest]) ->
+    %% Limit the action to the current node.
+    Pids = [P || P <- [MPid | SPids], node(P) =:= node()],
+    %% This function is executed in the context of the backing queue
+    %% process because the read buffer is stored in the process
+    %% dictionary.
+    Fun = fun(_, State) ->
+                  clear_process_read_cache(),
+                  State
+          end,
+    [rabbit_amqqueue:run_backing_queue(Pid, rabbit_variable_queue, Fun)
+     || Pid <- Pids],
+    clear_queue_read_cache(Rest).
+
+clear_process_read_cache() ->
+    [
+     begin
+         Handle1 = reset_read_buffer(Handle),
+         put({Ref, fhc_handle}, Handle1)
+     end ||
+        {{Ref, fhc_handle}, Handle} <- get(),
+        size(Handle#handle.read_buffer) > 0
+    ].
 
 %%----------------------------------------------------------------------------
 %% Internal functions
@@ -962,6 +1001,37 @@ tune_read_buffer_limit(Handle = #handle{read_buffer            = Buf,
                                                      false -> Usg * 2
                                                  end, Lim)}.
 
+maybe_reduce_read_cache(SparedRefs) ->
+    case rabbit_memory_monitor:memory_use(bytes) of
+        {_, infinity}                             -> ok;
+        {MemUse, MemLimit} when MemUse < MemLimit -> ok;
+        {MemUse, MemLimit}                        -> reduce_read_cache(
+                                                       (MemUse - MemLimit) * 2,
+                                                       SparedRefs)
+    end.
+
+reduce_read_cache(MemToFree, SparedRefs) ->
+    Handles = lists:sort(
+      fun({_, H1}, {_, H2}) -> H1 < H2 end,
+      [{R, H} || {{R, fhc_handle}, H} <- get(),
+                 not lists:member(R, SparedRefs)
+                 andalso size(H#handle.read_buffer) > 0]),
+    FreedMem = lists:foldl(
+      fun
+          (_, Freed) when Freed >= MemToFree ->
+              Freed;
+          ({Ref, #handle{read_buffer = Buf} = Handle}, Freed) ->
+              Handle1 = reset_read_buffer(Handle),
+              put({Ref, fhc_handle}, Handle1),
+              Freed + size(Buf)
+      end, 0, Handles),
+    if
+        FreedMem < MemToFree andalso SparedRefs =/= [] ->
+            reduce_read_cache(MemToFree - FreedMem, []);
+        true ->
+            ok
+    end.
+
 infos(Items, State) -> [{Item, i(Item, State)} || Item <- Items].
 
 i(total_limit,   #fhc_state{limit               = Limit}) -> Limit;
@@ -1115,7 +1185,11 @@ handle_cast({transfer, N, FromPid, ToPid}, State) ->
     {noreply, process_pending(
                 update_counts({obtain, socket}, ToPid, +N,
                               update_counts({obtain, socket}, FromPid, -N,
-                                            State)))}.
+                                            State)))};
+
+handle_cast(clear_read_cache, State) ->
+    clear_process_read_cache(),
+    {noreply, State}.
 
 handle_info(check_counts, State) ->
     {noreply, maybe_reduce(State #fhc_state { timer_ref = undefined })};

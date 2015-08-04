@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2014 GoPivotal, Inc.  All rights reserved.
+%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(credit_flow).
@@ -68,6 +68,11 @@
             put(Key, Expr)
         end).
 
+%% If current process was blocked by credit flow in the last
+%% STATE_CHANGE_INTERVAL milliseconds, state/0 will report it as "in
+%% flow".
+-define(STATE_CHANGE_INTERVAL, 1000000).
+
 %%----------------------------------------------------------------------------
 
 %% There are two "flows" here; of messages and of credit, going in
@@ -117,7 +122,7 @@ state() -> case blocked() of
                false -> case get(credit_blocked_at) of
                             undefined -> running;
                             B         -> Diff = timer:now_diff(erlang:now(), B),
-                                         case Diff < 5000000 of
+                                         case Diff < ?STATE_CHANGE_INTERVAL of
                                              true  -> flow;
                                              false -> running
                                          end

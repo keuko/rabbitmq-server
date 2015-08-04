@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2014 GoPivotal, Inc.  All rights reserved.
+%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_log).
@@ -84,6 +84,7 @@ catlevel(Category) ->
 level(debug)   -> 4;
 level(info)    -> 3;
 level(warning) -> 2;
+level(warn)    -> 2;
 level(error)   -> 1;
 level(none)    -> 0.
 
