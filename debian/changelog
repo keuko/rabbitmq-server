@@ -1,4 +1,4 @@
-rabbitmq-server (3.5.4-1) UNRELEASED; urgency=medium
+rabbitmq-server (3.5.4-1) unstable; urgency=medium
 
   * New upstream release.
 
