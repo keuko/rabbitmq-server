@@ -27,6 +27,9 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 	if [ -r /usr/share/rabbitmq/rabbitmq-env.conf ] && ! [ -e /etc/rabbitmq/rabbitmq-env.conf ] ; then
 		install -m 0640 -o rabbitmq -g rabbitmq /usr/share/rabbitmq/rabbitmq-env.conf /etc/rabbitmq/rabbitmq-env.conf
 	fi
+	if [ -f /etc/rabbitmq/enabled_plugins ] ; then
+		chown rabbitmq:rabbitmq /etc/rabbitmq/enabled_plugins
+	fi
 
 	chown -R rabbitmq:rabbitmq /var/lib/rabbitmq
 	chown -R rabbitmq:rabbitmq /var/log/rabbitmq

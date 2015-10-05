@@ -2,6 +2,8 @@ rabbitmq-server (3.5.4-2) unstable; urgency=medium
 
   * Cosmetic clean-up in debian/rabbitmq-server.postinst and .init.
   * Fix the user / group of /etc/rabbitmq folder and conf files.
+  * Also fix user / group of an eventual /etc/rabbitmq/enabled_plugins when
+    upgrading the package.
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 05 Oct 2015 15:47:58 +0200
 
