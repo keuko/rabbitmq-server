@@ -478,6 +478,7 @@ handle_other(ensure_stats, State) ->
 handle_other(emit_stats, State) ->
     emit_stats(State);
 handle_other({bump_credit, Msg}, State) ->
+    %% Here we are receiving credit by some channel process.
     credit_flow:handle_bump_msg(Msg),
     control_throttle(State);
 handle_other(Other, State) ->
@@ -1043,7 +1044,7 @@ handle_method0(_Method, #v1{connection_state = S}) ->
 validate_negotiated_integer_value(Field, Min, ClientValue) ->
     ServerValue = get_env(Field),
     if ClientValue /= 0 andalso ClientValue < Min ->
-            fail_negotiation(Field, min, ServerValue, ClientValue);
+            fail_negotiation(Field, min, Min, ClientValue);
        ServerValue /= 0 andalso (ClientValue =:= 0 orelse
                                  ClientValue > ServerValue) ->
             fail_negotiation(Field, max, ServerValue, ClientValue);

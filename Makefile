@@ -48,20 +48,38 @@ endif
 BASIC_PLT=basic.plt
 RABBIT_PLT=rabbit.plt
 
-ifndef USE_SPECS
-# our type specs rely on dict:dict/0 etc, which are only available in 17.0
-# upwards.
-USE_SPECS:=$(shell erl -noshell -eval 'io:format([list_to_integer(X) || X <- string:tokens(erlang:system_info(version), ".")] >= [5,11]), halt().')
-endif
-
 ifndef USE_PROPER_QC
 # PropEr needs to be installed for property checking
 # http://proper.softlab.ntua.gr/
-USE_PROPER_QC:=$(shell erl -noshell -eval 'io:format({module, proper} =:= code:ensure_loaded(proper)), halt().')
+USE_PROPER_QC=$(shell erl -noshell -eval 'io:format({module, proper} =:= code:ensure_loaded(proper)), halt().')
 endif
 
 #other args: +native +"{hipe,[o3,verbose]}" -Ddebug=true +debug_info +no_strict_record_tests
-ERLC_OPTS=-I $(INCLUDE_DIR) -Wall -v +debug_info $(call boolean_macro,$(USE_SPECS),use_specs) $(call boolean_macro,$(USE_PROPER_QC),use_proper_qc)
+ERLC_OPTS=-I $(INCLUDE_DIR) -Wall +warn_export_vars -v +debug_info $(call boolean_macro,$(USE_SPECS),use_specs) $(call boolean_macro,$(USE_PROPER_QC),use_proper_qc)
+
+# Our type specs rely on dict:dict/0 etc, which are only available in
+# 17.0 upwards.
+define compare_version
+$(shell awk 'BEGIN {
+	split("$(1)", v1, "\.");
+	version1 = v1[1] * 1000000 + v1[2] * 10000 + v1[3] * 100 + v1[4];
+
+	split("$(2)", v2, "\.");
+	version2 = v2[1] * 1000000 + v2[2] * 10000 + v2[3] * 100 + v2[4];
+
+	if (version1 $(3) version2) {
+		print "true";
+	} else {
+		print "false";
+	}
+}')
+endef
+
+ERTS_VER = $(shell erl -version 2>&1 | sed -E 's/.* version //')
+USE_SPECS_MIN_ERTS_VER = 5.11
+ifeq ($(call compare_version,$(ERTS_VER),$(USE_SPECS_MIN_ERTS_VER),>=),true)
+ERLC_OPTS += -Duse_specs
+endif
 
 ifdef INSTRUMENT_FOR_QC
 ERLC_OPTS += -DINSTR_MOD=gm_qc
@@ -270,7 +288,11 @@ clear-resource-alarm: all
 	$(ERL_CALL)
 
 stop-node:
-	-$(ERL_CALL) -q
+	-( \
+	pid=$$(./scripts/rabbitmqctl -n $(RABBITMQ_NODENAME) eval 'os:getpid().') && \
+	$(ERL_CALL) -q && \
+	while ps -p $$pid >/dev/null 2>&1; do sleep 1; done \
+	)
 
 # code coverage will be created for subdirectory "ebin" of COVER_DIR
 COVER_DIR=.

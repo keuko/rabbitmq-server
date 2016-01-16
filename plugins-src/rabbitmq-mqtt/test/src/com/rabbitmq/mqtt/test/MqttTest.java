@@ -17,8 +17,8 @@
 package com.rabbitmq.mqtt.test;
 
 import com.rabbitmq.client.*;
-import junit.framework.Assert;
 import junit.framework.TestCase;
+import org.junit.Assert;
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
 import org.eclipse.paho.client.mqttv3.MqttCallback;
 import org.eclipse.paho.client.mqttv3.MqttClient;
@@ -39,7 +39,9 @@ import java.net.InetAddress;
 import java.net.Socket;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeoutException;
 
 /***
@@ -65,7 +67,6 @@ public class MqttTest extends TestCase implements MqttCallback {
     private long lastReceipt;
     private boolean expectConnectionFailure;
 
-    private ConnectionFactory connectionFactory;
     private Connection conn;
     private Channel ch;
 
@@ -90,7 +91,7 @@ public class MqttTest extends TestCase implements MqttCallback {
         client2 = new MqttClient(brokerUrl, clientId2, null);
         conOpt = new MyConnOpts();
         setConOpts(conOpt);
-        receivedMessages = new ArrayList();
+        receivedMessages = new ArrayList<MqttMessage>();
         expectConnectionFailure = false;
     }
 
@@ -101,25 +102,27 @@ public class MqttTest extends TestCase implements MqttCallback {
         client = new MqttClient(brokerUrl, clientId, null);
         try {
             client.connect(conOpt);
-            client.disconnect();
-        } catch (Exception _) {}
+            client.disconnect(3000);
+        } catch (Exception ignored) {}
 
         client2 = new MqttClient(brokerUrl, clientId2, null);
         try {
             client2.connect(conOpt);
-            client2.disconnect();
-        } catch (Exception _) {}
+            client2.disconnect(3000);
+        } catch (Exception ignored) {}
     }
 
     private void setUpAmqp() throws IOException, TimeoutException {
-        connectionFactory = new ConnectionFactory();
-        connectionFactory.setHost(host);
-        conn = connectionFactory.newConnection();
+        ConnectionFactory cf = new ConnectionFactory();
+        cf.setHost(host);
+        conn = cf.newConnection();
         ch = conn.createChannel();
     }
 
     private void tearDownAmqp() throws IOException {
-        conn.close();
+        if(conn.isOpen()) {
+            conn.close();
+        }
     }
 
     private void setConOpts(MqttConnectOptions conOpts) {
@@ -140,7 +143,7 @@ public class MqttTest extends TestCase implements MqttCallback {
             mqttOut.flush();
             mqttIn.readMqttWireMessage();
             fail("Error expected if CONNECT is not first packet");
-        } catch (IOException _) {}
+        } catch (IOException ignored) {}
     }
 
     public void testInvalidUser() throws MqttException {
@@ -150,6 +153,61 @@ public class MqttTest extends TestCase implements MqttCallback {
             fail("Authentication failure expected");
         } catch (MqttException ex) {
             Assert.assertEquals(MqttException.REASON_CODE_FAILED_AUTHENTICATION, ex.getReasonCode());
+        }
+    }
+
+    // rabbitmq/rabbitmq-mqtt#37: QoS 1, clean session = false
+    public void testQos1AndCleanSessionUnset()
+            throws MqttException, IOException, TimeoutException, InterruptedException {
+        testQueuePropertiesWithCleanSessionUnset("qos1-no-clean-session", 1, true, false);
+    }
+
+    protected void testQueuePropertiesWithCleanSessionSet(String cid, int qos, boolean durable, boolean autoDelete)
+            throws IOException, MqttException, TimeoutException, InterruptedException {
+        testQueuePropertiesWithCleanSession(true, cid, qos, durable, autoDelete);
+    }
+
+    protected void testQueuePropertiesWithCleanSessionUnset(String cid, int qos, boolean durable, boolean autoDelete)
+            throws IOException, MqttException, TimeoutException, InterruptedException {
+        testQueuePropertiesWithCleanSession(false, cid, qos, durable, autoDelete);
+    }
+
+    protected void testQueuePropertiesWithCleanSession(boolean cleanSession, String cid, int qos,
+                                                       boolean durable, boolean autoDelete)
+            throws MqttException, IOException, TimeoutException, InterruptedException {
+        MqttClient c = new MqttClient(brokerUrl, cid, null);
+        MqttConnectOptions opts = new MyConnOpts();
+        opts.setCleanSession(cleanSession);
+        c.connect(opts);
+
+        setUpAmqp();
+        Channel tmpCh = conn.createChannel();
+
+        String q = "mqtt-subscription-" + cid + "qos" + String.valueOf(qos);
+
+        c.subscribe(topic, qos);
+        // there is no server-sent notification about subscription
+        // success so we inject a delay
+        Thread.sleep(testDelay);
+
+        // ensure the queue is declared with the arguments we expect
+        // e.g. mqtt-subscription-client-3aqos0
+        try {
+            // first ensure the queue exists
+            tmpCh.queueDeclarePassive(q);
+            // then assert on properties
+            Map<String, Object> args = new HashMap<String, Object>();
+            args.put("x-expires", 1800000);
+            tmpCh.queueDeclare(q, durable, autoDelete, false, args);
+        } finally {
+            if(c.isConnected()) {
+                c.disconnect(3000);
+            }
+
+            Channel tmpCh2 = conn.createChannel();
+            tmpCh2.queueDelete(q);
+            tmpCh2.close();
+            tearDownAmqp();
         }
     }
 

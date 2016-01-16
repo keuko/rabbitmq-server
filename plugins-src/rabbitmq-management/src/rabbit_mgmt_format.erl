@@ -24,6 +24,7 @@
 -export([to_amqp_table/1, listener/1, properties/1, basic_properties/1]).
 -export([record/2, to_basic_properties/1]).
 -export([addr/1, port/1]).
+-export([format_nulls/1]).
 
 -import(rabbit_misc, [pget/2, pset/3]).
 
@@ -100,9 +101,15 @@ utf8_safe(V) ->
         xmerl_ucs:from_utf8(V),
         V
     catch exit:{ucs, _} ->
-            Enc = base64:encode(V),
-            <<"Invalid UTF-8, base64 is: ", Enc/binary>>
+            Enc = split_lines(base64:encode(V)),
+            <<"Not UTF-8, base64 is: ", Enc/binary>>
     end.
+
+% MIME enforces a limit on line length of base 64-encoded data to 76 characters.
+split_lines(<<Text:76/binary, Rest/binary>>) ->
+    <<Text/binary, $\n, (split_lines(Rest))/binary>>;
+split_lines(Text) ->
+    Text.
 
 parameter(P) -> pset(value, rabbit_misc:term_to_json(pget(value, P)), P).
 
@@ -319,3 +326,26 @@ strip_pids(Item = [T | _]) when is_tuple(T) ->
            ]);
 
 strip_pids(Items) -> [strip_pids(I) || I <- Items].
+
+%% Format for JSON replies. Transforms '' into null
+format_nulls(Items) when is_list(Items) ->
+    lists:foldr(fun (Pair, Acc) ->
+			[format_null_item(Pair) | Acc]
+		end, [], Items);
+format_nulls(Item) ->
+    format_null_item(Item).
+
+format_null_item({Key, ''}) ->
+    {Key, null};
+format_null_item({Key, Value}) when is_list(Value) ->
+    {Key, format_nulls(Value)};
+format_null_item({Key, {struct, Struct}}) ->
+    {Key, {struct, format_nulls(Struct)}};
+format_null_item({Key, {array, Struct}}) ->
+    {Key, {array, format_nulls(Struct)}};
+format_null_item({Key, Value}) ->
+    {Key, Value};
+format_null_item([{_K, _V} | _T] = L) ->
+    format_nulls(L);
+format_null_item(Value) ->
+    Value.

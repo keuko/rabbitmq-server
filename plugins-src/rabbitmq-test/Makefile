@@ -174,6 +174,37 @@ cleanup:
 		RABBITMQ_ENABLED_PLUGINS_FILE=/does-not-exist \
 		stop-rabbit-on-node ${COVER_STOP} stop-node
 
+define compare_version
+$(shell awk 'BEGIN {
+	split("$(1)", v1, "\.");
+	version1 = v1[1] * 1000000 + v1[2] * 10000 + v1[3] * 100 + v1[4];
+
+	split("$(2)", v2, "\.");
+	version2 = v2[1] * 1000000 + v2[2] * 10000 + v2[3] * 100 + v2[4];
+
+	if (version1 $(3) version2) {
+		print "true";
+	} else {
+		print "false";
+	}
+}')
+endef
+
+ERLANG_SSL_VER = $(shell erl -noshell -eval '\
+	ok = application:load(ssl), \
+	{ok, VSN} = application:get_key(ssl, vsn), \
+	io:format("~s~n", [VSN]), \
+	halt(0).')
+MINIMUM_ERLANG_SSL_VER = 5.3
+
+ifeq ($(call compare_version,$(ERLANG_SSL_VER),$(MINIMUM_ERLANG_SSL_VER),>=),true)
 create_ssl_certs:
 	$(MAKE) -C certs DIR=$(SSL_CERTS_DIR) clean all
-
+else
+create_ssl_certs:
+	@# Skip SSL certs if Erlang is older than R16B01 (ssl 5.3).
+	$(MAKE) -C certs DIR=$(SSL_CERTS_DIR) clean
+	@echo "WARNING: Skip SSL certs creation; Erlang's SSL application is too" \
+	    "old ($(ERLANG_SSL_VER) < $(MINIMUM_ERLANG_SSL_VER)) and SSL support" \
+	    "is disabled in RabbitMQ"
+endif

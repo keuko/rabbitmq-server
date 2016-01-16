@@ -34,6 +34,7 @@
 -define(HEADER_PREFETCH_COUNT, "prefetch-count").
 -define(HEADER_PRIORITY, "priority").
 -define(HEADER_RECEIPT, "receipt").
+-define(HEADER_REDELIVERED, "redelivered").
 -define(HEADER_REPLY_TO, "reply-to").
 -define(HEADER_SERVER, "server").
 -define(HEADER_SESSION, "session").
@@ -43,9 +44,27 @@
 -define(HEADER_TYPE, "type").
 -define(HEADER_USER_ID, "user-id").
 -define(HEADER_VERSION, "version").
+-define(HEADER_X_DEAD_LETTER_EXCHANGE, "x-dead-letter-exchange").
+-define(HEADER_X_DEAD_LETTER_ROUTING_KEY, "x-dead-letter-routing-key").
+-define(HEADER_X_EXPIRES, "x-expires").
+-define(HEADER_X_MAX_LENGTH, "x-max-length").
+-define(HEADER_X_MAX_LENGTH_BYTES, "x-max-length-bytes").
+-define(HEADER_X_MAX_PRIORITY, "x-max-priority").
+-define(HEADER_X_MESSAGE_TTL, "x-message-ttl").
+-define(HEADER_X_QUEUE_NAME, "x-queue-name").
 
 -define(MESSAGE_ID_SEPARATOR, "@@").
 
 -define(HEADERS_NOT_ON_SEND, [?HEADER_MESSAGE_ID]).
 
 -define(TEMP_QUEUE_ID_PREFIX, "/temp-queue/").
+
+-define(HEADER_ARGUMENTS, [
+                           ?HEADER_X_DEAD_LETTER_EXCHANGE,
+                           ?HEADER_X_DEAD_LETTER_ROUTING_KEY,
+                           ?HEADER_X_EXPIRES,
+                           ?HEADER_X_MAX_LENGTH,
+                           ?HEADER_X_MAX_LENGTH_BYTES,
+                           ?HEADER_X_MAX_PRIORITY,
+                           ?HEADER_X_MESSAGE_TTL
+                          ]).

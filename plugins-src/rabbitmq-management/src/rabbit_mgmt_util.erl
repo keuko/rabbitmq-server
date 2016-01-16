@@ -178,7 +178,8 @@ reply(Facts, ReqData, Context) ->
 reply0(Facts, ReqData, Context) ->
     ReqData1 = set_resp_header("Cache-Control", "no-cache", ReqData),
     try
-        {mochijson2:encode(Facts), ReqData1, Context}
+        {mochijson2:encode(rabbit_mgmt_format:format_nulls(Facts)), ReqData1,
+	 Context}
     catch exit:{json_encode, E} ->
             Error = iolist_to_binary(
                       io_lib:format("JSON encode error: ~p", [E])),
@@ -289,7 +290,8 @@ halt_response(Code, Type, Reason, ReqData, Context) ->
     Json = {struct, [{error, Type},
                      {reason, rabbit_mgmt_format:tuple(Reason)}]},
     ReqData1 = wrq:append_to_response_body(mochijson2:encode(Json), ReqData),
-    {{halt, Code}, ReqData1, Context}.
+    {{halt, Code}, set_resp_header(
+             "Content-Type", "application/json", ReqData1), Context}.
 
 id(Key, ReqData) when Key =:= exchange;
                       Key =:= source;
