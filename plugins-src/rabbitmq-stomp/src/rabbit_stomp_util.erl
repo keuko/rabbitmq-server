@@ -16,11 +16,11 @@
 
 -module(rabbit_stomp_util).
 
--export([parse_message_id/1, subscription_queue_name/2]).
+-export([parse_message_id/1, subscription_queue_name/3]).
 -export([longstr_field/2]).
 -export([ack_mode/1, consumer_tag_reply_to/1, consumer_tag/1, message_headers/1,
          headers_post_process/1, headers/5, message_properties/1, tag_to_id/1,
-         msg_header_name/1, ack_header_name/1]).
+         msg_header_name/1, ack_header_name/1, build_arguments/1]).
 -export([negotiate_version/2]).
 -export([trim_headers/1]).
 
@@ -122,7 +122,8 @@ headers_extra(SessionId, AckMode, Version,
               #'basic.deliver'{consumer_tag = ConsumerTag,
                                delivery_tag = DeliveryTag,
                                exchange     = ExchangeBin,
-                               routing_key  = RoutingKeyBin}) ->
+                               routing_key  = RoutingKeyBin,
+                               redelivered  = Redelivered}) ->
     case tag_to_id(ConsumerTag) of
         {ok, {internal, Id}} -> [{?HEADER_SUBSCRIPTION, Id}];
         _                    -> []
@@ -131,7 +132,8 @@ headers_extra(SessionId, AckMode, Version,
       format_destination(binary_to_list(ExchangeBin),
                          binary_to_list(RoutingKeyBin))},
      {?HEADER_MESSAGE_ID,
-      create_message_id(ConsumerTag, SessionId, DeliveryTag)}] ++
+      create_message_id(ConsumerTag, SessionId, DeliveryTag)},
+     {?HEADER_REDELIVERED, Redelivered}] ++
     case AckMode == client andalso Version == "1.2" of
         true  -> [{?HEADER_ACK,
                    create_message_id(ConsumerTag, SessionId, DeliveryTag)}];
@@ -260,6 +262,41 @@ msg_header_name("1.2") -> ?HEADER_ACK;
 msg_header_name("1.1") -> ?HEADER_MESSAGE_ID;
 msg_header_name("1.0") -> ?HEADER_MESSAGE_ID.
 
+build_arguments(Headers) ->
+    Arguments =
+        lists:foldl(fun({K, V}, Acc) ->
+                            case lists:member(K, ?HEADER_ARGUMENTS) of
+                                true  -> [build_argument(K, V) | Acc];
+                                false -> Acc
+                            end
+                    end,
+                    [],
+                    Headers),
+    {arguments, Arguments}.
+
+%% build the actual value thru pattern matching
+build_argument(?HEADER_X_DEAD_LETTER_EXCHANGE, Val) ->
+    {list_to_binary(?HEADER_X_DEAD_LETTER_EXCHANGE), longstr,
+     list_to_binary(string:strip(Val))};
+build_argument(?HEADER_X_DEAD_LETTER_ROUTING_KEY, Val) ->
+    {list_to_binary(?HEADER_X_DEAD_LETTER_ROUTING_KEY), longstr,
+     list_to_binary(string:strip(Val))};
+build_argument(?HEADER_X_EXPIRES, Val) ->
+    {list_to_binary(?HEADER_X_EXPIRES), long,
+     list_to_integer(string:strip(Val))};
+build_argument(?HEADER_X_MAX_LENGTH, Val) ->
+    {list_to_binary(?HEADER_X_MAX_LENGTH), long,
+     list_to_integer(string:strip(Val))};
+build_argument(?HEADER_X_MAX_LENGTH_BYTES, Val) ->
+    {list_to_binary(?HEADER_X_MAX_LENGTH_BYTES), long,
+     list_to_integer(string:strip(Val))};
+build_argument(?HEADER_X_MAX_PRIORITY, Val) ->
+    {list_to_binary(?HEADER_X_MAX_PRIORITY), long,
+     list_to_integer(string:strip(Val))};
+build_argument(?HEADER_X_MESSAGE_TTL, Val) ->
+    {list_to_binary(?HEADER_X_MESSAGE_TTL), long,
+     list_to_integer(string:strip(Val))}.
+
 %%--------------------------------------------------------------------
 %% Destination Formatting
 %%--------------------------------------------------------------------
@@ -277,14 +314,19 @@ format_destination(Exchange, RoutingKey) ->
 %% Destination Parsing
 %%--------------------------------------------------------------------
 
-subscription_queue_name(Destination, SubscriptionId) ->
-    %% We need a queue name that a) can be derived from the
-    %% Destination and SubscriptionId, and b) meets the constraints on
-    %% AMQP queue names. It doesn't need to be secure; we use md5 here
-    %% simply as a convenient means to bound the length.
-    rabbit_guid:string(
-      erlang:md5(term_to_binary({Destination, SubscriptionId})),
-      "stomp-subscription").
+subscription_queue_name(Destination, SubscriptionId, Frame) ->
+    case rabbit_stomp_frame:header(Frame, ?HEADER_X_QUEUE_NAME, undefined) of
+        undefined ->
+            %% We need a queue name that a) can be derived from the
+            %% Destination and SubscriptionId, and b) meets the constraints on
+            %% AMQP queue names. It doesn't need to be secure; we use md5 here
+            %% simply as a convenient means to bound the length.
+            rabbit_guid:string(
+              erlang:md5(term_to_binary({Destination, SubscriptionId})),
+              "stomp-subscription");
+        Name ->
+            Name
+    end.
 
 %% ---- Helpers ----
 

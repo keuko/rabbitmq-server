@@ -52,6 +52,7 @@
          delete_user,
          change_password,
          clear_password,
+         authenticate_user,
          set_user_tags,
          list_users,
 
@@ -86,7 +87,8 @@
          close_connection,
          {trace_on, [?VHOST_DEF]},
          {trace_off, [?VHOST_DEF]},
-         set_vm_memory_high_watermark
+         set_vm_memory_high_watermark,
+         help
         ]).
 
 -define(GLOBAL_QUERIES,
@@ -108,7 +110,7 @@
         [stop, stop_app, start_app, wait, reset, force_reset, rotate_logs,
          join_cluster, change_cluster_node_type, update_cluster_nodes,
          forget_cluster_node, rename_cluster_node, cluster_status, status,
-         environment, eval, force_boot]).
+         environment, eval, force_boot, help]).
 
 -define(COMMANDS_WITH_TIMEOUT,
         [list_user_permissions, list_policies, list_queues, list_exchanges,
@@ -378,6 +380,10 @@ action(clear_password, Node, Args = [Username], _Opts, Inform) ->
     Inform("Clearing password for user \"~s\"", [Username]),
     call(Node, {rabbit_auth_backend_internal, clear_password, Args});
 
+action(authenticate_user, Node, Args = [Username, _Password], _Opts, Inform) ->
+    Inform("Authenticating user \"~s\"", [Username]),
+    call(Node, {rabbit_access_control, check_user_pass_login, Args});
+
 action(set_user_tags, Node, [Username | TagsStr], _Opts, Inform) ->
     Tags = [list_to_atom(T) || T <- TagsStr],
     Inform("Setting tags for user \"~s\" to ~p", [Username, Tags]),
@@ -409,6 +415,12 @@ action(set_vm_memory_high_watermark, Node, [Arg], _Opts, Inform) ->
                          end),
     Inform("Setting memory threshold on ~p to ~p", [Node, Frac]),
     rpc_call(Node, vm_memory_monitor, set_vm_memory_high_watermark, [Frac]);
+
+action(set_vm_memory_high_watermark, Node, ["absolute", Arg], _Opts, Inform) ->
+    Limit = list_to_integer(Arg),
+    Inform("Setting memory threshold on ~p to ~p bytes", [Node, Limit]),
+    rpc_call(Node, vm_memory_monitor, set_vm_memory_high_watermark,
+	     [{absolute, Limit}]);
 
 action(set_permissions, Node, [Username, CPerm, WPerm, RPerm], Opts, Inform) ->
     VHost = proplists:get_value(?VHOST_OPT, Opts),
@@ -482,6 +494,9 @@ action(eval, Node, [Expr], _Opts, _Inform) ->
         {error, E, _} ->
             {error_string, format_parse_error(E)}
     end;
+
+action(help, _Node, _Args, _Opts, _Inform) ->
+    io:format("~s", [rabbit_ctl_usage:usage()]);
 
 action(Command, Node, Args, Opts, Inform) ->
     %% For backward compatibility, run commands accepting a timeout with
@@ -662,10 +677,10 @@ read_pid_file(PidFile, Wait) ->
 
 become(BecomeNode) ->
     error_logger:tty(false),
-    ok = net_kernel:stop(),
     case net_adm:ping(BecomeNode) of
         pong -> exit({node_running, BecomeNode});
-        pang -> io:format("  * Impersonating node: ~s...", [BecomeNode]),
+        pang -> ok = net_kernel:stop(),
+                io:format("  * Impersonating node: ~s...", [BecomeNode]),
                 {ok, _} = rabbit_cli:start_distribution(BecomeNode),
                 io:format(" done~n", []),
                 Dir = mnesia:system_info(directory),

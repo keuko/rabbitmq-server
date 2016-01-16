@@ -27,8 +27,38 @@
 %% receiver it will not grant any more credit to its senders when it
 %% is itself blocked - thus the only processes that need to check
 %% blocked/0 are ones that read from network sockets.
+%%
+%% Credit flows left to right when process send messags down the
+%% chain, starting at the rabbit_reader, ending at the msg_store:
+%%  reader -> channel -> queue_process -> msg_store.
+%%
+%% If the message store has a back log, then it will block the
+%% queue_process, which will block the channel, and finally the reader
+%% will be blocked, throttling down publishers.
+%%
+%% Once a process is unblocked, it will grant credits up the chain,
+%% possibly unblocking other processes:
+%% reader <--grant channel <--grant queue_process <--grant msg_store.
+%%
+%% Grepping the project files for `credit_flow` will reveal the places
+%% where this module is currently used, with extra comments on what's
+%% going on at each instance. Note that credit flow between mirrors
+%% synchronization has not been documented, since this doesn't affect
+%% client publishes.
 
--define(DEFAULT_CREDIT, {200, 50}).
+-define(DEFAULT_INITIAL_CREDIT, 200).
+-define(DEFAULT_MORE_CREDIT_AFTER, 50).
+
+-define(DEFAULT_CREDIT,
+        case get(credit_flow_default_credit) of
+            undefined ->
+                Val = rabbit_misc:get_env(rabbit, credit_flow_default_credit,
+                                           {?DEFAULT_INITIAL_CREDIT,
+                                            ?DEFAULT_MORE_CREDIT_AFTER}),
+                put(credit_flow_default_credit, Val),
+                Val;
+            Val       -> Val
+        end).
 
 -export([send/1, send/2, ack/1, ack/2, handle_bump_msg/1, blocked/0, state/0]).
 -export([peer_down/1]).
@@ -61,9 +91,9 @@
             %% We deliberately allow Var to escape from the case here
             %% to be used in Expr. Any temporary var we introduced
             %% would also escape, and might conflict.
-            case get(Key) of
-                undefined -> Var = Default;
-                Var       -> ok
+            Var = case get(Key) of
+                undefined -> Default;
+                V         -> V
             end,
             put(Key, Expr)
         end).
@@ -159,7 +189,8 @@ unblock(From) ->
     case blocked() of
         false -> case erase(credit_deferred) of
                      undefined -> ok;
-                     Credits   -> [To ! Msg || {To, Msg} <- Credits]
+                     Credits   -> _ = [To ! Msg || {To, Msg} <- Credits],
+                                  ok
                  end;
         true  -> ok
     end.

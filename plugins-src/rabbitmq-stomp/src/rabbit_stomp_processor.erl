@@ -30,7 +30,9 @@
 -record(state, {session_id, channel, connection, subscriptions,
                 version, start_heartbeat_fun, pending_receipts,
                 config, route_state, reply_queues, frame_transformer,
-                adapter_info, send_fun, ssl_login_name, peer_addr}).
+                adapter_info, send_fun, ssl_login_name, peer_addr,
+                %% see rabbitmq/rabbitmq-stomp#39
+                trailing_lf}).
 
 -record(subscription, {dest_hdr, ack_mode, multi_ack, description}).
 
@@ -71,7 +73,8 @@ init(Configuration) ->
        config              = Configuration,
        route_state         = rabbit_routing_util:init_state(),
        reply_queues        = dict:new(),
-       frame_transformer   = undefined},
+       frame_transformer   = undefined,
+       trailing_lf         = rabbit_misc:get_env(rabbitmq_stomp, trailing_lf, true)},
      hibernate,
      {backoff, 1000, 1000, 10000}
     }.
@@ -449,7 +452,7 @@ maybe_delete_durable_sub({topic, Name}, Frame,
                                            ?HEADER_PERSISTENT, false) of
         true ->
             {ok, Id} = rabbit_stomp_frame:header(Frame, ?HEADER_ID),
-            QName = rabbit_stomp_util:subscription_queue_name(Name, Id),
+            QName = rabbit_stomp_util:subscription_queue_name(Name, Id, Frame),
             amqp_channel:call(Channel,
                               #'queue.delete'{queue  = list_to_binary(QName),
                                               nowait = false}),
@@ -592,41 +595,51 @@ do_subscribe(Destination, DestHdr, Frame,
                 _         -> amqp_channel:call(
                                Channel, #'basic.qos'{prefetch_count = Prefetch})
             end,
-            ExchangeAndKey = rabbit_routing_util:parse_routing(Destination),
-            try
-                amqp_channel:subscribe(Channel,
-                                       #'basic.consume'{
-                                          queue        = Queue,
-                                          consumer_tag = ConsumerTag,
-                                          no_local     = false,
-                                          no_ack       = (AckMode == auto),
-                                          exclusive    = false,
-                                          arguments    = []},
-                                       self()),
-                ok = rabbit_routing_util:ensure_binding(
-                       Queue, ExchangeAndKey, Channel)
-            catch exit:Err ->
-                    %% it's safe to delete this queue, it was server-named
-                    %% and declared by us
-                    case Destination of
-                        {exchange, _} ->
-                            ok = maybe_clean_up_queue(Queue, State);
-                        {topic, _} ->
-                            ok = maybe_clean_up_queue(Queue, State);
-                        _ ->
-                            ok
+            case dict:find(ConsumerTag, Subs) of
+                {ok, _} ->
+                    Message = "Duplicated subscription identifier",
+                    Detail = "A subscription identified by '~s' alredy exists.",
+                    error(Message, Detail, [ConsumerTag], State),
+                    send_error(Message, Detail, [ConsumerTag], State),
+                    {stop, normal, close_connection(State)};
+                error ->
+                    ExchangeAndKey =
+                        rabbit_routing_util:parse_routing(Destination),
+                    try
+                        amqp_channel:subscribe(Channel,
+                                               #'basic.consume'{
+                                                  queue        = Queue,
+                                                  consumer_tag = ConsumerTag,
+                                                  no_local     = false,
+                                                  no_ack       = (AckMode == auto),
+                                                  exclusive    = false,
+                                                  arguments    = []},
+                                               self()),
+                        ok = rabbit_routing_util:ensure_binding(
+                               Queue, ExchangeAndKey, Channel)
+                    catch exit:Err ->
+                            %% it's safe to delete this queue, it
+                            %% was server-named and declared by us
+                            case Destination of
+                                {exchange, _} ->
+                                    ok = maybe_clean_up_queue(Queue, State);
+                                {topic, _} ->
+                                    ok = maybe_clean_up_queue(Queue, State);
+                                _ ->
+                                    ok
+                            end,
+                            exit(Err)
                     end,
-                    exit(Err)
-            end,
-            ok(State#state{subscriptions =
-                               dict:store(
-                                 ConsumerTag,
-                                 #subscription{dest_hdr    = DestHdr,
-                                               ack_mode    = AckMode,
-                                               multi_ack   = IsMulti,
-                                               description = Description},
-                                 Subs),
-                           route_state = RouteState1});
+                    ok(State#state{subscriptions =
+                                       dict:store(
+                                         ConsumerTag,
+                                         #subscription{dest_hdr    = DestHdr,
+                                                       ack_mode    = AckMode,
+                                                       multi_ack   = IsMulti,
+                                                       description = Description},
+                                         Subs),
+                                   route_state = RouteState1})
+            end;
         {error, _} = Err ->
             Err
     end.
@@ -973,35 +986,32 @@ millis_to_seconds(M)               -> M div 1000.
 ensure_endpoint(_Direction, {queue, []}, _Frame, _Channel, _State) ->
     {error, {invalid_destination, "Destination cannot be blank"}};
 
-ensure_endpoint(source, EndPoint, Frame, Channel, State) ->
+ensure_endpoint(source, EndPoint, {_, _, Headers, _} = Frame, Channel, State) ->
     Params =
-        case rabbit_stomp_frame:boolean_header(
-               Frame, ?HEADER_PERSISTENT, false) of
-            true ->
-                [{subscription_queue_name_gen,
-                  fun () ->
-                          {ok, Id} = rabbit_stomp_frame:header(Frame, ?HEADER_ID),
-                          {_, Name} = rabbit_routing_util:parse_routing(EndPoint),
-                          list_to_binary(
-                            rabbit_stomp_util:subscription_queue_name(Name,
-                                                                      Id))
-                  end},
-                 {durable, true}];
-            false ->
-                [{subscription_queue_name_gen,
-                  fun () ->
-                          Id = rabbit_guid:gen_secure(),
-                          {_, Name} = rabbit_routing_util:parse_routing(EndPoint),
-                          list_to_binary(
-                            rabbit_stomp_util:subscription_queue_name(Name,
-                                                                      Id))
-                  end},
-                 {durable, false}]
-        end,
-    rabbit_routing_util:ensure_endpoint(source, Channel, EndPoint, Params, State);
+        [{subscription_queue_name_gen,
+          fun () ->
+              Id = build_subscription_id(Frame),
+              {_, Name} = rabbit_routing_util:parse_routing(EndPoint),
+              list_to_binary(rabbit_stomp_util:subscription_queue_name(Name, Id, Frame))
+          end},
+          {durable, rabbit_stomp_frame:boolean_header(Frame, ?HEADER_PERSISTENT, false)}],
+    Arguments = rabbit_stomp_util:build_arguments(Headers),
+    rabbit_routing_util:ensure_endpoint(source, Channel, EndPoint,
+                                        [Arguments | Params], State);
 
-ensure_endpoint(Direction, Endpoint, _Frame, Channel, State) ->
-    rabbit_routing_util:ensure_endpoint(Direction, Channel, Endpoint, State).
+ensure_endpoint(Direction, Endpoint, {_, _, Headers, _}, Channel, State) ->
+    Arguments = rabbit_stomp_util:build_arguments(Headers),
+    rabbit_routing_util:ensure_endpoint(Direction, Channel, Endpoint,
+                                        [Arguments], State).
+
+build_subscription_id(Frame) ->
+    case rabbit_stomp_frame:boolean_header(Frame, ?HEADER_PERSISTENT, false) of
+        true ->
+            {ok, Id} = rabbit_stomp_frame:header(Frame, ?HEADER_ID),
+            Id;
+        false ->
+            rabbit_guid:gen_secure()
+    end.
 
 %%----------------------------------------------------------------------------
 %% Success/error handling
@@ -1051,8 +1061,9 @@ send_frame(Command, Headers, BodyFragments, State) ->
                             body_iolist = BodyFragments},
                State).
 
-send_frame(Frame, State = #state{send_fun = SendFun}) ->
-    SendFun(async, rabbit_stomp_frame:serialize(Frame)),
+send_frame(Frame, State = #state{send_fun = SendFun,
+                                 trailing_lf = TrailingLF}) ->
+    SendFun(async, rabbit_stomp_frame:serialize(Frame, TrailingLF)),
     State.
 
 send_error_frame(Message, ExtraHeaders, Format, Args, State) ->

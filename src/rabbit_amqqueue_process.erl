@@ -92,7 +92,8 @@
          durable,
          auto_delete,
          arguments,
-         owner_pid
+         owner_pid,
+         exclusive
         ]).
 
 -define(INFO_KEYS, [pid | ?CREATION_EVENT_KEYS ++ ?STATISTICS_KEYS -- [name]]).
@@ -662,9 +663,21 @@ handle_ch_down(DownPid, State = #q{consumers          = Consumers,
                                    exclusive_consumer = Holder,
                                    senders            = Senders}) ->
     State1 = State#q{senders = case pmon:is_monitored(DownPid, Senders) of
-                                   false -> Senders;
-                                   true  -> credit_flow:peer_down(DownPid),
-                                            pmon:demonitor(DownPid, Senders)
+                                   false ->
+                                       Senders;
+                                   true  ->
+    %% A rabbit_channel process died. Here credit_flow will take care
+    %% of cleaning up the rabbit_amqqueue_process process dictionary
+    %% with regards to the credit we were tracking for the channel
+    %% process. See handle_cast({deliver, Deliver}, State) in this
+    %% module. In that cast function we process deliveries from the
+    %% channel, which means we credit_flow:ack/1 said
+    %% messages. credit_flow:ack'ing messages means we are increasing
+    %% a counter to know when we need to send MoreCreditAfter. Since
+    %% the process died, the credit_flow flow module will clean up
+    %% that for us.
+                                       credit_flow:peer_down(DownPid),
+                                       pmon:demonitor(DownPid, Senders)
                                end},
     case rabbit_queue_consumers:erase_ch(DownPid, Consumers) of
         not_found ->
@@ -817,6 +830,8 @@ i(owner_pid, #q{q = #amqqueue{exclusive_owner = none}}) ->
     '';
 i(owner_pid, #q{q = #amqqueue{exclusive_owner = ExclusiveOwner}}) ->
     ExclusiveOwner;
+i(exclusive, #q{q = #amqqueue{exclusive_owner = ExclusiveOwner}}) ->
+    is_pid(ExclusiveOwner);
 i(policy,    #q{q = Q}) ->
     case rabbit_policy:name(Q) of
         none   -> '';
@@ -1110,6 +1125,9 @@ handle_cast({deliver, Delivery = #delivery{sender = Sender,
                                            flow   = Flow}, SlaveWhenPublished},
             State = #q{senders = Senders}) ->
     Senders1 = case Flow of
+    %% In both credit_flow:ack/1 we are acking messages to the channel
+    %% process that sent us the message delivery. See handle_ch_down
+    %% for more info.
                    flow   -> credit_flow:ack(Sender),
                              case SlaveWhenPublished of
                                  true  -> credit_flow:ack(Sender); %% [0]
@@ -1289,6 +1307,12 @@ handle_info({'EXIT', _Pid, Reason}, State) ->
 
 handle_info({bump_credit, Msg}, State = #q{backing_queue       = BQ,
                                            backing_queue_state = BQS}) ->
+    %% The message_store is granting us more credit. This means the
+    %% backing queue (for the rabbit_variable_queue case) might
+    %% continue paging messages to disk if it still needs to. We
+    %% consume credits from the message_store whenever we need to
+    %% persist a message to disk. See:
+    %% rabbit_variable_queue:msg_store_write/4.
     credit_flow:handle_bump_msg(Msg),
     noreply(State#q{backing_queue_state = BQ:resume(BQS)});
 

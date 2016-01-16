@@ -35,7 +35,7 @@ REM set SERVER_ERL_ARGS=+P 1048576
 REM ## Get configuration variables from the configure environment file
 REM [ -f ${CONF_ENV_FILE} ] && . ${CONF_ENV_FILE} || true
 if exist "!RABBITMQ_CONF_ENV_FILE!" (
-	call !RABBITMQ_CONF_ENV_FILE!
+	call "!RABBITMQ_CONF_ENV_FILE!"
 )
 
 REM Check for the short names here too
@@ -84,21 +84,26 @@ REM       set RABBITMQ_NODE_PORT=5672
 REM    )
 REM )
 
-REM DOUBLE CHECK THIS LOGIC
 if "!RABBITMQ_NODE_IP_ADDRESS!"=="" (
-	if "!NODE_IP_ADDRESS!"=="" (
-		set RABBITMQ_NODE_IP_ADDRESS=auto
-	) else (
+	if not "!NODE_IP_ADDRESS!"=="" (
 		set RABBITMQ_NODE_IP_ADDRESS=!NODE_IP_ADDRESS!
 	)
 )
 
 if "!RABBITMQ_NODE_PORT!"=="" (
-	if "!NODE_PORT!"=="" (
-		set RABBITMQ_NODE_PORT=5672
-	) else (
+	if not "!NODE_PORT!"=="" (
 		set RABBITMQ_NODE_PORT=!NODE_PORT!
 	)
+)
+
+if "!RABBITMQ_NODE_IP_ADDRESS!"=="" (
+    if not "!RABBITMQ_NODE_PORT!"=="" (
+       set RABBITMQ_NODE_IP_ADDRESS=auto
+    )
+) else (
+    if "!RABBITMQ_NODE_PORT!"=="" (
+       set RABBITMQ_NODE_PORT=5672
+    )
 )
 
 REM [ "x" = "x$RABBITMQ_DIST_PORT" ] && RABBITMQ_DIST_PORT=${DIST_PORT}
@@ -198,7 +203,7 @@ if "!RABBITMQ_ENABLED_PLUGINS_FILE!"=="" (
 REM [ "x" = "x$RABBITMQ_PLUGINS_DIR" ] && RABBITMQ_PLUGINS_DIR=${PLUGINS_DIR}
 if "!RABBITMQ_PLUGINS_DIR!"=="" (
 	if "!PLUGINS_DIR!"=="" (
-		set RABBITMQ_PLUGINS_DIR=!RABBITMQ_BASE!\plugins
+		set RABBITMQ_PLUGINS_DIR=!RABBITMQ_HOME!\plugins
 	) else (
 		set RABBITMQ_PLUGINS_DIR=!PLUGINS_DIR!
 	)
@@ -209,9 +214,9 @@ REM [ "x" = "x$RABBITMQ_LOGS" ] && RABBITMQ_LOGS=${LOGS}
 REM [ "x" = "x$RABBITMQ_LOGS" ] && RABBITMQ_LOGS="${RABBITMQ_LOG_BASE}/${RABBITMQ_NODENAME}.log"
 if "!RABBITMQ_LOGS!"=="" (
 	if "!LOGS!"=="" (
-		set LOGS=!RABBITMQ_LOG_BASE!\!RABBITMQ_NODENAME!.log
+		set RABBITMQ_LOGS=!RABBITMQ_LOG_BASE!\!RABBITMQ_NODENAME!.log
 	) else (
-		set LOGS=!LOGS!
+		set RABBITMQ_LOGS=!LOGS!
 	)
 )
 
@@ -219,9 +224,9 @@ REM [ "x" = "x$RABBITMQ_SASL_LOGS" ] && RABBITMQ_SASL_LOGS=${SASL_LOGS}
 REM [ "x" = "x$RABBITMQ_SASL_LOGS" ] && RABBITMQ_SASL_LOGS="${RABBITMQ_LOG_BASE}/${RABBITMQ_NODENAME}-sasl.log"
 if "!RABBITMQ_SASL_LOGS!"=="" (
 	if "!SASL_LOGS!"=="" (
-		set SASL_LOGS=!RABBITMQ_LOG_BASE!\!RABBITMQ_NODENAME!-sasl.log
+		set RABBITMQ_SASL_LOGS=!RABBITMQ_LOG_BASE!\!RABBITMQ_NODENAME!-sasl.log
 	) else (
-		set SASL_LOGS=!SASL_LOGS!
+		set RABBITMQ_SASL_LOGS=!SASL_LOGS!
 	)
 )
 
