@@ -1,3 +1,9 @@
+rabbitmq-server (3.5.7-1) UNRELEASED; urgency=medium
+
+  * New upstream release.
+
+ -- James Page <james.page@ubuntu.com>  Sat, 16 Jan 2016 09:32:08 +0000
+
 rabbitmq-server (3.5.4-2) unstable; urgency=medium
 
   * Cosmetic clean-up in debian/rabbitmq-server.postinst and .init.
