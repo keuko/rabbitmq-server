@@ -18,14 +18,14 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
                 --disabled-login rabbitmq
 	fi
 
-	mkdir /etc/rabbitmq
+	mkdir -p /etc/rabbitmq
 	chown rabbitmq:rabbitmq /etc/rabbitmq
-	if [ -f /etc/rabbitmq/rabbitmq.conf ] [ ! -f /etc/rabbitmq/rabbitmq-env.conf ]; then
+	if [ -f /etc/rabbitmq/rabbitmq.conf ] && [ ! -f /etc/rabbitmq/rabbitmq-env.conf ] ; then
 		mv /etc/rabbitmq/rabbitmq.conf /etc/rabbitmq/rabbitmq-env.conf
 		chown rabbitmq:rabbitmq /etc/rabbitmq/rabbitmq-env.conf
 	fi
 	if [ -r /usr/share/rabbitmq/rabbitmq-env.conf ] && ! [ -e /etc/rabbitmq/rabbitmq-env.conf ] ; then
-		install -m 0640 -o rabbitmq -g rabbitmq /usr/share/rabbitmq/rabbitmq-env.conf /etc/rabbitmq/rabbitmq-env.conf
+		install -m 0644 -o rabbitmq -g rabbitmq /usr/share/rabbitmq/rabbitmq-env.conf /etc/rabbitmq/rabbitmq-env.conf
 	fi
 	if [ -f /etc/rabbitmq/enabled_plugins ] ; then
 		chown rabbitmq:rabbitmq /etc/rabbitmq/enabled_plugins
