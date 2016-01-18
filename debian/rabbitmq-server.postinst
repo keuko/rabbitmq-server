@@ -20,7 +20,7 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 
 	mkdir -p /etc/rabbitmq
 	chown rabbitmq:rabbitmq /etc/rabbitmq
-	if [ -f /etc/rabbitmq/rabbitmq.conf ] && [ ! -f /etc/rabbitmq/rabbitmq-env.conf ] ; then
+	if [ -f /etc/rabbitmq/rabbitmq.conf ] && [ ! -f /etc/rabbitmq/rabbitmq-env.conf ]; then
 		mv /etc/rabbitmq/rabbitmq.conf /etc/rabbitmq/rabbitmq-env.conf
 		chown rabbitmq:rabbitmq /etc/rabbitmq/rabbitmq-env.conf
 	fi
