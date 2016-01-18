@@ -1,6 +1,9 @@
 rabbitmq-server (3.5.7-1) UNRELEASED; urgency=medium
 
   * New upstream release.
+  * d/rabbitmq-server.postinst: Fix syntax error in condition for migration
+    of /etc/rabbitmq/rabbitmq.conf -> /etc/rabbitmq/rabbitmq-env.conf,
+    silence mkdir creation on /etc/rabbitmq for upgrades.
 
  -- James Page <james.page@ubuntu.com>  Sat, 16 Jan 2016 09:32:08 +0000
 
