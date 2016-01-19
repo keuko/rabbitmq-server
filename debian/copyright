@@ -35,7 +35,7 @@ Comments: Downloaded from http://code.quirkey.com/sammy/
 Files: plugins-src/rabbitmq-management/priv/www/js/excanvas*.js
 Copyright: (c) 2006, Google Inc
 License: Apache-2.0
-Comments: Downloaded from http://code.google.com/p/explorercanvas/
+Comments: Downloaded from https://github.com/arv/explorercanvas
 
 Files: plugins-src/rabbitmq-management/priv/www/js/jquery.flot*.js
 Copyright: (c) 2007-2013, IOLA and Ole Laursen
