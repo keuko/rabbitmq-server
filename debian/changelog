@@ -1,16 +1,13 @@
-rabbitmq-server (3.6.0-1) unstable; urgency=medium
+rabbitmq-server (3.6.0-1) UNRELEASED; urgency=medium
 
   [ James Page ]
   * New upstream release (Closes: #812377).
-  * [fa2d29e] Update watch file for upstream xz compression (Closes: #813628).
+  * [fa2d29e] Update watch file for upstream xz compression.
   * [b008e08] Imported Upstream version 3.6.0.
   * [d0dc477] Update gbp configuration for dch use.
 
   [ Thomas Goirand ]
   * Also packaging the rabbitmqadmin cli.
-  * Apply upstream patches for using systemd notify, and fixes the .service
-    file accordingly. Thanks to Alexey Lebedeff <binarin@gmail.com> for the bug
-    report and patches (Closes: #8123420).
 
  -- Thomas Goirand <zigo@debian.org>  Sun, 14 Feb 2016 13:35:22 +0800
 
