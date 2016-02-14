@@ -24,7 +24,8 @@ Architecture: all
 Depends: adduser,
          erlang-nox (>= 1:13.b.3) | esl-erlang,
          logrotate,
-         ${misc:Depends}
+         ${misc:Depends},
+         ${python:Depends},
 Description: AMQP server written in Erlang
  RabbitMQ is an implementation of AMQP, the emerging standard for high
  performance enterprise messaging. The RabbitMQ server is a robust and

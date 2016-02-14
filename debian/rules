@@ -3,7 +3,7 @@
 #export DH_VERBOSE=1
 
 %:
-	dh $@ --parallel --with systemd
+	dh $@ --parallel --with python2,systemd
 
 DEB_UPSTREAM_VERSION=$(shell dpkg-parsechangelog | sed -rne 's,^Version: ([^+]+)-.*,\1,p')
 DEB_DESTDIR=debian/rabbitmq-server
@@ -19,3 +19,6 @@ override_dh_auto_install:
 override_dh_auto_clean:
 	rm -f plugins-src/rabbitmq-server plugins/README
 	dh_auto_clean
+
+override_dh_python2:
+	dh_python2 --shebang=/usr/bin/python2

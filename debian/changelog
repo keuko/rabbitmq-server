@@ -1,10 +1,15 @@
 rabbitmq-server (3.6.0-1) UNRELEASED; urgency=medium
 
+  [ James Page ]
+  * New upstream release (Closes: #812377).
   * [fa2d29e] Update watch file for upstream xz compression.
   * [b008e08] Imported Upstream version 3.6.0.
   * [d0dc477] Update gbp configuration for dch use.
 
- -- James Page <james.page@ubuntu.com>  Tue, 19 Jan 2016 14:40:40 +0000
+  [ Thomas Goirand ]
+  * Also packaging the rabbitmqadmin cli.
+
+ -- Thomas Goirand <zigo@debian.org>  Sun, 14 Feb 2016 13:35:22 +0800
 
 rabbitmq-server (3.5.7-1) unstable; urgency=medium
 
