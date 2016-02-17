@@ -2,7 +2,7 @@ rabbitmq-server (3.6.0-1) UNRELEASED; urgency=medium
 
   [ James Page ]
   * New upstream release (Closes: #812377).
-  * [fa2d29e] Update watch file for upstream xz compression.
+  * [fa2d29e] Update watch file for upstream xz compression. (Closes: #813628).
   * [b008e08] Imported Upstream version 3.6.0.
   * [d0dc477] Update gbp configuration for dch use.
 
