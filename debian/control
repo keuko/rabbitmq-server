@@ -4,12 +4,14 @@ Priority: extra
 Maintainer: PKG OpenStack <openstack-devel@lists.alioth.debian.org>
 Uploaders: James Page <james.page@ubuntu.com>, Thomas Goirand <zigo@debian.org>
 Build-Depends: debhelper (>= 9~),
+               dh-python,
                dh-systemd (>= 1.5),
                erlang-dev,
                erlang-nox (>= 1:13.b.3),
                erlang-src (>= 1:13.b.3),
                git,
                python-simplejson,
+               python-all,
                unzip,
                xmlto,
                xsltproc,

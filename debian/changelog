@@ -13,6 +13,7 @@ rabbitmq-server (3.6.0-1) UNRELEASED; urgency=medium
   * Replaced git-core transition package by git in build-depends.
   * Added rsync as build-depends-indep.
   * Fix DESTDIR=$(DEB_DESTDIR) PREFIX=/usr as upstream Makefile changed.
+  * Added python-all and dh-python as build-depends.
 
  -- Thomas Goirand <zigo@debian.org>  Sun, 14 Feb 2016 13:35:22 +0800
 
