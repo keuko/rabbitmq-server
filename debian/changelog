@@ -9,6 +9,7 @@ rabbitmq-server (3.6.0-1) UNRELEASED; urgency=medium
   [ Thomas Goirand ]
   * Also packaging the rabbitmqadmin cli.
   * Do not do dh_auto_clean, as it removes all the deps folder.
+  * Disabled tests, as they download from github.
 
  -- Thomas Goirand <zigo@debian.org>  Sun, 14 Feb 2016 13:35:22 +0800
 
