@@ -2,14 +2,8 @@ Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: RabbitMQ
 Source: http://www.rabbitmq.com/
 
-Files: debian/*
-Copyright: (c) 2007-2013, GoPivotal, Inc.
-           (c) 2007, Tony Garnock-Jones <tonyg@rabbitmq.com>
-           (c) 2014, Blair Hester <bhester@gopivotal.com>
-           (c) 2012-2014, Emile Joubert <emile@rabbitmq.com>
-           (c) 2008-2012, John Leuner <jewel@debian.org>
-           (c) 2014, James Page <james.page@canonical.com>
-           (c) 2014, Thomas Goirand <zigo@debian.org>
+Files: *
+Copyright: (c) 2007-2014 GoPivotal, Inc.
 License: MPL-1.1
 
 Files: deps/rabbitmq_codegen/amqp-rabbitmq-*.json
@@ -63,8 +57,15 @@ Copyright: (c) 2011, Brandon Jones
 License: BSD-2-Clause
 Comments: Downloaded from http://code.google.com/p/glmatrix/
 
-Files: *
-Copyright: (c) 2007-2014 GoPivotal, Inc.
+Files: debian/*
+Copyright: (c) 2007-2013, GoPivotal, Inc.
+           (c) 2007, Tony Garnock-Jones <tonyg@rabbitmq.com>
+           (c) 2014, Blair Hester <bhester@gopivotal.com>
+           (c) 2012-2014, Emile Joubert <emile@rabbitmq.com>
+           (c) 2008-2012, John Leuner <jewel@debian.org>
+           (c) 2015, Antonio Terceiro <terceiro@debian.org>
+           (c) 2014-2016, James Page <james.page@canonical.com>
+           (c) 2014-2016, Thomas Goirand <zigo@debian.org>
 License: MPL-1.1
 
 License: Expat
