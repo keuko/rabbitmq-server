@@ -8,12 +8,13 @@ Build-Depends: debhelper (>= 9~),
                erlang-dev,
                erlang-nox (>= 1:13.b.3),
                erlang-src (>= 1:13.b.3),
-               git-core,
+               git,
                python-simplejson,
                unzip,
                xmlto,
                xsltproc,
                zip
+Build-Depends-Indep: rsync,
 Standards-Version: 3.9.6
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/rabbitmq-server.git
 Vcs-Git: git://anonscm.debian.org/openstack/rabbitmq-server.git
