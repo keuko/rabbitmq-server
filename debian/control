@@ -18,8 +18,8 @@ Build-Depends: debhelper (>= 9~),
                zip
 Build-Depends-Indep: rsync,
 Standards-Version: 3.9.6
-Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/rabbitmq-server.git
-Vcs-Git: git://anonscm.debian.org/openstack/rabbitmq-server.git
+Vcs-Browser: https://anonscm.debian.org/cgit/openstack/rabbitmq-server.git/
+Vcs-Git: https://anonscm.debian.org/git/openstack/rabbitmq-server.git
 Homepage: http://www.rabbitmq.com/
 
 Package: rabbitmq-server
