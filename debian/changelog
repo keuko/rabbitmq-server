@@ -19,6 +19,7 @@ rabbitmq-server (3.6.0-1) UNRELEASED; urgency=medium
 
   [ Ondřej Nový ]
   * Fixed VCS URLs (https).
+  * Fixed python shebang.
 
  -- Thomas Goirand <zigo@debian.org>  Sun, 14 Feb 2016 13:35:22 +0800
 
