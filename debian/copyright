@@ -57,7 +57,7 @@ Copyright: (c) 2007, Mochi Media, Inc.
 License: Expat
 Comments: Downloaded from http://github.com/mochi/mochiweb/
 
-Files: 
+Files:
  plugins-src/rabbitmq-management-visualiser/priv/www/visualiser/js/glMatrix*.js
 Copyright: (c) 2011, Brandon Jones
 License: BSD-2-Clause
