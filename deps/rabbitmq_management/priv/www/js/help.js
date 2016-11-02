@@ -55,8 +55,14 @@ HELP = {
     'export-definitions':
     'The definitions consist of users, virtual hosts, permissions, parameters, exchanges, queues and bindings. They do not include the contents of queues or the cluster name. Exclusive queues will not be exported.',
 
+    'export-definitions-vhost':
+    'The definitions exported for a single virtual host consist of exchanges, queues, bindings and policies.',
+
     'import-definitions':
       'The definitions that are imported will be merged with the current definitions. If an error occurs during import, any changes made will not be rolled back.',
+
+    'import-definitions-vhost':
+    'For a single virtual host, only exchanges, queues, bindings and policies are imported.',
 
     'exchange-rates-incoming':
       'The incoming rate is the rate at which messages are published directly to this exchange.',
@@ -321,6 +327,18 @@ HELP = {
         <dt>QI Write</dt>\
         <dd>Rate at which queue index segment files are written. </dd>\
       </dl>',
+
+    'gc-operations':
+    'Rate at which garbage collection operations take place on this node.',
+
+    'gc-bytes':
+    'Rate at which memory is reclaimed by the garbage collector on this node.',
+
+    'context-switches-operations':
+    'Rate at which runtime context switching takes place on this node.',
+
+    'process-reductions':
+    'Rate at which reductions take place on this process.',
 
     'foo': 'foo' // No comma.
 };

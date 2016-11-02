@@ -4,7 +4,6 @@
          method :: atom(),
          headers,
          peer,
-         sock,
          path :: string(),
          version,
          response_code,

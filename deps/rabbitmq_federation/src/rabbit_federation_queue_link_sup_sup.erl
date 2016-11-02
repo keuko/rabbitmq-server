@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ Federation.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_federation_queue_link_sup_sup).
@@ -38,7 +38,7 @@ start_child(Q) ->
     case supervisor2:start_child(
            ?SUPERVISOR,
            {id(Q), {rabbit_federation_link_sup, start_link, [Q]},
-            transient, ?MAX_WAIT, supervisor,
+            transient, ?SUPERVISOR_WAIT, supervisor,
             [rabbit_federation_link_sup]}) of
         {ok, _Pid}             -> ok;
         %% A link returned {stop, gone}, the link_sup shut down, that's OK.

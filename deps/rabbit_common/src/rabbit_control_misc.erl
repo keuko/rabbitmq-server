@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_control_misc).
@@ -20,17 +20,13 @@
          emitting_map_with_exit_handler/5, wait_for_info_messages/5,
          print_cmd_result/2]).
 
--ifdef(use_specs).
-
--spec(emitting_map/4 :: (pid(), reference(), fun(), list()) -> 'ok').
--spec(emitting_map/5 :: (pid(), reference(), fun(), list(), atom()) -> 'ok').
--spec(emitting_map_with_exit_handler/4 ::
-        (pid(), reference(), fun(), list()) -> 'ok').
--spec(emitting_map_with_exit_handler/5 ::
-        (pid(), reference(), fun(), list(), atom()) -> 'ok').
--spec(print_cmd_result/2 :: (atom(), term()) -> 'ok').
-
--endif.
+-spec emitting_map(pid(), reference(), fun(), list()) -> 'ok'.
+-spec emitting_map(pid(), reference(), fun(), list(), atom()) -> 'ok'.
+-spec emitting_map_with_exit_handler
+        (pid(), reference(), fun(), list()) -> 'ok'.
+-spec emitting_map_with_exit_handler
+        (pid(), reference(), fun(), list(), atom()) -> 'ok'.
+-spec print_cmd_result(atom(), term()) -> 'ok'.
 
 emitting_map(AggregatorPid, Ref, Fun, List) ->
     emitting_map(AggregatorPid, Ref, Fun, List, continue),
@@ -93,4 +89,5 @@ wait_for_info_messages(Ref, InfoItemKeys, DisplayFun) when is_reference(Ref) ->
 notify_if_timeout(Pid, Ref, Timeout) ->
     timer:send_after(Timeout, Pid, {Ref, {timeout, Timeout}}).
 
-print_cmd_result(authenticate_user, _Result) -> io:format("Success~n").
+print_cmd_result(authenticate_user, _Result) -> io:format("Success~n");
+print_cmd_result(join_cluster, already_member) -> io:format("The node is already a member of this cluster~n").

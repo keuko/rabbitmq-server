@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(tcp_listener_sup).
@@ -25,33 +25,20 @@
 
 -behaviour(supervisor).
 
--export([start_link/9, start_link/10]).
+-export([start_link/10]).
 
 -export([init/1]).
 
 %%----------------------------------------------------------------------------
 
--ifdef(use_specs).
+-type mfargs() :: {atom(), atom(), [any()]}.
 
--type(mfargs() :: {atom(), atom(), [any()]}).
-
--spec(start_link/9 ::
-        (inet:ip_address(), inet:port_number(), module(), [gen_tcp:listen_option()],
-         module(), any(), mfargs(), mfargs(), string()) ->
-                           rabbit_types:ok_pid_or_error()).
--spec(start_link/10 ::
+-spec start_link
         (inet:ip_address(), inet:port_number(), module(), [gen_tcp:listen_option()],
          module(), any(), mfargs(), mfargs(), integer(), string()) ->
-                           rabbit_types:ok_pid_or_error()).
-
--endif.
+                           rabbit_types:ok_pid_or_error().
 
 %%----------------------------------------------------------------------------
-
-start_link(IPAddress, Port, Transport, SocketOpts, ProtoSup, ProtoOpts, OnStartup, OnShutdown,
-           Label) ->
-    start_link(IPAddress, Port, Transport, SocketOpts, ProtoSup, ProtoOpts, OnStartup, OnShutdown,
-               1, Label).
 
 start_link(IPAddress, Port, Transport, SocketOpts, ProtoSup, ProtoOpts, OnStartup, OnShutdown,
            ConcurrentAcceptorCount, Label) ->

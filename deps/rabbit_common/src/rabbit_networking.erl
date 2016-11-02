@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_networking).
@@ -28,7 +28,7 @@
 %%
 %% See also tcp_listener_sup and tcp_listener.
 
--export([boot/0, start_tcp_listener/1, start_ssl_listener/2,
+-export([boot/0, start_tcp_listener/2, start_ssl_listener/3,
          stop_tcp_listener/1, on_node_down/1, active_listeners/0,
          node_listeners/1, register_connection/1, unregister_connection/1,
          connections/0, connection_info_keys/0,
@@ -37,7 +37,7 @@
          close_connection/2, force_connection_event_refresh/1, tcp_host/1]).
 
 %% Used by TCP-based transports, e.g. STOMP adapter
--export([tcp_listener_addresses/1, tcp_listener_spec/8,
+-export([tcp_listener_addresses/1, tcp_listener_spec/9,
          ensure_ssl/0, fix_ssl_options/1, poodle_check/1]).
 
 -export([tcp_listener_started/3, tcp_listener_stopped/3]).
@@ -50,101 +50,96 @@
 -include("rabbit.hrl").
 -include_lib("kernel/include/inet.hrl").
 
--define(FIRST_TEST_BIND_PORT, 10000).
+%% IANA-suggested ephemeral port range is 49152 to 65535
+-define(FIRST_TEST_BIND_PORT, 49152).
 
 %% POODLE
 -define(BAD_SSL_PROTOCOL_VERSIONS, [sslv3]).
 
 %%----------------------------------------------------------------------------
 
--ifdef(use_specs).
-
 -export_type([ip_port/0, hostname/0]).
 
--type(hostname() :: inet:hostname()).
--type(ip_port() :: inet:port_number()).
+-type hostname() :: inet:hostname().
+-type ip_port() :: inet:port_number().
 
--type(family() :: atom()).
--type(listener_config() :: ip_port() |
+-type family() :: atom().
+-type listener_config() :: ip_port() |
                            {hostname(), ip_port()} |
-                           {hostname(), ip_port(), family()}).
--type(address() :: {inet:ip_address(), ip_port(), family()}).
--type(name_prefix() :: atom()).
--type(protocol() :: atom()).
--type(label() :: string()).
+                           {hostname(), ip_port(), family()}.
+-type address() :: {inet:ip_address(), ip_port(), family()}.
+-type name_prefix() :: atom().
+-type protocol() :: atom().
+-type label() :: string().
 
--spec(start_tcp_listener/1 :: (listener_config()) -> 'ok').
--spec(start_ssl_listener/2 ::
-        (listener_config(), rabbit_types:infos()) -> 'ok').
--spec(stop_tcp_listener/1 :: (listener_config()) -> 'ok').
--spec(active_listeners/0 :: () -> [rabbit_types:listener()]).
--spec(node_listeners/1 :: (node()) -> [rabbit_types:listener()]).
--spec(register_connection/1 :: (pid()) -> ok).
--spec(unregister_connection/1 :: (pid()) -> ok).
--spec(connections/0 :: () -> [rabbit_types:connection()]).
--spec(connections_local/0 :: () -> [rabbit_types:connection()]).
--spec(connection_info_keys/0 :: () -> rabbit_types:info_keys()).
--spec(connection_info/1 ::
-        (rabbit_types:connection()) -> rabbit_types:infos()).
--spec(connection_info/2 ::
-        (rabbit_types:connection(), rabbit_types:info_keys())
-        -> rabbit_types:infos()).
--spec(connection_info_all/0 :: () -> [rabbit_types:infos()]).
--spec(connection_info_all/1 ::
-        (rabbit_types:info_keys()) -> [rabbit_types:infos()]).
--spec(connection_info_all/3 ::
-        (rabbit_types:info_keys(), reference(), pid()) -> 'ok').
--spec(close_connection/2 :: (pid(), string()) -> 'ok').
--spec(force_connection_event_refresh/1 :: (reference()) -> 'ok').
+-spec start_tcp_listener(listener_config(), integer()) -> 'ok'.
+-spec start_ssl_listener
+        (listener_config(), rabbit_types:infos(), integer()) -> 'ok'.
+-spec stop_tcp_listener(listener_config()) -> 'ok'.
+-spec active_listeners() -> [rabbit_types:listener()].
+-spec node_listeners(node()) -> [rabbit_types:listener()].
+-spec register_connection(pid()) -> ok.
+-spec unregister_connection(pid()) -> ok.
+-spec connections() -> [rabbit_types:connection()].
+-spec connections_local() -> [rabbit_types:connection()].
+-spec connection_info_keys() -> rabbit_types:info_keys().
+-spec connection_info(rabbit_types:connection()) -> rabbit_types:infos().
+-spec connection_info(rabbit_types:connection(), rabbit_types:info_keys()) ->
+          rabbit_types:infos().
+-spec connection_info_all() -> [rabbit_types:infos()].
+-spec connection_info_all(rabbit_types:info_keys()) ->
+          [rabbit_types:infos()].
+-spec connection_info_all(rabbit_types:info_keys(), reference(), pid()) ->
+          'ok'.
+-spec close_connection(pid(), string()) -> 'ok'.
+-spec force_connection_event_refresh(reference()) -> 'ok'.
 
--spec(on_node_down/1 :: (node()) -> 'ok').
--spec(tcp_listener_addresses/1 :: (listener_config()) -> [address()]).
--spec(tcp_listener_spec/8 ::
-        (name_prefix(), address(), [gen_tcp:listen_option()], module(), module(), protocol(), any(),
-         label()) -> supervisor:child_spec()).
--spec(ensure_ssl/0 :: () -> rabbit_types:infos()).
--spec(fix_ssl_options/1 :: (rabbit_types:infos()) -> rabbit_types:infos()).
--spec(poodle_check/1 :: (atom()) -> 'ok' | 'danger').
+-spec on_node_down(node()) -> 'ok'.
+-spec tcp_listener_addresses(listener_config()) -> [address()].
+-spec tcp_listener_spec
+        (name_prefix(), address(), [gen_tcp:listen_option()], module(), module(),
+         protocol(), any(), non_neg_integer(), label()) ->
+            supervisor:child_spec().
+-spec ensure_ssl() -> rabbit_types:infos().
+-spec fix_ssl_options(rabbit_types:infos()) -> rabbit_types:infos().
+-spec poodle_check(atom()) -> 'ok' | 'danger'.
 
--spec(boot/0 :: () -> 'ok').
--spec(tcp_listener_started/3 ::
-	(_,
+-spec boot() -> 'ok'.
+-spec tcp_listener_started
+        (_,
          string() |
-	 {byte(),byte(),byte(),byte()} |
-	 {char(),char(),char(),char(),char(),char(),char(),char()},
-	 _) ->
-				     'ok').
--spec(tcp_listener_stopped/3 ::
-	(_,
+         {byte(),byte(),byte(),byte()} |
+         {char(),char(),char(),char(),char(),char(),char(),char()}, _) ->
+            'ok'.
+-spec tcp_listener_stopped
+        (_,
          string() |
-	 {byte(),byte(),byte(),byte()} |
-	 {char(),char(),char(),char(),char(),char(),char(),char()},
-	 _) ->
-				     'ok').
-
--endif.
+         {byte(),byte(),byte(),byte()} |
+         {char(),char(),char(),char(),char(),char(),char(),char()},
+         _) ->
+            'ok'.
 
 %%----------------------------------------------------------------------------
 
 boot() ->
     ok = record_distribution_listener(),
     _ = application:start(ranch),
-    ok = boot_tcp(),
-    ok = boot_ssl().
+    ok = boot_tcp(application:get_env(rabbit, num_tcp_acceptors, 10)),
+    ok = boot_ssl(application:get_env(rabbit, num_ssl_acceptors, 1)).
 
-boot_tcp() ->
+boot_tcp(NumAcceptors) ->
     {ok, TcpListeners} = application:get_env(tcp_listeners),
-    [ok = start_tcp_listener(Listener) || Listener <- TcpListeners],
+    [ok = start_tcp_listener(Listener, NumAcceptors) || Listener <- TcpListeners],
     ok.
 
-boot_ssl() ->
+boot_ssl(NumAcceptors) ->
     case application:get_env(ssl_listeners) of
         {ok, []} ->
             ok;
         {ok, SslListeners} ->
             SslOpts = ensure_ssl(),
             case poodle_check('AMQP') of
-                ok     -> [start_ssl_listener(L, SslOpts) || L <- SslListeners];
+                ok     -> [start_ssl_listener(L, SslOpts, NumAcceptors) || L <- SslListeners];
                 danger -> ok
             end,
             ok
@@ -187,32 +182,20 @@ fix_ssl_options(Config) ->
 fix_verify_fun(SslOptsConfig) ->
     %% Starting with ssl 4.0.1 in Erlang R14B, the verify_fun function
     %% takes 3 arguments and returns a tuple.
-    {ok, SslAppVer} = application:get_key(ssl, vsn),
-    UseNewVerifyFun = rabbit_misc:version_compare(SslAppVer, "4.0.1", gte),
     case rabbit_misc:pget(verify_fun, SslOptsConfig) of
         {Module, Function, InitialUserState} ->
-            Fun = make_verify_fun(Module, Function, InitialUserState,
-                                  UseNewVerifyFun),
+            Fun = make_verify_fun(Module, Function, InitialUserState),
             rabbit_misc:pset(verify_fun, Fun, SslOptsConfig);
-        {Module, Function} ->
-            Fun = make_verify_fun(Module, Function, none,
-                                  UseNewVerifyFun),
+        {Module, Function} when is_atom(Module) ->
+            Fun = make_verify_fun(Module, Function, none),
             rabbit_misc:pset(verify_fun, Fun, SslOptsConfig);
-        undefined when UseNewVerifyFun ->
+        {Verifyfun, _InitialUserState} when is_function(Verifyfun, 3) ->
             SslOptsConfig;
         undefined ->
-            % unknown_ca errors are silently ignored prior to R14B unless we
-            % supply this verify_fun - remove when at least R14B is required
-            case proplists:get_value(verify, SslOptsConfig, verify_none) of
-                verify_none -> SslOptsConfig;
-                verify_peer -> [{verify_fun, fun([])    -> true;
-                                                ([_|_]) -> false
-                                             end}
-                                | SslOptsConfig]
-            end
+            SslOptsConfig
     end.
 
-make_verify_fun(Module, Function, InitialUserState, UseNewVerifyFun) ->
+make_verify_fun(Module, Function, InitialUserState) ->
     try
         %% Preload the module: it is required to use
         %% erlang:function_exported/3.
@@ -226,7 +209,7 @@ make_verify_fun(Module, Function, InitialUserState, UseNewVerifyFun) ->
     NewForm = erlang:function_exported(Module, Function, 3),
     OldForm = erlang:function_exported(Module, Function, 1),
     case {NewForm, OldForm} of
-        {true, _} when UseNewVerifyFun ->
+        {true, _} ->
             %% This verify_fun is supported by Erlang R14B+ (ssl
             %% 4.0.1 and later).
             Fun = fun(OtpCert, Event, UserState) ->
@@ -234,23 +217,16 @@ make_verify_fun(Module, Function, InitialUserState, UseNewVerifyFun) ->
             end,
             {Fun, InitialUserState};
         {_, true} ->
-            %% This verify_fun is supported by:
-            %%     o  Erlang up-to R13B;
-            %%     o  Erlang R14B+ for undocumented backward
-            %%        compatibility.
+            %% This verify_fun is supported by Erlang R14B+ for 
+            %% undocumented backward compatibility.
             %%
             %% InitialUserState is ignored in this case.
-            fun(ErrorList) ->
-                    Module:Function(ErrorList)
+            fun(Args) ->
+                    Module:Function(Args)
             end;
-        {_, false} when not UseNewVerifyFun ->
-            rabbit_log:error("SSL verify_fun: ~s:~s/1 form required "
-              "for Erlang R13B~n", [Module, Function]),
-            throw({error, {invalid_verify_fun, old_form_required}});
         _ ->
-            Arity = case UseNewVerifyFun of true -> 3; _ -> 1 end,
-            rabbit_log:error("SSL verify_fun: no ~s:~s/~b exported~n",
-              [Module, Function, Arity]),
+            rabbit_log:error("SSL verify_fun: no ~s:~s/3 exported~n",
+              [Module, Function]),
             throw({error, {invalid_verify_fun, function_not_exported}})
     end.
 
@@ -287,33 +263,34 @@ tcp_listener_addresses_auto(Port) ->
                      Listener <- port_to_listeners(Port)]).
 
 tcp_listener_spec(NamePrefix, {IPAddress, Port, Family}, SocketOpts,
-                  Transport, ProtoSup, ProtoOpts, Protocol, Label) ->
+                  Transport, ProtoSup, ProtoOpts, Protocol, NumAcceptors, Label) ->
     {rabbit_misc:tcp_name(NamePrefix, IPAddress, Port),
      {tcp_listener_sup, start_link,
       [IPAddress, Port, Transport, [Family | SocketOpts], ProtoSup, ProtoOpts,
        {?MODULE, tcp_listener_started, [Protocol]},
        {?MODULE, tcp_listener_stopped, [Protocol]},
-       Label]},
+       NumAcceptors, Label]},
      transient, infinity, supervisor, [tcp_listener_sup]}.
 
-start_tcp_listener(Listener) ->
-    start_listener(Listener, amqp, "TCP Listener", tcp_opts()).
+start_tcp_listener(Listener, NumAcceptors) ->
+    start_listener(Listener, NumAcceptors, amqp, "TCP Listener", tcp_opts()).
 
-start_ssl_listener(Listener, SslOpts) ->
-    start_listener(Listener, 'amqp/ssl', "SSL Listener", tcp_opts() ++ SslOpts).
+start_ssl_listener(Listener, SslOpts, NumAcceptors) ->
+    start_listener(Listener, NumAcceptors, 'amqp/ssl', "SSL Listener", tcp_opts() ++ SslOpts).
 
-start_listener(Listener, Protocol, Label, Opts) ->
-    [start_listener0(Address, Protocol, Label, Opts) ||
+start_listener(Listener, NumAcceptors, Protocol, Label, Opts) ->
+    [start_listener0(Address, NumAcceptors, Protocol, Label, Opts) ||
         Address <- tcp_listener_addresses(Listener)],
     ok.
 
-start_listener0(Address, Protocol, Label, Opts) ->
+start_listener0(Address, NumAcceptors, Protocol, Label, Opts) ->
     Transport = case Protocol of
         amqp -> ranch_tcp;
         'amqp/ssl' -> ranch_ssl
     end,
     Spec = tcp_listener_spec(rabbit_tcp_listener_sup, Address, Opts,
-                             Transport, rabbit_connection_sup, [], Protocol, Label),
+                             Transport, rabbit_connection_sup, [], Protocol,
+                             NumAcceptors, Label),
     case supervisor:start_child(rabbit_sup, Spec) of
         {ok, _}                -> ok;
         {error, {shutdown, _}} -> {IPAddress, Port, _Family} = Address,

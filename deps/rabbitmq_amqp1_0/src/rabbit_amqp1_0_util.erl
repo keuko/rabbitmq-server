@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2014 GoPivotal, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_amqp1_0_util).
@@ -21,21 +21,16 @@
 -export([protocol_error/3]).
 -export([serial_add/2, serial_compare/2, serial_diff/2]).
 
--ifdef(use_specs).
-
 -export_type([serial_number/0]).
--type(serial_number() :: non_neg_integer()).
--type(serial_compare_result() :: 'equal' | 'less' | 'greater').
+-type serial_number() :: non_neg_integer().
+-type serial_compare_result() :: 'equal' | 'less' | 'greater'.
 
--spec(serial_add/2 :: (serial_number(), non_neg_integer()) ->
-             serial_number()).
--spec(serial_compare/2 :: (serial_number(), serial_number()) ->
-             serial_compare_result()).
--spec(serial_diff/2 :: (serial_number(), serial_number()) ->
-             integer()).
-
--endif.
-
+-spec serial_add(serial_number(), non_neg_integer()) ->
+             serial_number().
+-spec serial_compare(serial_number(), serial_number()) ->
+             serial_compare_result().
+-spec serial_diff(serial_number(), serial_number()) ->
+             integer().
 
 protocol_error(Condition, Msg, Args) ->
     exit(#'v1_0.error'{

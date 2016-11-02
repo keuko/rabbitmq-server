@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_binary_parser).
@@ -24,17 +24,15 @@
 
 %%----------------------------------------------------------------------------
 
--ifdef(use_specs).
-
--spec(parse_table/1 :: (binary()) -> rabbit_framing:amqp_table()).
--spec(ensure_content_decoded/1 ::
-        (rabbit_types:content()) -> rabbit_types:decoded_content()).
--spec(clear_decoded_content/1 ::
-        (rabbit_types:content()) -> rabbit_types:undecoded_content()).
--spec(validate_utf8/1 :: (binary()) -> 'ok' | 'error').
--spec(assert_utf8/1 :: (binary()) -> 'ok').
-
--endif.
+-spec parse_table(binary()) -> rabbit_framing:amqp_table().
+-spec ensure_content_decoded
+        (rabbit_types:content()) ->
+            rabbit_types:decoded_content().
+-spec clear_decoded_content
+        (rabbit_types:content()) ->
+            rabbit_types:undecoded_content().
+-spec validate_utf8(binary()) -> 'ok' | 'error'.
+-spec assert_utf8(binary()) -> 'ok'.
 
 %%----------------------------------------------------------------------------
 

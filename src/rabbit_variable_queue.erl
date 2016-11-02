@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_variable_queue).
@@ -341,19 +341,17 @@
 
 -rabbit_upgrade({multiple_routing_keys, local, []}).
 
--ifdef(use_specs).
+-type seq_id()  :: non_neg_integer().
 
--type(seq_id()  :: non_neg_integer()).
-
--type(rates() :: #rates { in        :: float(),
+-type rates() :: #rates { in        :: float(),
                           out       :: float(),
                           ack_in    :: float(),
                           ack_out   :: float(),
-                          timestamp :: rabbit_types:timestamp()}).
+                          timestamp :: rabbit_types:timestamp()}.
 
--type(delta() :: #delta { start_seq_id :: non_neg_integer(),
+-type delta() :: #delta { start_seq_id :: non_neg_integer(),
                           count        :: non_neg_integer(),
-                          end_seq_id   :: non_neg_integer() }).
+                          end_seq_id   :: non_neg_integer() }.
 
 %% The compiler (rightfully) complains that ack() and state() are
 %% unused. For this reason we duplicate a -spec from
@@ -361,8 +359,8 @@
 %% warnings. The problem here is that we can't parameterise the BQ
 %% behaviour by these two types as we would like to. We still leave
 %% these here for documentation purposes.
--type(ack() :: seq_id()).
--type(state() :: #vqstate {
+-type ack() :: seq_id().
+-type state() :: #vqstate {
              q1                    :: ?QUEUE:?QUEUE(),
              q2                    :: ?QUEUE:?QUEUE(),
              delta                 :: delta(),
@@ -394,23 +392,21 @@
              out_counter           :: non_neg_integer(),
              in_counter            :: non_neg_integer(),
              rates                 :: rates(),
-             msgs_on_disk          :: gb_sets:set(),
-             msg_indices_on_disk   :: gb_sets:set(),
-             unconfirmed           :: gb_sets:set(),
-             confirmed             :: gb_sets:set(),
+             msgs_on_disk          :: ?GB_SET_TYPE(),
+             msg_indices_on_disk   :: ?GB_SET_TYPE(),
+             unconfirmed           :: ?GB_SET_TYPE(),
+             confirmed             :: ?GB_SET_TYPE(),
              ack_out_counter       :: non_neg_integer(),
              ack_in_counter        :: non_neg_integer(),
              disk_read_count       :: non_neg_integer(),
              disk_write_count      :: non_neg_integer(),
 
              io_batch_size         :: pos_integer(),
-             mode                  :: 'default' | 'lazy' }).
+             mode                  :: 'default' | 'lazy' }.
 %% Duplicated from rabbit_backing_queue
--spec(ack/2 :: ([ack()], state()) -> {[rabbit_guid:guid()], state()}).
+-spec ack([ack()], state()) -> {[rabbit_guid:guid()], state()}.
 
--spec(multiple_routing_keys/0 :: () -> 'ok').
-
--endif.
+-spec multiple_routing_keys() -> 'ok'.
 
 -define(BLANK_DELTA, #delta { start_seq_id = undefined,
                               count        = 0,
@@ -556,7 +552,7 @@ delete_crashed(#amqqueue{name = QName}) ->
     ok = rabbit_queue_index:erase(QName).
 
 purge(State = #vqstate { len = Len }) ->
-    case is_pending_ack_empty(State) of
+    case is_pending_ack_empty(State) and is_unconfirmed_empty(State) of
         true ->
             {Len, purge_and_index_reset(State)};
         false ->
@@ -688,12 +684,12 @@ requeue(AckTags, #vqstate { mode       = default,
                                                   State2),
     MsgCount = length(MsgIds2),
     {MsgIds2, a(reduce_memory_use(
-                  maybe_update_rates(
+                  maybe_update_rates(ui(
                     State3 #vqstate { delta      = Delta1,
                                       q3         = Q3a,
                                       q4         = Q4a,
                                       in_counter = InCounter + MsgCount,
-                                      len        = Len + MsgCount })))};
+                                      len        = Len + MsgCount }))))};
 requeue(AckTags, #vqstate { mode       = lazy,
                             delta      = Delta,
                             q3         = Q3,
@@ -706,11 +702,11 @@ requeue(AckTags, #vqstate { mode       = lazy,
                                                 State1),
     MsgCount = length(MsgIds1),
     {MsgIds1, a(reduce_memory_use(
-                  maybe_update_rates(
+                  maybe_update_rates(ui(
                     State2 #vqstate { delta      = Delta1,
                                       q3         = Q3a,
                                       in_counter = InCounter + MsgCount,
-                                      len        = Len + MsgCount })))}.
+                                      len        = Len + MsgCount }))))}.
 
 ackfold(MsgFun, Acc, State, AckTags) ->
     {AccN, StateN} =
@@ -1648,15 +1644,24 @@ reset_qi_state(State = #vqstate{index_state = IndexState}) ->
 is_pending_ack_empty(State) ->
     count_pending_acks(State) =:= 0.
 
+is_unconfirmed_empty(#vqstate { unconfirmed = UC }) ->
+    gb_sets:is_empty(UC).
+
 count_pending_acks(#vqstate { ram_pending_ack   = RPA,
                               disk_pending_ack  = DPA,
                               qi_pending_ack    = QPA }) ->
     gb_trees:size(RPA) + gb_trees:size(DPA) + gb_trees:size(QPA).
 
-purge_betas_and_deltas(DelsAndAcksFun, State = #vqstate { q3 = Q3 }) ->
+purge_betas_and_deltas(DelsAndAcksFun, State = #vqstate { mode = Mode }) ->
+    State0 = #vqstate { q3 = Q3 } =
+        case Mode of
+            lazy -> maybe_deltas_to_betas(DelsAndAcksFun, State);
+            _    -> State
+        end,
+
     case ?QUEUE:is_empty(Q3) of
-        true  -> State;
-        false -> State1 = remove_queue_entries(Q3, DelsAndAcksFun, State),
+        true  -> State0;
+        false -> State1 = remove_queue_entries(Q3, DelsAndAcksFun, State0),
                  purge_betas_and_deltas(DelsAndAcksFun,
                                         maybe_deltas_to_betas(
                                           DelsAndAcksFun,
@@ -2118,7 +2123,7 @@ publish_alpha(MsgStatus, State) ->
     {MsgStatus, stats({1, -1}, {MsgStatus, MsgStatus}, State)}.
 
 publish_beta(MsgStatus, State) ->
-    {MsgStatus1, State1} = maybe_write_to_disk(true, false, MsgStatus, State),
+    {MsgStatus1, State1} = maybe_prepare_write_to_disk(true, false, MsgStatus, State),
     MsgStatus2 = m(trim_msg_status(MsgStatus1)),
     {MsgStatus2, stats({1, -1}, {MsgStatus, MsgStatus2}, State1)}.
 
@@ -2155,7 +2160,7 @@ delta_merge(SeqIds, Delta, MsgIds, State) ->
                         {#msg_status { msg_id = MsgId } = MsgStatus, State1} =
                             msg_from_pending_ack(SeqId, State0),
                         {_MsgStatus, State2} =
-                            maybe_write_to_disk(true, true, MsgStatus, State1),
+                            maybe_prepare_write_to_disk(true, true, MsgStatus, State1),
                         {expand_delta(SeqId, Delta0), [MsgId | MsgIds0],
                          stats({1, -1}, {MsgStatus, none}, State2)}
                 end, {Delta, MsgIds, State}, SeqIds).

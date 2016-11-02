@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ Federation.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_tracing_consumer_sup).
@@ -30,5 +30,5 @@ start_link(Args) -> supervisor2:start_link(?MODULE, Args).
 init(Args) ->
     {ok, {{one_for_one, 3, 10},
           [{consumer, {rabbit_tracing_consumer, start_link, [Args]},
-            transient, ?MAX_WAIT, worker,
+            transient, ?WORKER_WAIT, worker,
             [rabbit_tracing_consumer]}]}}.

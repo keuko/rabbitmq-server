@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -define(PROTOCOL_NAMES,  [{3, "MQIsdp"}, {4, "MQTT"}]).
@@ -48,21 +48,8 @@
 -define(QOS_1, 1).
 -define(QOS_2, 2).
 
--ifdef(use_specs).
-
 %% TODO
--type(message_id :: any()).
-
--type(mqtt_msg() :: #mqtt_msg {
-  retain :: boolean(),
-  qos :: QOS_0 | QOS_1 | QOS_2,
-  topic :: string(),
-  dup :: boolean(),
-  message_id :: message_id(),
-  payload :: binary()
-}).
-
--endif.
+-type message_id() :: any().
 
 -record(mqtt_frame, {fixed,
                      variable,
@@ -85,7 +72,8 @@
                               username,
                               password}).
 
--record(mqtt_frame_connack,  {return_code}).
+-record(mqtt_frame_connack,  {session_present,
+                              return_code}).
 
 -record(mqtt_frame_publish,  {topic_name,
                               message_id}).
@@ -101,9 +89,11 @@
 
 -record(mqtt_frame_other,    {other}).
 
--record(mqtt_msg,            {retain,
-                              qos,
-                              topic,
-                              dup,
-                              message_id,
-                              payload}).
+-record(mqtt_msg,            {retain :: boolean(),
+                              qos :: ?QOS_0 | ?QOS_1 | ?QOS_2,
+                              topic :: string(),
+                              dup :: boolean(),
+                              message_id :: message_id(),
+                              payload :: binary()}).
+
+-type mqtt_msg() :: #mqtt_msg{}.

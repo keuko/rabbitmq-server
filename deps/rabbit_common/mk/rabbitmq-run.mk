@@ -39,6 +39,9 @@ endif
 
 export RABBITMQ_SCRIPTS_DIR RABBITMQCTL RABBITMQ_PLUGINS RABBITMQ_SERVER
 
+# We export MAKE to be sure scripts and tests use the proper command.
+export MAKE
+
 # We need to pass the location of codegen to the Java client ant
 # process.
 CODEGEN_DIR = $(DEPS_DIR)/rabbitmq_codegen
@@ -61,18 +64,21 @@ node_tmpdir = $(TEST_TMPDIR)/$(1)
 node_pid_file = $(call node_tmpdir,$(1))/$(1).pid
 node_log_base = $(call node_tmpdir,$(1))/log
 node_mnesia_base = $(call node_tmpdir,$(1))/mnesia
+node_mnesia_dir = $(call node_mnesia_base,$(1))/$(1)
 node_plugins_expand_dir = $(call node_tmpdir,$(1))/plugins
 node_enabled_plugins_file = $(call node_tmpdir,$(1))/enabled_plugins
 
 # Broker startup variables for the test environment.
 RABBITMQ_NODENAME ?= rabbit
-NODE_TMPDIR ?= $(call node_tmpdir,$(RABBITMQ_NODENAME))
+RABBITMQ_NODENAME_FOR_PATHS ?= $(RABBITMQ_NODENAME)
+NODE_TMPDIR ?= $(call node_tmpdir,$(RABBITMQ_NODENAME_FOR_PATHS))
 
-RABBITMQ_PID_FILE ?= $(call node_pid_file,$(RABBITMQ_NODENAME))
-RABBITMQ_LOG_BASE ?= $(call node_log_base,$(RABBITMQ_NODENAME))
-RABBITMQ_MNESIA_BASE ?= $(call node_mnesia_base,$(RABBITMQ_NODENAME))
-RABBITMQ_PLUGINS_EXPAND_DIR ?= $(call node_plugins_expand_dir,$(RABBITMQ_NODENAME))
-RABBITMQ_ENABLED_PLUGINS_FILE ?= $(call node_enabled_plugins_file,$(RABBITMQ_NODENAME))
+RABBITMQ_PID_FILE ?= $(call node_pid_file,$(RABBITMQ_NODENAME_FOR_PATHS))
+RABBITMQ_LOG_BASE ?= $(call node_log_base,$(RABBITMQ_NODENAME_FOR_PATHS))
+RABBITMQ_MNESIA_BASE ?= $(call node_mnesia_base,$(RABBITMQ_NODENAME_FOR_PATHS))
+RABBITMQ_MNESIA_DIR ?= $(call node_mnesia_dir,$(RABBITMQ_NODENAME_FOR_PATHS))
+RABBITMQ_PLUGINS_EXPAND_DIR ?= $(call node_plugins_expand_dir,$(RABBITMQ_NODENAME_FOR_PATHS))
+RABBITMQ_ENABLED_PLUGINS_FILE ?= $(call node_enabled_plugins_file,$(RABBITMQ_NODENAME_FOR_PATHS))
 
 # erlang.mk adds dependencies' ebin directory to ERL_LIBS. This is
 # a sane default, but we prefer to rely on the .ez archives in the
@@ -85,17 +91,19 @@ MAKE="$(MAKE)" \
 ERL_LIBS="$(DIST_ERL_LIBS)" \
 RABBITMQ_NODENAME="$(1)" \
 RABBITMQ_NODE_IP_ADDRESS="$(RABBITMQ_NODE_IP_ADDRESS)" \
-RABBITMQ_NODE_PORT="$(2)" \
-RABBITMQ_PID_FILE="$(call node_pid_file,$(1))" \
-RABBITMQ_LOG_BASE="$(call node_log_base,$(1))" \
-RABBITMQ_MNESIA_BASE="$(call node_mnesia_base,$(1))" \
+RABBITMQ_NODE_PORT="$(3)" \
+RABBITMQ_PID_FILE="$(call node_pid_file,$(2))" \
+RABBITMQ_LOG_BASE="$(call node_log_base,$(2))" \
+RABBITMQ_MNESIA_BASE="$(call node_mnesia_base,$(2))" \
+RABBITMQ_MNESIA_DIR="$(call node_mnesia_dir,$(2))" \
 RABBITMQ_PLUGINS_DIR="$(CURDIR)/$(DIST_DIR)" \
-RABBITMQ_PLUGINS_EXPAND_DIR="$(call node_plugins_expand_dir,$(1))" \
+RABBITMQ_PLUGINS_EXPAND_DIR="$(call node_plugins_expand_dir,$(2))" \
 RABBITMQ_SERVER_START_ARGS="$(RABBITMQ_SERVER_START_ARGS)"
 endef
 
-BASIC_SCRIPT_ENV_SETTINGS = $(call basic_script_env_settings,$(RABBITMQ_NODENAME),$(RABBITMQ_NODE_PORT)) \
-			    RABBITMQ_ENABLED_PLUGINS_FILE="$(RABBITMQ_ENABLED_PLUGINS_FILE)"
+BASIC_SCRIPT_ENV_SETTINGS = \
+	$(call basic_script_env_settings,$(RABBITMQ_NODENAME),$(RABBITMQ_NODENAME_FOR_PATHS),$(RABBITMQ_NODE_PORT)) \
+	RABBITMQ_ENABLED_PLUGINS_FILE="$(RABBITMQ_ENABLED_PLUGINS_FILE)"
 
 # NOTE: Running a plugin requires RabbitMQ itself. As this file is
 # loaded *after* erlang.mk, it is too late to add "rabbit" to the
@@ -144,9 +152,63 @@ $(RABBITMQ_ENABLED_PLUGINS_FILE): node-tmpdir
 # Run a full RabbitMQ.
 # --------------------------------------------------------------------
 
-run-broker: node-tmpdir $(RABBITMQ_ENABLED_PLUGINS_FILE)
+define test_rabbitmq_config
+%% vim:ft=erlang:
+
+[
+  {rabbit, [
+      {loopback_users, []}
+    ]}
+].
+endef
+
+define test_rabbitmq_config_with_tls
+%% vim:ft=erlang:
+
+[
+  {rabbit, [
+      {loopback_users, []},
+      {ssl_listeners, [5671]},
+      {ssl_options, [
+          {cacertfile, "$(TEST_TLS_CERTS_DIR_in_config)/testca/cacert.pem"},
+          {certfile,   "$(TEST_TLS_CERTS_DIR_in_config)/server/cert.pem"},
+          {keyfile,    "$(TEST_TLS_CERTS_DIR_in_config)/server/key.pem"},
+          {verify, verify_peer},
+          {fail_if_no_peer_cert, false},
+          {honor_cipher_order, true}]}
+    ]}
+].
+endef
+
+TEST_CONFIG_FILE ?= $(TEST_TMPDIR)/test.config
+TEST_TLS_CERTS_DIR = $(TEST_TMPDIR)/tls-certs
+ifeq ($(PLATFORM),msys2)
+TEST_TLS_CERTS_DIR_in_config = $(shell echo $(TEST_TLS_CERTS_DIR) | sed -E "s,^/([^/]+),\1:,")
+else
+TEST_TLS_CERTS_DIR_in_config = $(TEST_TLS_CERTS_DIR)
+endif
+
+.PHONY: $(TEST_CONFIG_FILE)
+$(TEST_CONFIG_FILE): node-tmpdir
+	$(gen_verbose) printf "$(subst $(newline),\n,$(subst ",\",$(config)))" > $@
+
+$(TEST_TLS_CERTS_DIR): node-tmpdir
+	$(gen_verbose) $(MAKE) -C $(DEPS_DIR)/rabbit_common/tools/tls-certs \
+		DIR=$(TEST_TLS_CERTS_DIR) all
+
+show-test-tls-certs-dir: $(TEST_TLS_CERTS_DIR)
+	@echo $(TEST_TLS_CERTS_DIR)
+
+run-broker run-tls-broker: RABBITMQ_CONFIG_FILE = $(basename $(TEST_CONFIG_FILE))
+run-broker:     config := $(test_rabbitmq_config)
+run-tls-broker: config := $(test_rabbitmq_config_with_tls)
+run-tls-broker: $(TEST_TLS_CERTS_DIR)
+
+run-broker run-tls-broker: node-tmpdir $(RABBITMQ_ENABLED_PLUGINS_FILE) \
+    $(TEST_CONFIG_FILE)
 	$(BASIC_SCRIPT_ENV_SETTINGS) \
 	  RABBITMQ_ALLOW_INPUT=true \
+	  RABBITMQ_CONFIG_FILE=$(RABBITMQ_CONFIG_FILE) \
 	  $(RABBITMQ_SERVER)
 
 run-background-broker: node-tmpdir $(RABBITMQ_ENABLED_PLUGINS_FILE)
@@ -205,6 +267,15 @@ start-background-node: node-tmpdir $(RABBITMQ_ENABLED_PLUGINS_FILE)
 	ERL_LIBS="$(DIST_ERL_LIBS)" \
 	  $(RABBITMQCTL) -n $(RABBITMQ_NODENAME) wait $(RABBITMQ_PID_FILE) kernel
 
+start-background-broker: node-tmpdir $(RABBITMQ_ENABLED_PLUGINS_FILE)
+	$(BASIC_SCRIPT_ENV_SETTINGS) \
+	  $(RABBITMQ_SERVER) \
+	  $(REDIRECT_STDIO) &
+	ERL_LIBS="$(DIST_ERL_LIBS)" \
+	  $(RABBITMQCTL) -n $(RABBITMQ_NODENAME) wait $(RABBITMQ_PID_FILE) && \
+	ERL_LIBS="$(DIST_ERL_LIBS)" \
+	  $(RABBITMQCTL) -n $(RABBITMQ_NODENAME) status >/dev/null
+
 start-rabbit-on-node:
 	$(exec_verbose) echo 'rabbit:start().' | $(ERL_CALL) $(ERL_CALL_OPTS) | sed -E '/^\{ok, ok\}$$/d'
 	$(verbose) ERL_LIBS="$(DIST_ERL_LIBS)" \
@@ -229,7 +300,7 @@ stop-node:
 	) || :
 
 clean-node-db:
-	$(exec_verbose) rm -rf $(RABBITMQ_MNESIA_BASE)/$(RABBITMQ_NODENAME)/*
+	$(exec_verbose) rm -rf $(RABBITMQ_MNESIA_DIR)/*
 
 start-cover:
 	$(exec_verbose) echo "rabbit_misc:start_cover([\"rabbit\", \"hare\"])." | $(ERL_CALL) $(ERL_CALL_OPTS) | sed -E '/^\{ok, ok\}$$/d'
@@ -254,7 +325,7 @@ virgin-other-node-tmpdir:
 		$(call node_plugins_expand_dir,$(OTHER_NODE))
 
 start-other-node: other-node-tmpdir
-	$(exec_verbose) $(call basic_script_env_settings,$(OTHER_NODE),$(OTHER_PORT)) \
+	$(exec_verbose) $(call basic_script_env_settings,$(OTHER_NODE),$(OTHER_NODE),$(OTHER_PORT)) \
 	RABBITMQ_ENABLED_PLUGINS_FILE="$(if $(OTHER_PLUGINS),$(OTHER_PLUGINS),$($(call node_enabled_plugins_file,$(OTHER_NODE))))" \
 	RABBITMQ_CONFIG_FILE="$(CURDIR)/etc/$(if $(OTHER_CONFIG),$(OTHER_CONFIG),$(OTHER_NODE))" \
 	RABBITMQ_NODE_ONLY='' \

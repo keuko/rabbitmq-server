@@ -36,4 +36,4 @@ ABSDEST=$(cd $DESTDIR && pwd)
 
 cd ${0%/*}/../priv
 
-../rebar -r create template=wmskel appid=$NAME prefix=$ABSDEST/$NAME
+../rebar create template=wmskel appid=$NAME prefix=$ABSDEST/$NAME

@@ -11,7 +11,7 @@
 %%   The Original Code is RabbitMQ Management Plugin.
 %%
 %%   The Initial Developer of the Original Code is GoPivotal, Inc.
-%%   Copyright (c) 2010-2015 Pivotal Software, Inc.  All rights reserved.
+%%   Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_mgmt_util).
@@ -52,6 +52,8 @@
 -define(MAX_PAGE_SIZE, 500).
 -record(pagination, {page = undefined, page_size = undefined,
 		     name = undefined, use_regex = undefined}).
+
+-define(MAX_RANGE, 500).
 
 %%--------------------------------------------------------------------
 
@@ -125,7 +127,11 @@ is_authorized(ReqData, Context, Username, Password, ErrorMsg, Fun) ->
                                         [Username, Msg]),
                      not_authorised(Msg, ReqData, Context)
              end,
-    case rabbit_access_control:check_user_pass_login(Username, Password) of
+    AuthProps = [{password, Password}] ++ case vhost(ReqData) of
+        VHost when is_binary(VHost) -> [{vhost, VHost}];
+        _                           -> []
+    end,
+    case rabbit_access_control:check_user_login(Username, AuthProps) of
         {ok, User = #user{tags = Tags}} ->
             IP = peer(ReqData),
             case rabbit_access_control:check_user_loopback(Username, IP) of
@@ -386,6 +392,8 @@ get_dotted_value0([Key], Item) ->
 get_dotted_value0([Key | Keys], Item) ->
     get_dotted_value0(Keys, pget_bin(list_to_binary(Key), Item, [])).
 
+pget_bin(Key, {struct, List}, Default) ->
+    pget_bin(Key, List, Default);
 pget_bin(Key, List, Default) ->
     case lists:partition(fun ({K, _V}) -> a2b(K) =:= Key end, List) of
         {[{_K, V}], _} -> V;
@@ -535,12 +543,12 @@ http_to_amqp(MethodName, ReqData, Context, Transformers, Extra) ->
 props_to_method(MethodName, Props, Transformers, Extra) ->
     Props1 = [{list_to_atom(binary_to_list(K)), V} || {K, V} <- Props],
     props_to_method(
-      MethodName, rabbit_mgmt_format:format(Props1 ++ Extra, Transformers)).
+      MethodName, rabbit_mgmt_format:format(Props1 ++ Extra, {Transformers, true})).
 
 props_to_method(MethodName, Props) ->
     Props1 = rabbit_mgmt_format:format(
                Props,
-               [{fun (Args) -> [{arguments, args(Args)}] end, [arguments]}]),
+               {fun rabbit_mgmt_format:format_args/1, true}),
     FieldNames = ?FRAMING:method_fieldnames(MethodName),
     {Res, _Idx} = lists:foldl(
                     fun (K, {R, Idx}) ->
@@ -741,6 +749,10 @@ range(ReqData) -> {range("lengths",    fun floor/2, ReqData),
 %% we use ceil() we stand a 50:50 chance of looking up the last sample
 %% in the range before we get it, and thus deriving an instantaneous
 %% rate of 0.0.
+%%
+%% Age is assumed to be > 0, Incr > 0 and (Age div Incr) <= ?MAX_RANGE.
+%% The latter condition allows us to limit the number of samples that
+%% will be sent to the client.
 range_ceil(ReqData) -> {range("lengths",    fun ceil/2,  ReqData),
                         range("msg_rates",  fun floor/2, ReqData),
                         range("data_rates", fun floor/2,  ReqData),
@@ -750,7 +762,8 @@ range(Prefix, Round, ReqData) ->
     Age0 = int(Prefix ++ "_age", ReqData),
     Incr0 = int(Prefix ++ "_incr", ReqData),
     if
-        is_integer(Age0) andalso is_integer(Incr0) ->
+        is_atom(Age0) orelse is_atom(Incr0) -> no_range;
+        (Age0 > 0) andalso (Incr0 > 0) andalso ((Age0 div Incr0) =< ?MAX_RANGE) ->
             Age = Age0 * 1000,
             Incr = Incr0 * 1000,
             Now = time_compat:os_system_time(milli_seconds),
@@ -758,8 +771,9 @@ range(Prefix, Round, ReqData) ->
             #range{first = (Last - Age),
                    last  = Last,
                    incr  = Incr};
-        true ->
-            no_range
+        true -> throw({error, invalid_range_parameters,
+                    io_lib:format("Invalid range parameters: age ~p, incr ~p",
+                                  [Age0, Incr0])})
     end.
 
 floor(TS, Interval) -> (TS div Interval) * Interval.

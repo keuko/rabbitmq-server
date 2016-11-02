@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -define(CLIENT_ID_MAXLEN, 23).
@@ -20,12 +20,16 @@
 -record(state,      { socket,
                       conn_name,
                       await_recv,
+                      deferred_recv,
+                      received_connect_frame,
                       connection_state,
                       keepalive,
                       keepalive_sup,
                       conserve,
                       parse_state,
-                      proc_state }).
+                      proc_state,
+                      connection,
+                      stats_timer }).
 
 %% processor state
 -record(proc_state, { socket,
@@ -41,11 +45,13 @@
                       channels,
                       connection,
                       exchange,
+                      adapter_info,
                       ssl_login_name,
                       %% Retained messages handler. See rabbit_mqtt_retainer_sup
                       %% and rabbit_mqtt_retainer.
                       retainer_pid,
-                      auth_state}).
+                      auth_state,
+                      send_fun}).
 
 -record(auth_state, {username,
                      user,

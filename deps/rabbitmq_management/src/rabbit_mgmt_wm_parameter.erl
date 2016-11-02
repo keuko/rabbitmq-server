@@ -11,7 +11,7 @@
 %%   The Original Code is RabbitMQ Management Plugin.
 %%
 %%   The Initial Developer of the Original Code is GoPivotal, Inc.
-%%   Copyright (c) 2010-2015 Pivotal Software, Inc.  All rights reserved.
+%%   Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_mgmt_wm_parameter).
@@ -20,6 +20,8 @@
          content_types_provided/2, content_types_accepted/2,
          is_authorized/2, allowed_methods/2, accept_content/2,
          delete_resource/2]).
+-export([finish_request/2]).
+-export([encodings_provided/2]).
 
 -import(rabbit_misc, [pget/2]).
 
@@ -31,14 +33,21 @@
 
 init(_Config) -> {ok, #context{}}.
 
+finish_request(ReqData, Context) ->
+    {ok, rabbit_mgmt_cors:set_headers(ReqData, Context), Context}.
+
 content_types_provided(ReqData, Context) ->
    {[{"application/json", to_json}], ReqData, Context}.
+
+encodings_provided(ReqData, Context) ->
+    {[{"identity", fun(X) -> X end},
+     {"gzip", fun(X) -> zlib:gzip(X) end}], ReqData, Context}.
 
 content_types_accepted(ReqData, Context) ->
    {[{"application/json", accept_content}], ReqData, Context}.
 
 allowed_methods(ReqData, Context) ->
-    {['HEAD', 'GET', 'PUT', 'DELETE'], ReqData, Context}.
+    {['HEAD', 'GET', 'PUT', 'DELETE', 'OPTIONS'], ReqData, Context}.
 
 resource_exists(ReqData, Context) ->
     {case parameter(ReqData) of
@@ -47,7 +56,8 @@ resource_exists(ReqData, Context) ->
      end, ReqData, Context}.
 
 to_json(ReqData, Context) ->
-    rabbit_mgmt_util:reply(rabbit_mgmt_format:parameter(parameter(ReqData)),
+    rabbit_mgmt_util:reply(rabbit_mgmt_format:parameter(
+        rabbit_mgmt_wm_parameters:fix_shovel_publish_properties(parameter(ReqData))),
                            ReqData, Context).
 
 accept_content(ReqData, Context = #context{user = User}) ->

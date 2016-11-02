@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ Consistent Hash Exchange.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2011-2014 GoPivotal, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_exchange_type_consistent_hash).
@@ -179,7 +179,7 @@ init() ->
 find_numbers(_Source, 0, Acc) ->
     Acc;
 find_numbers(Source, N, Acc) ->
-    Number = random:uniform(?PHASH2_RANGE) - 1,
+    Number = rand_compat:uniform(?PHASH2_RANGE) - 1,
     case mnesia:read(?TABLE, {Source, Number}, write) of
         []  -> find_numbers(Source, N-1, [Number | Acc]);
         [_] -> find_numbers(Source, N, Acc)

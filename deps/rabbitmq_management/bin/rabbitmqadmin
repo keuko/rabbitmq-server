@@ -13,11 +13,11 @@
 #   The Original Code is RabbitMQ Management Plugin.
 #
 #   The Initial Developer of the Original Code is GoPivotal, Inc.
-#   Copyright (c) 2010-2015 Pivotal Software, Inc.  All rights reserved.
+#   Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 
 import sys
 if sys.version_info[0] < 2 or (sys.version_info[0] == 2 and sys.version_info[1] < 6):
-    print("Sorry, rabbitmqadmin requires at least Python 2.6.")
+    print("Sorry, rabbitmqadmin requires at least Python 2.6 (2.7.9 when HTTPS is enabled).")
     sys.exit(1)
 
 from optparse import OptionParser, TitledHelpFormatter
@@ -26,6 +26,8 @@ import base64
 import json
 import os
 import socket
+import ssl
+import traceback
 
 if sys.version_info[0] == 2:
     from ConfigParser import ConfigParser, NoSectionError
@@ -252,6 +254,7 @@ def fmt_usage_stanza(root, verb):
 
 default_options = { "hostname"        : "localhost",
                     "port"            : "15672",
+                    "path_prefix"        : "",
                     "declare_vhost"   : "/",
                     "username"        : "guest",
                     "password"        : "guest",
@@ -291,6 +294,8 @@ def make_parser():
     add("-P", "--port", dest="port",
         help="connect to port PORT",
         metavar="PORT")
+    add("--path-prefix", dest="path_prefix",
+        help="use specific URI path prefix for the RabbitMQ HTTP API (default: blank string)")
     add("-V", "--vhost", dest="vhost",
         help="connect to vhost VHOST [default: all vhosts for list, '/' for declare]",
         metavar="VHOST")
@@ -308,6 +313,10 @@ def make_parser():
         help="PEM format key file for SSL")
     add("--ssl-cert-file", dest="ssl_cert_file",
         help="PEM format certificate file for SSL")
+    add("--ssl-ca-cert-file", dest="ssl_ca_cert_file",
+        help="PEM format CA certificate file for SSL")
+    add("--ssl-disable-hostname-verification", dest="ssl_disable_hostname_verification",
+        help="Disables peer hostname verification", default=False, action="store_true" )
     add("-f", "--format", dest="format",
         help="format for listing commands - one of [" + ", ".join(FORMATS.keys())  + "]")
     add("-S", "--sort", dest="sort", help="sort key for listing queries")
@@ -424,23 +433,46 @@ class Management:
         self.args = args
 
     def get(self, path):
-        return self.http("GET", "/api%s" % path, "")
+        return self.http("GET", "%s/api%s" % (self.options.path_prefix, path), "")
 
     def put(self, path, body):
-        return self.http("PUT", "/api%s" % path, body)
+        return self.http("PUT", "%s/api%s" % (self.options.path_prefix, path), body)
 
     def post(self, path, body):
-        return self.http("POST", "/api%s" % path, body)
+        return self.http("POST", "%s/api%s" % (self.options.path_prefix, path), body)
 
     def delete(self, path):
-        return self.http("DELETE", "/api%s" % path, "")
+        return self.http("DELETE", "%s/api%s" % (self.options.path_prefix, path), "")
+
+    def __initialize_https_connection(self, hostname, port):
+        # Python 2.7.9+
+        if hasattr(ssl, 'create_default_context'):
+            return httplib.HTTPSConnection(hostname, port,
+                                           context = self.__initialize_tls_context())
+        # Python < 2.7.8, note: those versions still have SSLv3 enabled
+        #                       and other limitations. See rabbitmq/rabbitmq-management#225
+        else:
+            print("Warning: rabbitmqadmin requires Python 2.7.9+ when HTTPS is used.")
+            return httplib.HTTPSConnection(hostname, port,
+                                           cert_file = self.options.ssl_cert_file,
+                                           key_file  = self.options.ssl_key_file)
+
+    def __initialize_tls_context(self):
+        # Python 2.7.9+ only
+        ssl_ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        ssl_ctx.options &= ~ssl.OP_NO_SSLv3
+        ssl_ctx.verify_mode = ssl.CERT_REQUIRED
+        ssl_ctx.check_hostname = not self.options.ssl_disable_hostname_verification
+        ssl_ctx.load_cert_chain(self.options.ssl_cert_file,
+                                self.options.ssl_key_file)
+        if self.options.ssl_ca_cert_file:
+            ssl_ctx.load_verify_locations(self.options.ssl_ca_cert_file)
+        return ssl_ctx
 
     def http(self, method, path, body):
         if self.options.ssl:
-            conn = httplib.HTTPSConnection(self.options.hostname,
-                                           self.options.port,
-                                           self.options.ssl_key_file,
-                                           self.options.ssl_cert_file)
+            conn = self.__initialize_https_connection(self.options.hostname,
+                                                      self.options.port)
         else:
             conn = httplib.HTTPConnection(self.options.hostname,
                                           self.options.port)
@@ -452,6 +484,7 @@ class Management:
         try:
             conn.request(method, path, body, headers)
         except socket.error as e:
+            traceback.print_exc(e)
             die("Could not connect: {0}".format(e))
         resp = conn.getresponse()
         if resp.status == 400:
@@ -528,7 +561,10 @@ class Management:
 
     def invoke_export(self):
         path = self.get_arg()
-        definitions = self.get("/definitions")
+        uri = "/definitions"
+        if self.options.vhost:
+            uri += "/%s" % quote_plus(self.options.vhost)
+        definitions = self.get(uri)
         f = open(path, 'w')
         f.write(definitions)
         f.close()
@@ -540,7 +576,10 @@ class Management:
         f = open(path, 'r')
         definitions = f.read()
         f.close()
-        self.post("/definitions", definitions)
+        uri = "/definitions"
+        if self.options.vhost:
+            uri += "/%s" % quote_plus(self.options.vhost)
+        self.post(uri, definitions)
         self.verbose("Imported definitions for %s from \"%s\""
                      % (self.options.hostname, path))
 
@@ -870,77 +909,77 @@ _rabbitmqadmin()
     fargs="--help --host --port --vhost --username --password --format --depth --sort --sort-reverse"
 
     case "${prev}" in
-	list)
-	    COMPREPLY=( $(compgen -W '""" + " ".join(LISTABLE) + """' -- ${cur}) )
+        list)
+            COMPREPLY=( $(compgen -W '""" + " ".join(LISTABLE) + """' -- ${cur}) )
             return 0
             ;;
-	show)
-	    COMPREPLY=( $(compgen -W '""" + " ".join(SHOWABLE) + """' -- ${cur}) )
+        show)
+            COMPREPLY=( $(compgen -W '""" + " ".join(SHOWABLE) + """' -- ${cur}) )
             return 0
             ;;
-	declare)
-	    COMPREPLY=( $(compgen -W '""" + " ".join(DECLARABLE.keys()) + """' -- ${cur}) )
+        declare)
+            COMPREPLY=( $(compgen -W '""" + " ".join(DECLARABLE.keys()) + """' -- ${cur}) )
             return 0
             ;;
-	delete)
-	    COMPREPLY=( $(compgen -W '""" + " ".join(DELETABLE.keys()) + """' -- ${cur}) )
+        delete)
+            COMPREPLY=( $(compgen -W '""" + " ".join(DELETABLE.keys()) + """' -- ${cur}) )
             return 0
             ;;
-	close)
-	    COMPREPLY=( $(compgen -W '""" + " ".join(CLOSABLE.keys()) + """' -- ${cur}) )
+        close)
+            COMPREPLY=( $(compgen -W '""" + " ".join(CLOSABLE.keys()) + """' -- ${cur}) )
             return 0
             ;;
-	purge)
-	    COMPREPLY=( $(compgen -W '""" + " ".join(PURGABLE.keys()) + """' -- ${cur}) )
+        purge)
+            COMPREPLY=( $(compgen -W '""" + " ".join(PURGABLE.keys()) + """' -- ${cur}) )
             return 0
             ;;
-	export)
-	    COMPREPLY=( $(compgen -f ${cur}) )
+        export)
+            COMPREPLY=( $(compgen -f ${cur}) )
             return 0
             ;;
-	import)
-	    COMPREPLY=( $(compgen -f ${cur}) )
+        import)
+            COMPREPLY=( $(compgen -f ${cur}) )
             return 0
             ;;
-	help)
+        help)
             opts="subcommands config"
-	    COMPREPLY=( $(compgen -W "${opts}"  -- ${cur}) )
+            COMPREPLY=( $(compgen -W "${opts}"  -- ${cur}) )
             return 0
             ;;
-	-H)
-	    COMPREPLY=( $(compgen -A hostname ${cur}) )
+        -H)
+            COMPREPLY=( $(compgen -A hostname ${cur}) )
             return 0
             ;;
-	--host)
-	    COMPREPLY=( $(compgen -A hostname ${cur}) )
+        --host)
+            COMPREPLY=( $(compgen -A hostname ${cur}) )
             return 0
             ;;
-	-V)
+        -V)
             opts="$(rabbitmqadmin -q -f bash list vhosts)"
-	    COMPREPLY=( $(compgen -W "${opts}"  -- ${cur}) )
+            COMPREPLY=( $(compgen -W "${opts}"  -- ${cur}) )
             return 0
             ;;
-	--vhost)
+        --vhost)
             opts="$(rabbitmqadmin -q -f bash list vhosts)"
-	    COMPREPLY=( $(compgen -W "${opts}"  -- ${cur}) )
+            COMPREPLY=( $(compgen -W "${opts}"  -- ${cur}) )
             return 0
             ;;
-	-u)
+        -u)
             opts="$(rabbitmqadmin -q -f bash list users)"
-	    COMPREPLY=( $(compgen -W "${opts}"  -- ${cur}) )
+            COMPREPLY=( $(compgen -W "${opts}"  -- ${cur}) )
             return 0
             ;;
-	--username)
+        --username)
             opts="$(rabbitmqadmin -q -f bash list users)"
-	    COMPREPLY=( $(compgen -W "${opts}"  -- ${cur}) )
+            COMPREPLY=( $(compgen -W "${opts}"  -- ${cur}) )
             return 0
             ;;
-	-f)
-	    COMPREPLY=( $(compgen -W \"""" + " ".join(FORMATS.keys()) + """\"  -- ${cur}) )
+        -f)
+            COMPREPLY=( $(compgen -W \"""" + " ".join(FORMATS.keys()) + """\"  -- ${cur}) )
             return 0
             ;;
-	--format)
-	    COMPREPLY=( $(compgen -W \"""" + " ".join(FORMATS.keys()) + """\"  -- ${cur}) )
+        --format)
+            COMPREPLY=( $(compgen -W \"""" + " ".join(FORMATS.keys()) + """\"  -- ${cur}) )
             return 0
             ;;
 
@@ -949,7 +988,7 @@ _rabbitmqadmin()
         key = l[0:len(l) - 1]
         script += "        " + key + """)
             opts="$(rabbitmqadmin -q -f bash list """ + l + """)"
-	    COMPREPLY=( $(compgen -W "${opts}"  -- ${cur}) )
+            COMPREPLY=( $(compgen -W "${opts}"  -- ${cur}) )
             return 0
             ;;
 """

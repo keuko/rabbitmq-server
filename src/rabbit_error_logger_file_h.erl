@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_error_logger_file_h).
@@ -55,6 +55,9 @@ get_depth() ->
 %% lib/stdlib/src/error_logger_file_h.erl from R14B3 was copied as
 %% init_file/2 and changed so that it opens the file in 'append' mode.
 
+%% Log rotation with empty suffix should result only in file re-opening.
+init({{File, ""}, _}) ->
+    init(File);
 %% Used only when swapping handlers in log rotation, pre OTP 18.1
 init({{File, Suffix}, []}) ->
     rotate_logs(File, Suffix),

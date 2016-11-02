@@ -1,6 +1,6 @@
 %% @author Justin Sheehy <justin@basho.com>
 %% @author Andy Gross <andy@basho.com>
-%% @copyright 2007-2014 Basho Technologies
+%% @copyright 2007-2008 Basho Technologies
 %%
 %%    Licensed under the Apache License, Version 2.0 (the "License");
 %%    you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@
 -module(webmachine_mochiweb).
 -author('Justin Sheehy <justin@basho.com>').
 -author('Andy Gross <andy@basho.com>').
--export([start/1, stop/0, stop/1, loop/2]).
+-export([start/1, stop/0, loop/2]).
 
 %% The `log_dir' option is deprecated, but remove it from the
 %% options list if it is present
@@ -32,7 +32,7 @@
 start(Options) ->
     {DispatchList, PName, DGroup, WMOptions, OtherOptions} = get_wm_options(Options),
     webmachine_router:init_routes(DGroup, DispatchList),
-    _ = [application_set_unless_env_or_undef(K, V) || {K, V} <- WMOptions],
+    [application_set_unless_env_or_undef(K, V) || {K, V} <- WMOptions],
     MochiName = list_to_atom(to_list(PName) ++ "_mochiweb"),
     LoopFun = fun(X) -> loop(DGroup, X) end,
     mochiweb_http:start([{name, MochiName}, {loop, LoopFun} | OtherOptions]).
@@ -40,10 +40,7 @@ start(Options) ->
 stop() ->
     {registered_name, PName} = process_info(self(), registered_name),
     MochiName = list_to_atom(atom_to_list(PName) ++ "_mochiweb"),
-    stop(MochiName).
-
-stop(Name) ->
-    mochiweb_http:stop(Name).
+    mochiweb_http:stop(MochiName).
 
 loop(Name, MochiReq) ->
     Req = webmachine:new_request(mochiweb, MochiReq),

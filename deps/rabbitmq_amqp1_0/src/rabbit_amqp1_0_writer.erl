@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2014 GoPivotal, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_amqp1_0_writer).
@@ -36,52 +36,48 @@
 
 %%---------------------------------------------------------------------------
 
--ifdef(use_specs).
-
--spec(start/5 ::
+-spec start
         (rabbit_net:socket(), rabbit_channel:channel_number(),
          non_neg_integer(), rabbit_types:protocol(), pid())
-        -> rabbit_types:ok(pid())).
--spec(start_link/5 ::
+        -> rabbit_types:ok(pid()).
+-spec start_link
         (rabbit_net:socket(), rabbit_channel:channel_number(),
          non_neg_integer(), rabbit_types:protocol(), pid())
-        -> rabbit_types:ok(pid())).
--spec(start/6 ::
+        -> rabbit_types:ok(pid()).
+-spec start
         (rabbit_net:socket(), rabbit_channel:channel_number(),
          non_neg_integer(), rabbit_types:protocol(), pid(), boolean())
-        -> rabbit_types:ok(pid())).
--spec(start_link/6 ::
+        -> rabbit_types:ok(pid()).
+-spec start_link
         (rabbit_net:socket(), rabbit_channel:channel_number(),
          non_neg_integer(), rabbit_types:protocol(), pid(), boolean())
-        -> rabbit_types:ok(pid())).
--spec(send_command/2 ::
-        (pid(), rabbit_framing:amqp_method_record()) -> 'ok').
--spec(send_command/3 ::
+        -> rabbit_types:ok(pid()).
+-spec send_command
+        (pid(), rabbit_framing:amqp_method_record()) -> 'ok'.
+-spec send_command
         (pid(), rabbit_framing:amqp_method_record(), rabbit_types:content())
-        -> 'ok').
--spec(send_command_sync/2 ::
-        (pid(), rabbit_framing:amqp_method_record()) -> 'ok').
--spec(send_command_sync/3 ::
+        -> 'ok'.
+-spec send_command_sync
+        (pid(), rabbit_framing:amqp_method_record()) -> 'ok'.
+-spec send_command_sync
         (pid(), rabbit_framing:amqp_method_record(), rabbit_types:content())
-        -> 'ok').
--spec(send_command_and_notify/4 ::
+        -> 'ok'.
+-spec send_command_and_notify
         (pid(), pid(), pid(), rabbit_framing:amqp_method_record())
-        -> 'ok').
--spec(send_command_and_notify/5 ::
+        -> 'ok'.
+-spec send_command_and_notify
         (pid(), pid(), pid(), rabbit_framing:amqp_method_record(),
          rabbit_types:content())
-        -> 'ok').
--spec(internal_send_command/4 ::
+        -> 'ok'.
+-spec internal_send_command
         (rabbit_net:socket(), rabbit_channel:channel_number(),
          rabbit_framing:amqp_method_record(), rabbit_types:protocol())
-        -> 'ok').
--spec(internal_send_command/6 ::
+        -> 'ok'.
+-spec internal_send_command
         (rabbit_net:socket(), rabbit_channel:channel_number(),
          rabbit_framing:amqp_method_record(), rabbit_types:content(),
          non_neg_integer(), rabbit_types:protocol())
-        -> 'ok').
-
--endif.
+        -> 'ok'.
 
 %%---------------------------------------------------------------------------
 

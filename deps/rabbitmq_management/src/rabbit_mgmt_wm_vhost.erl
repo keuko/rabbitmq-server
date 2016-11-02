@@ -11,7 +11,7 @@
 %%   The Original Code is RabbitMQ Management Plugin.
 %%
 %%   The Initial Developer of the Original Code is GoPivotal, Inc.
-%%   Copyright (c) 2010-2015 Pivotal Software, Inc.  All rights reserved.
+%%   Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_mgmt_wm_vhost).
@@ -20,6 +20,8 @@
          content_types_provided/2, content_types_accepted/2,
          is_authorized/2, allowed_methods/2, accept_content/2,
          delete_resource/2, id/1, put_vhost/2]).
+-export([finish_request/2]).
+-export([encodings_provided/2]).
 
 -import(rabbit_misc, [pget/2]).
 
@@ -30,23 +32,35 @@
 %%--------------------------------------------------------------------
 init(_Config) -> {ok, #context{}}.
 
+finish_request(ReqData, Context) ->
+    {ok, rabbit_mgmt_cors:set_headers(ReqData, Context), Context}.
+
 content_types_provided(ReqData, Context) ->
    {[{"application/json", to_json}], ReqData, Context}.
+
+encodings_provided(ReqData, Context) ->
+    {[{"identity", fun(X) -> X end},
+     {"gzip", fun(X) -> zlib:gzip(X) end}], ReqData, Context}.
 
 content_types_accepted(ReqData, Context) ->
    {[{"application/json", accept_content}], ReqData, Context}.
 
 allowed_methods(ReqData, Context) ->
-    {['HEAD', 'GET', 'PUT', 'DELETE'], ReqData, Context}.
+    {['HEAD', 'GET', 'PUT', 'DELETE', 'OPTIONS'], ReqData, Context}.
 
 resource_exists(ReqData, Context) ->
     {rabbit_vhost:exists(id(ReqData)), ReqData, Context}.
 
 to_json(ReqData, Context) ->
-    rabbit_mgmt_util:reply(
-      hd(rabbit_mgmt_db:augment_vhosts(
-           [rabbit_vhost:info(id(ReqData))], rabbit_mgmt_util:range(ReqData))),
-      ReqData, Context).
+    try
+        rabbit_mgmt_util:reply(
+          hd(rabbit_mgmt_db:augment_vhosts(
+               [rabbit_vhost:info(id(ReqData))], rabbit_mgmt_util:range(ReqData))),
+          ReqData, Context)
+    catch
+        {error, invalid_range_parameters, Reason} ->
+            rabbit_mgmt_util:bad_request(iolist_to_binary(Reason), ReqData, Context)
+    end.
 
 accept_content(ReqData, Context) ->
     Name = id(ReqData),

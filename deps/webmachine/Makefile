@@ -7,9 +7,10 @@ ERLANG_ARCH = 64
 export ERLANG_ARCH
 ERLC_OPTS = +debug_info
 export ERLC_OPTS
+ERLC_OPTS += -Dold_hash=1
 
 DEPS += mochiweb
-dep_mochiweb = git git://github.com/basho/mochiweb.git v2.9.0p1
+dep_mochiweb = git git://github.com/rabbitmq/mochiweb 845428379ed8b58eadc49aba26838d86ea809663
 COMPILE_FIRST +=
 
 

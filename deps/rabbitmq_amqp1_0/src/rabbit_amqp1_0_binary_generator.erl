@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2014 GoPivotal, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_amqp1_0_binary_generator).
@@ -21,10 +21,8 @@
 
 -include("rabbit_amqp1_0.hrl").
 
--ifdef(use_specs).
--spec(generate/1 :: (tuple()) -> iolist()).
--spec(build_frame/2 :: (int(), iolist()) -> iolist()).
--endif.
+-spec generate(tuple()) -> iolist().
+-spec build_frame(integer(), iolist()) -> iolist().
 
 -define(AMQP_FRAME_TYPE, 0).
 -define(DOFF, 2).

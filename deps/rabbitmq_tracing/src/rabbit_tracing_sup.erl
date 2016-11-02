@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_tracing_sup).
@@ -34,7 +34,7 @@ start_child(Id, Args) ->
     supervisor:start_child(
       ?SUPERVISOR,
       {Id, {rabbit_tracing_consumer_sup, start_link, [Args]},
-       temporary, ?MAX_WAIT, supervisor,
+       temporary, ?SUPERVISOR_WAIT, supervisor,
        [rabbit_tracing_consumer_sup]}).
 
 stop_child(Id) ->
@@ -46,5 +46,5 @@ stop_child(Id) ->
 
 init([]) -> {ok, {{one_for_one, 3, 10},
                   [{traces, {rabbit_tracing_traces, start_link, []},
-                    transient, ?MAX_WAIT, worker,
+                    transient, ?WORKER_WAIT, worker,
                     [rabbit_tracing_traces]}]}}.

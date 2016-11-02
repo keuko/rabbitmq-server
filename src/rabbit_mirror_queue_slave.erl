@@ -120,7 +120,7 @@ handle_go(Q = #amqqueue{name = QName}) ->
                    Self, {rabbit_amqqueue, set_ram_duration_target, [Self]}),
             {ok, BQ} = application:get_env(backing_queue_module),
             Q1 = Q #amqqueue { pid = QPid },
-            ok = rabbit_queue_index:erase(QName), %% For crash recovery
+            _ = BQ:delete_crashed(Q), %% For crash recovery
             BQS = bq_init(BQ, Q1, new),
             State = #state { q                   = Q1,
                              gm                  = GM,
@@ -542,9 +542,8 @@ confirm_messages(MsgIds, State = #state { msg_id_status = MS }) ->
 handle_process_result({ok,   State}) -> noreply(State);
 handle_process_result({stop, State}) -> {stop, normal, State}.
 
--ifdef(use_specs).
--spec(promote_me/2 :: ({pid(), term()}, #state{}) -> no_return()).
--endif.
+-spec promote_me({pid(), term()}, #state{}) -> no_return().
+
 promote_me(From, #state { q                   = Q = #amqqueue { name = QName },
                           gm                  = GM,
                           backing_queue       = BQ,
@@ -741,6 +740,7 @@ confirm_sender_death(Pid) ->
 
 forget_sender(_, running)                        -> false;
 forget_sender(down_from_gm, down_from_gm)        -> false; %% [1]
+forget_sender(down_from_ch, down_from_ch)        -> false;
 forget_sender(Down1, Down2) when Down1 =/= Down2 -> true.
 
 %% [1] If another slave goes through confirm_sender_death/1 before we

@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_upgrade).
@@ -26,14 +26,11 @@
 
 %% -------------------------------------------------------------------
 
--ifdef(use_specs).
-
--spec(maybe_upgrade_mnesia/0 :: () -> 'ok').
--spec(maybe_upgrade_local/0 :: () -> 'ok' |
-                                     'version_not_available' |
-                                     'starting_from_scratch').
-
--endif.
+-spec maybe_upgrade_mnesia() -> 'ok'.
+-spec maybe_upgrade_local() ->
+          'ok' |
+          'version_not_available' |
+          'starting_from_scratch'.
 
 %% -------------------------------------------------------------------
 

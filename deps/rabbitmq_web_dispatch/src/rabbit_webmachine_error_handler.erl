@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2010-2014 GoPivotal, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 %% We need to ensure all responses are application/json; anything
@@ -28,8 +28,13 @@
 
 render_error(Code, Req, Reason) ->
     case Req:has_response_body() of
-        {true, _}  -> maybe_log(Req, Reason),
-                      Req:response_body();
+        {true, _}  ->
+            maybe_log(Req, Reason),
+            {Body, ReqState0} = Req:response_body(),
+            {ok, ReqState} =
+                webmachine_request:remove_response_header("Content-Encoding",
+                                                          ReqState0),
+            {Body, ReqState};
         {false, _} -> render_error_body(Code, Req:trim_state(), Reason)
     end.
 
@@ -37,7 +42,8 @@ render_error_body(404,  Req, _)      -> error_body(404,  Req, "Not Found");
 render_error_body(Code, Req, Reason) -> error_body(Code, Req, Reason).
 
 error_body(Code, Req, Reason) ->
-    {ok, ReqState} = Req:add_response_header("Content-Type","application/json"),
+    {ok, _ReqState0} = Req:add_response_header("Content-Type","application/json"),
+    {ok, ReqState} = Req:remove_response_header("Content-Encoding"),
     case Code of
         500 -> maybe_log(Req, Reason);
         _   -> ok

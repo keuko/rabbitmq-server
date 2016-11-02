@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_channel_interceptor).
@@ -20,8 +20,6 @@
 -include("rabbit.hrl").
 
 -export([init/1, intercept_in/3]).
-
--ifdef(use_specs).
 
 -type(method_name() :: rabbit_framing:amqp_method_name()).
 -type(original_method() :: rabbit_framing:amqp_method_record()).
@@ -39,17 +37,6 @@
     {processed_method(), processed_content()} |
     rabbit_misc:channel_or_connection_exit().
 -callback applies_to() -> list(method_name()).
-
--else.
-
--export([behaviour_info/1]).
-
-behaviour_info(callbacks) ->
-    [{description, 0}, {init, 1}, {intercept, 3}, {applies_to, 0}];
-behaviour_info(_Other) ->
-    undefined.
-
--endif.
 
 init(Ch) ->
     Mods = [M || {_, M} <- rabbit_registry:lookup_all(channel_interceptor)],

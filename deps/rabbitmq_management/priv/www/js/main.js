@@ -83,7 +83,12 @@ function start_app() {
     // Note for when we upgrade: HashLocationProxy has become
     // DefaultLocationProxy in later versions, but otherwise the issue
     // remains.
-    Sammy.HashLocationProxy._interval = null;
+
+    // updated to the version  0.7.6 this _interval = null is fixed
+    // just leave the history here.
+    //Sammy.HashLocationProxy._interval = null;
+
+
     app = new Sammy.Application(dispatcher);
     app.run();
     var url = this.location.toString();
@@ -134,10 +139,13 @@ function update_vhosts() {
 
 function setup_extensions() {
     var extensions = JSON.parse(sync_get('/extensions'));
-    extension_count = extensions.length;
+    extension_count = 0;
     for (var i in extensions) {
         var extension = extensions[i];
-        dynamic_load(extension.javascript);
+        if ($.isPlainObject(extension) && extension.hasOwnProperty("javascript")) {
+            dynamic_load(extension.javascript);
+            extension_count++;
+        }
     }
 }
 
@@ -428,6 +436,16 @@ function apply_state(reqs) {
                 qs.push(prefix + '_incr=' + parseInt(range[1]));
             }
         }
+        /* Unknown options are used as query parameters as is. */
+        Object.keys(options).forEach(function (key) {
+          /* Skip known keys we already handled and undefined parameters. */
+          if (key == 'vhost' || key == 'sort' || key == 'ranges')
+            return;
+          if (!key || options[key] == undefined)
+            return;
+
+          qs.push(esc(key) + '=' + esc(options[key]));
+        });
         qs = qs.join('&');
         if (qs != '')
             if (req2.indexOf("?page=") >- 1)
@@ -456,6 +474,10 @@ function show_popup(type, text, mode) {
     }
 
     hide();
+    if ($(cssClass).length && type === 'help' &&
+        $(cssClass).text().indexOf(text.replace(/<[^>]*>/g, '')) != -1 ) {
+        return;
+    }
     $('h1').after(format('error-popup', {'type': type, 'text': text}));
     if (mode == 'fade') {
         $(cssClass).fadeIn(200);
@@ -468,6 +490,17 @@ function show_popup(type, text, mode) {
         hide();
     });
 }
+
+
+
+
+   function submit_import(form) {
+       var idx = $("select[name='vhost-upload'] option:selected").index()
+       var vhost = ((idx <=0 ) ? "" : "/" + esc($("select[name='vhost-upload'] option:selected").val()));
+       form.action ="api/definitions" + vhost + '?auth=' + get_pref('auth');
+       form.submit();
+     };
+
 
 function postprocess() {
     $('form.confirm').submit(function() {
@@ -488,13 +521,17 @@ function postprocess() {
             }
         });
     $('#download-definitions').click(function() {
-            var path = 'api/definitions?download=' +
+            var idx = $("select[name='vhost-download'] option:selected").index()
+            var vhost = ((idx <=0 ) ? "" : "/" + esc($("select[name='vhost-download'] option:selected").val()));
+            var path = 'api/definitions' + vhost + '?download=' +
                 esc($('#download-filename').val()) +
                 '&auth=' + get_pref('auth');
             window.location = path;
             setTimeout('app.run()');
             return false;
         });
+
+
     $('.update-manual').click(function() {
             update_manual($(this).attr('for'), $(this).attr('query'));
         });
@@ -574,9 +611,9 @@ function postprocess() {
 
 function url_pagination_template(template, defaultPage, defaultPageSize){
    return  '/' + template + '?page=' + fmt_page_number_request(template, defaultPage) +
-                       '&page_size=' +  fmt_page_size_request(template, defaultPageSize) + 
+                       '&page_size=' +  fmt_page_size_request(template, defaultPageSize) +
                        '&name=' + fmt_filter_name_request(template, "") +
-                       '&use_regex=' + ((fmt_regex_request(template,"") == "checked" ? 'true' : 'false'));  
+                       '&use_regex=' + ((fmt_regex_request(template,"") == "checked" ? 'true' : 'false'));
 
 }
 
@@ -584,7 +621,7 @@ function url_pagination_template(template, defaultPage, defaultPageSize){
 function stored_page_info(template, page_start){
     var pageSize = $('#' + template+'-pagesize').val();
     var filterName = $('#' + template+'-name').val();
-    
+
     store_pref(template + '_current_page_number', page_start);
     if (filterName != null && filterName != undefined) {
         store_pref(template + '_current_filter_name', filterName);
@@ -599,7 +636,7 @@ function stored_page_info(template, page_start){
     if (pageSize != null && pageSize != undefined) {
         store_pref(template + '_current_page_size', pageSize);
     }
-         
+
 }
 
 function update_pages(template, page_start){
@@ -626,21 +663,35 @@ function renderExchanges() {
 }
 
 function renderConnections() {
-    render({'connections': {path:  url_pagination_template('connections', 1, 100), 
+    render({'connections': {path:  url_pagination_template('connections', 1, 100),
                             options: {sort:true}}},
                             'connections', '#/connections');
 }
 
 function renderChannels() {
-    render({'channels': {path:  url_pagination_template('channels', 1, 100), 
+    render({'channels': {path:  url_pagination_template('channels', 1, 100),
                         options: {sort:true}}},
                         'channels', '#/channels');
 }
 
 
+function update_pages_from_ui(sender) {
+    update_pages(current_template, !!$(sender).attr('data-page-start') ? $(sender).attr('data-page-start') : $(sender).val());
+}
+
 function postprocess_partial() {
-    $('.pagination_class').change(function() {
-        update_pages(current_template, !!$(this).attr('data-page-start') ? $(this).attr('data-page-start') : $(this).val());
+    $('.pagination_class_input').keypress(function(e) {
+        if (e.keyCode == 13) {
+            update_pages_from_ui(this);
+        }
+    });
+
+    $('.pagination_class_checkbox').click(function(e) {
+        update_pages_from_ui(this);
+    });
+
+    $('.pagination_class_select').change(function(e) {
+        update_pages_from_ui(this);
     });
 
     setup_visibility();
@@ -655,7 +706,6 @@ function postprocess_partial() {
             }
             update();
         });
-    $('.help').html('(?)');
     // TODO remove this hack when we get rid of "updatable"
     if ($('#filter-warning-show').length > 0) {
         $('#filter-truncate').addClass('filter-warning');
@@ -1054,9 +1104,9 @@ function check_bad_response(req, full_page_404) {
         var error = JSON.parse(req.responseText).error;
         if (typeof(error) != 'string') error = JSON.stringify(error);
 
-       
-
-        if (error == 'page_out_of_range') {
+        if (error == 'bad_request' || error == 'not_found') {
+            show_popup('warn', reason);
+        } else if (error == 'page_out_of_range') {
             var seconds = 60;
             if (last_page_out_of_range_error > 0)
                     seconds = (new Date().getTime() - last_page_out_of_range_error.getTime())/1000;
@@ -1065,13 +1115,14 @@ function check_bad_response(req, full_page_404) {
                  var contexts = ["queues", "exchanges", "connections", "channels"];
                  var matches = /api\/(.*)\?/.exec(req.responseURL);
                  if (matches != null && matches.length > 1) {
-                     for (item of contexts) {
+                     contexts.forEach(function(item) {
                          if (matches[1].indexOf(item) == 0) {update_pages(item, 1)};
-                     }
-                 }
-                 last_page_out_of_range_error = new Date()
+                     });
+                 } else update_pages(current_template, 1);
+
+                 last_page_out_of_range_error = new Date();
             }
-    }
+        }
     }
     else if (req.status == 408) {
         update_status('timeout');

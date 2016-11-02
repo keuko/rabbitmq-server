@@ -11,13 +11,12 @@
 %%   The Original Code is RabbitMQ Management Console.
 %%
 %%   The Initial Developer of the Original Code is GoPivotal, Inc.
-%%   Copyright (c) 2010-2015 Pivotal Software, Inc.  All rights reserved.
+%%   Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -record(context, {user,
                   password = none,
                   impl}). % storage for a context of the resource handler
 -record(range, {first, last, incr}).
--record(stats, {diffs, base}).
 
 -define(AUTH_REALM, "Basic realm=\"RabbitMQ Management\"").

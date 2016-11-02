@@ -11,10 +11,26 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_policy).
+
+%% Policies is a way to apply optional arguments ("x-args")
+%% to exchanges and queues in bulk, using name matching.
+%%
+%% Only one policy can apply to a given queue or exchange
+%% at a time. Priorities help determine what policy should
+%% take precedence.
+%%
+%% Policies build on runtime parameters. Policy-driven parameters
+%% are well known and therefore validated.
+%%
+%% See also:
+%%
+%%  * rabbit_runtime_parameters
+%%  * rabbit_policies
+%%  * rabbit_registry
 
 %% TODO specs
 
@@ -205,11 +221,11 @@ validate(_VHost, <<"policy">>, Name, Term, _User) ->
       Name, policy_validation(), Term).
 
 notify(VHost, <<"policy">>, Name, Term) ->
-    rabbit_event:notify(policy_set, [{name, Name} | Term]),
+    rabbit_event:notify(policy_set, [{name, Name}, {vhost, VHost} | Term]),
     update_policies(VHost).
 
 notify_clear(VHost, <<"policy">>, Name) ->
-    rabbit_event:notify(policy_cleared, [{name, Name}]),
+    rabbit_event:notify(policy_cleared, [{name, Name}, {vhost, VHost}]),
     update_policies(VHost).
 
 %%----------------------------------------------------------------------------
@@ -226,8 +242,10 @@ update_policies(VHost) ->
                  fun() ->
                          [mnesia:lock({table, T}, write) || T <- Tabs], %% [1]
                          case catch list(VHost) of
-                             {error, {no_such_vhost, _}} ->
-                                 ok; %% [2]
+                             {'EXIT', {throw, {error, {no_such_vhost, _}}}} ->
+                                 {[], []}; %% [2]
+                             {'EXIT', Exit} ->
+                                 exit(Exit);
                              Policies ->
                                  {[update_exchange(X, Policies) ||
                                       X <- rabbit_exchange:list(VHost)],

@@ -1,4 +1,4 @@
-UPSTREAM_GIT=https://git.eclipse.org/gitroot/paho/org.eclipse.paho.mqtt.java.git
+UPSTREAM_GIT=https://github.com/eclipse/paho.mqtt.java
 REVISION=00b5b2f99ae8410b7d96d106e080a092c5f92546
 
 JC=javac
@@ -22,7 +22,13 @@ endef
 
 .PHONY: test
 test: build_java_amqp
-	ant test -Dhostname=$(HOSTNAME) -Dcerts.dir=$(SSL_CERTS_DIR)
+	ant test \
+		-Dhostname=$(HOSTNAME) \
+		-Dcerts.dir=$(SSL_CERTS_DIR) \
+		-Dmqtt.ssl.port=$(MQTT_SSL_PORT) \
+		-Dmqtt.port=$(MQTT_PORT) \
+		-Damqp.port=$(AMQP_PORT) \
+		-Dbuild.out=$(DATA_DIR)/build
 
 clean:
 	ant clean

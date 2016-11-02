@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(tcp_listener).
@@ -57,16 +57,12 @@
 
 %%----------------------------------------------------------------------------
 
--ifdef(use_specs).
+-type mfargs() :: {atom(), atom(), [any()]}.
 
--type(mfargs() :: {atom(), atom(), [any()]}).
-
--spec(start_link/5 ::
+-spec start_link
         (inet:ip_address(), inet:port_number(),
          mfargs(), mfargs(), string()) ->
-                           rabbit_types:ok_pid_or_error()).
-
--endif.
+                           rabbit_types:ok_pid_or_error().
 
 %%--------------------------------------------------------------------
 

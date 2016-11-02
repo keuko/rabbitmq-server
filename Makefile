@@ -21,7 +21,8 @@ EXTRA_SOURCES += $(USAGES_ERL)
 .DEFAULT_GOAL = all
 $(PROJECT).d:: $(EXTRA_SOURCES)
 
-DEP_PLUGINS = rabbit_common/mk/rabbitmq-run.mk \
+DEP_PLUGINS = rabbit_common/mk/rabbitmq-build.mk \
+	      rabbit_common/mk/rabbitmq-run.mk \
 	      rabbit_common/mk/rabbitmq-dist.mk \
 	      rabbit_common/mk/rabbitmq-tools.mk
 
@@ -41,6 +42,7 @@ DISTRIBUTED_DEPS := rabbitmq_amqp1_0 \
 		    rabbitmq_event_exchange \
 		    rabbitmq_federation \
 		    rabbitmq_federation_management \
+		    rabbitmq_jms_topic_exchange \
 		    rabbitmq_management \
 		    rabbitmq_management_agent \
 		    rabbitmq_management_visualiser \
@@ -50,7 +52,9 @@ DISTRIBUTED_DEPS := rabbitmq_amqp1_0 \
 		    rabbitmq_shovel \
 		    rabbitmq_shovel_management \
 		    rabbitmq_stomp \
+		    rabbitmq_top \
 		    rabbitmq_tracing \
+		    rabbitmq_trust_store \
 		    rabbitmq_web_dispatch \
 		    rabbitmq_web_stomp \
 		    rabbitmq_web_stomp_examples
@@ -63,6 +67,9 @@ ifneq ($(wildcard git-revisions.txt),)
 DEPS += $(DISTRIBUTED_DEPS)
 endif
 endif
+
+# FIXME: Remove rabbitmq_test as TEST_DEPS from here for now.
+TEST_DEPS := amqp_client meck $(filter-out rabbitmq_test,$(TEST_DEPS))
 
 include erlang.mk
 
@@ -82,12 +89,6 @@ ifdef CREDIT_FLOW_TRACING
 RMQ_ERLC_OPTS += -DCREDIT_FLOW_TRACING=true
 endif
 
-ERTS_VER := $(shell erl -version 2>&1 | sed -E 's/.* version //')
-USE_SPECS_MIN_ERTS_VER = 5.11
-ifeq ($(call compare_version,$(ERTS_VER),$(USE_SPECS_MIN_ERTS_VER),>=),true)
-RMQ_ERLC_OPTS += -Duse_specs
-endif
-
 ifndef USE_PROPER_QC
 # PropEr needs to be installed for property checking
 # http://proper.softlab.ntua.gr/
@@ -95,32 +96,10 @@ USE_PROPER_QC := $(shell $(ERL) -eval 'io:format({module, proper} =:= code:ensur
 RMQ_ERLC_OPTS += $(if $(filter true,$(USE_PROPER_QC)),-Duse_proper_qc)
 endif
 
-ERLC_OPTS += $(RMQ_ERLC_OPTS)
-
 clean:: clean-extra-sources
 
 clean-extra-sources:
 	$(gen_verbose) rm -f $(EXTRA_SOURCES)
-
-# --------------------------------------------------------------------
-# Tests.
-# --------------------------------------------------------------------
-
-TARGETS_IN_RABBITMQ_TEST = $(patsubst %,%-in-rabbitmq_test,\
-			   tests full unit lite conformance16 lazy-vq-tests)
-
-.PHONY: $(TARGETS_IN_RABBITMQ_TEST)
-
-TEST_ERLC_OPTS += $(RMQ_ERLC_OPTS)
-
-tests:: tests-in-rabbitmq_test
-
-$(TARGETS_IN_RABBITMQ_TEST): $(ERLANG_MK_RECURSIVE_TEST_DEPS_LIST) \
-    test-build $(DEPS_DIR)/rabbitmq_test
-	$(MAKE) -C $(DEPS_DIR)/rabbitmq_test \
-		IS_DEP=1 \
-		RABBITMQ_BROKER_DIR=$(RABBITMQ_BROKER_DIR) \
-		$(patsubst %-in-rabbitmq_test,%,$@)
 
 # --------------------------------------------------------------------
 # Documentation.
@@ -132,7 +111,8 @@ $(TARGETS_IN_RABBITMQ_TEST): $(ERLANG_MK_RECURSIVE_TEST_DEPS_LIST) \
 	    grep -E '^xmlto version 0\.0\.([0-9]|1[1-8])$$' >/dev/null || \
 	    opt='--stringparam man.indent.verbatims=0' ; \
 	xsltproc --novalid $(DOCS_DIR)/examples-to-end.xsl $< > $<.tmp && \
-	(xmlto -o $(DOCS_DIR) $$opt man $< 2>&1 | (grep -qv '^Note: Writing' || :)) && \
+	xmlto -vv -o $(DOCS_DIR) $$opt man $< 2>&1 | (grep -v '^Note: Writing' || :) && \
+	test -f $@ && \
 	rm $<.tmp
 
 # Use tmp files rather than a pipeline so that we get meaningful errors
@@ -220,6 +200,7 @@ RSYNC_FLAGS += -a $(RSYNC_V)		\
 	       --exclude 'plugins/'			\
 	       --exclude '$(notdir $(DIST_DIR))/'	\
 	       --exclude '/$(notdir $(PACKAGES_DIR))/'	\
+	       --exclude '/PACKAGES/'			\
 	       --exclude '/cowboy/doc/'			\
 	       --exclude '/cowboy/examples/'		\
 	       --exclude '/rabbitmq_amqp1_0/test/swiftmq/build/'\
@@ -388,12 +369,12 @@ install-man: manpages
 	$(inst_verbose) sections=$$(ls -1 docs/*.[1-9] \
 		| sed -E 's/.*\.([1-9])$$/\1/' | uniq | sort); \
 	for section in $$sections; do \
-                mkdir -p $(DESTDIR)$(MANDIR)/man$$section; \
-                for manpage in $(DOCS_DIR)/*.$$section; do \
-                        gzip < $$manpage \
+		mkdir -p $(DESTDIR)$(MANDIR)/man$$section; \
+		for manpage in $(DOCS_DIR)/*.$$section; do \
+			gzip < $$manpage \
 			 > $(DESTDIR)$(MANDIR)/man$$section/$$(basename $$manpage).gz; \
-                done; \
-        done
+		done; \
+	done
 
 install-windows: install-windows-erlapp install-windows-scripts install-windows-docs
 

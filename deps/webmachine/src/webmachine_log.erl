@@ -1,4 +1,4 @@
-%% Copyright (c) 2011-2014 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2011-2012 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -19,7 +19,6 @@
 -module(webmachine_log).
 
 -include("webmachine_logger.hrl").
--include("wm_reqdata.hrl").
 
 -export([add_handler/2,
          call/2,
@@ -33,18 +32,19 @@
          fmtnow/0,
          log_access/1,
          log_close/3,
-         log_error/1,
-         log_error/3,
-         log_info/1,
          log_open/1,
          log_open/2,
          log_write/2,
-         maybe_rotate/5,
+         maybe_rotate/3,
          month/1,
          refresh/2,
          suffix/1,
          zeropad/2,
          zone/0]).
+
+-record(state, {hourstamp :: non_neg_integer(),
+                filename :: string(),
+                handle :: file:io_device()}).
 
 %% @doc Add a handler to receive log events
 -type add_handler_result() :: ok | {'EXIT', term()} | term().
@@ -67,7 +67,7 @@ call(Mod, Msg, Timeout) ->
 
 %% @doc Return a four-tuple containing year, month, day, and hour
 %% of the current time.
--type datehour() :: {non_neg_integer(), 1..12, 1..31, 0..23}.
+-type datehour() :: {calendar:year(), calendar:month(), calendar:day(), calendar:hour()}.
 -spec datehour() -> datehour().
 datehour() ->
     datehour(os:timestamp()).
@@ -131,64 +131,44 @@ log_access(#wm_log_data{}=LogData) ->
 %% @doc Close a log file.
 -spec log_close(atom(), string(), file:io_device()) -> ok | {error, term()}.
 log_close(Mod, Name, FD) ->
-    error_logger:info_msg("~p: closing log file: ~s~n", [Mod, Name]),
+    error_logger:info_msg("~p: closing log file: ~p~n", [Mod, Name]),
     file:close(FD).
 
-%% @doc Notify registered log event handler of an error event.
--spec log_error(iolist()) -> ok.
-log_error(LogMsg) ->
-    gen_event:sync_notify(?EVENT_LOGGER, {log_error, LogMsg}).
-
-%% @doc Notify registered log event handler of an error event.
--spec log_error(pos_integer(), #wm_reqdata{}, term()) -> ok.
-log_error(Code, Req, Reason) ->
-    gen_event:sync_notify(?EVENT_LOGGER, {log_error, Code, Req, Reason}).
-
-%% @doc Notify registered log event handler of an info event.
--spec log_info(iolist()) -> ok.
-log_info(LogMsg) ->
-    gen_event:sync_notify(?EVENT_LOGGER, {log_info, LogMsg}).
-
 %% @doc Open a new log file for writing
--spec log_open(string()) -> {file:io_device(), datehour()}.
+-spec log_open(string()) -> {file:io_device(), non_neg_integer()}.
 log_open(FileName) ->
     DateHour = datehour(),
     {log_open(FileName, DateHour), DateHour}.
 
 %% @doc Open a new log file for writing
--spec log_open(string(), datehour()) -> file:io_device().
+-spec log_open(string(), non_neg_integer()) -> file:io_device().
 log_open(FileName, DateHour) ->
     LogName = FileName ++ suffix(DateHour),
     error_logger:info_msg("opening log file: ~p~n", [LogName]),
-    ok = filelib:ensure_dir(LogName),
+    filelib:ensure_dir(LogName),
     {ok, FD} = file:open(LogName, [read, write, raw]),
     {ok, Location} = file:position(FD, eof),
     fix_log(FD, Location),
-    ok = file:truncate(FD),
+    file:truncate(FD),
     FD.
 
 -spec log_write(file:io_device(), iolist()) -> ok | {error, term()}.
 log_write(FD, IoData) ->
-    file:write(FD, IoData).
+    file:write(FD, lists:flatten(IoData)).
 
 %% @doc Rotate a log file if the hour it represents
 %% has passed.
--spec maybe_rotate(atom(), string(), file:io_device(), erlang:timestamp(), datehour()) ->
-                          {datehour(), file:io_device()}.
-maybe_rotate(Mod, FileName, Handle, Time, Hour) ->
-    Rotate = datehour(Time) == Hour,
-    maybe_rotate(Mod, FileName, Handle, Time, Hour, Rotate).
-
--spec maybe_rotate(atom(), string(), file:io_device(), erlang:timestamp(), datehour(), boolean()) ->
-                          {datehour(), file:io_device()}.
-maybe_rotate(_Mod, _FileName, Handle, _Time, Hour, true) ->
-    {Hour, Handle};
-maybe_rotate(Mod, FileName, Handle, Time, _Hour, false) ->
-    NewHour = datehour(Time),
-    {ok,_} = defer_refresh(Mod),
-    ok = log_close(Mod, FileName, Handle),
-    NewHandle = log_open(FileName, NewHour),
-    {NewHour, NewHandle}.
+-spec maybe_rotate(atom(), erlang:timestamp(), #state{}) -> #state{}.
+maybe_rotate(Mod, Time, State) ->
+    ThisHour = datehour(Time),
+    if ThisHour == State#state.hourstamp ->
+            State;
+       true ->
+            defer_refresh(Mod),
+            log_close(Mod, State#state.filename, State#state.handle),
+            Handle = log_open(State#state.filename, ThisHour),
+            State#state{hourstamp=ThisHour, handle=Handle}
+    end.
 
 %% @doc Convert numeric month value to the abbreviation
 -spec month(1..12) -> string().
@@ -252,7 +232,7 @@ zone() ->
 
 %% Ugly reformatting code to get times like +0000 and -1300
 
--spec zone(float()) -> string().
+-spec zone(integer()) -> string().
 zone(Val) when Val < 0 ->
     io_lib:format("-~4..0w", [trunc(abs(Val))]);
 zone(Val) when Val >= 0 ->

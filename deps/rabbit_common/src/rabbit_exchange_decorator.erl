@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_exchange_decorator).
@@ -28,8 +28,6 @@
 %%
 %% It's possible in the future we might make decorators
 %% able to manipulate messages as they are published.
-
--ifdef(use_specs).
 
 -type(tx() :: 'transaction' | 'none').
 -type(serial() :: pos_integer() | tx()).
@@ -68,19 +66,6 @@
 %% Whether the decorator wishes to receive callbacks for the exchange
 %% none:no callbacks, noroute:all callbacks except route, all:all callbacks
 -callback active_for(rabbit_types:exchange()) -> 'none' | 'noroute' | 'all'.
-
--else.
-
--export([behaviour_info/1]).
-
-behaviour_info(callbacks) ->
-    [{description, 0}, {serialise_events, 1}, {create, 2}, {delete, 3},
-     {policy_changed, 2}, {add_binding, 3}, {remove_bindings, 3},
-     {route, 2}, {active_for, 1}];
-behaviour_info(_Other) ->
-    undefined.
-
--endif.
 
 %%----------------------------------------------------------------------------
 

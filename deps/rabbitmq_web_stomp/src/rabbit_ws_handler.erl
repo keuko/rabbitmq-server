@@ -36,14 +36,30 @@
 init(_, _Req, _Opts) ->
     {upgrade, protocol, cowboy_websocket}.
 
-websocket_init(_TransportName, Req, [{type, FrameType}]) ->
+websocket_init(_TransportName, Req0, [{type, FrameType}]) ->
+    Req = case cowboy_req:header(<<"sec-websocket-protocol">>, Req0) of
+        {undefined, _} -> Req0;
+        {ProtocolHd, _} ->
+            Protocols = parse_sec_websocket_protocol_req(ProtocolHd),
+            case filter_stomp_protocols(Protocols) of
+                [] -> Req0;
+                [StompProtocol|_] ->
+                    cowboy_req:set_resp_header(<<"sec-websocket-protocol">>,
+                        StompProtocol, Req0)
+            end
+    end,
     {Peername, _} = cowboy_req:peer(Req),
     [Socket, Transport] = cowboy_req:get([socket, transport], Req),
     {ok, Sockname} = Transport:sockname(Socket),
+    Headers = case cowboy_req:header(<<"authorization">>, Req) of
+        {undefined, _} -> [];
+        {AuthHd, _}    -> [{authorization, binary_to_list(AuthHd)}]
+    end,
     Conn = {?MODULE, self(), [
         {socket, Socket},
         {peername, Peername},
-        {sockname, Sockname}]},
+        {sockname, Sockname},
+        {headers, Headers}]},
     {ok, _Sup, Pid} = rabbit_ws_sup:start_client({Conn, heartbeat}),
     {ok, Req, #state{pid=Pid, type=FrameType}}.
 
@@ -66,6 +82,25 @@ websocket_info(_Info, Req, State) ->
 websocket_terminate(_Reason, _Req, #state{pid=Pid}) ->
     rabbit_ws_client:sockjs_closed(Pid),
     ok.
+
+%% When moving to Cowboy 2, this code should be replaced
+%% with a simple call to cow_http_hd:parse_sec_websocket_protocol_req/1.
+
+parse_sec_websocket_protocol_req(Bin) ->
+    Protocols = binary:split(Bin, [<<$,>>, <<$\s>>], [global]),
+    [P || P <- Protocols, P =/= <<>>].
+
+%% The protocols v10.stomp, v11.stomp and v12.stomp are registered
+%% at IANA: https://www.iana.org/assignments/websocket/websocket.xhtml
+
+filter_stomp_protocols(Protocols) ->
+    lists:reverse(lists:sort(lists:filter(
+        fun(<< "v1", C, ".stomp">>)
+            when C =:= $2; C =:= $1; C =:= $0 -> true;
+           (_) ->
+            false
+        end,
+        Protocols))).
 
 %% SockJS connection handling.
 

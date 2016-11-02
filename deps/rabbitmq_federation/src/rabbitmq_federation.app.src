@@ -1,6 +1,6 @@
 {application, rabbitmq_federation,
  [{description, "RabbitMQ Federation"},
-  {vsn, "3.6.0"},
+  {vsn, "3.6.5"},
   {modules, []},
   {registered, []},
   {mod, {rabbit_federation_app, []}},
