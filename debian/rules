@@ -28,8 +28,8 @@ override_dh_auto_install:
 		$(DEB_DESTDIR)$(PREFIX)/lib/ocf/resource.d/rabbitmq/rabbitmq-server-ha
 
 	# Unlocalify
-	mkdir -p $(DEB_DESTDIR)$(PREFIX)/bin
-	mv $(DEB_DESTDIR)$(PREFIX)/local/lib/erlang/bin/* $(DEB_DESTDIR)$(PREFIX)/bin
+	mkdir -p $(DEB_DESTDIR)$(PREFIX)/lib/rabbitmq/bin
+	mv $(DEB_DESTDIR)$(PREFIX)/local/lib/erlang/bin/* $(DEB_DESTDIR)$(PREFIX)/lib/rabbitmq/bin
 	mkdir -p $(DEB_DESTDIR)$(PREFIX)/sbin
 	mv $(DEB_DESTDIR)$(PREFIX)/local/lib/erlang/lib/rabbitmq_server-3.6.5/sbin/* $(DEB_DESTDIR)$(PREFIX)/sbin
 	rm -rf $(DEB_DESTDIR)$(PREFIX)/local
