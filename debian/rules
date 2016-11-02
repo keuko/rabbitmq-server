@@ -16,6 +16,8 @@ override_dh_auto_build:
 override_dh_auto_test:
 	echo "Disabled tests, as they download from github"
 
+export PREFIX RMQ_ROOTDIR
+
 override_dh_auto_install: PREFIX = /usr
 override_dh_auto_install: RMQ_ROOTDIR = $(PREFIX)/lib/rabbitmq
 override_dh_auto_install: RMQ_ERLAPP_DIR = $(RMQ_ROOTDIR)/lib/rabbitmq_server-$(VERSION)
