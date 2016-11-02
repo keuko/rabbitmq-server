@@ -31,6 +31,10 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 		chown rabbitmq:rabbitmq /etc/rabbitmq/enabled_plugins
 	fi
 
+	mkdir -p /var/lib/rabbitmq/mnesia
+	chmod 750 /var/lib/rabbitmq/mnesia
+	chmod -R o-rwx,g-w /var/lib/rabbitmq/mnesia
+
 	chown -R rabbitmq:rabbitmq /var/lib/rabbitmq
 	chown -R rabbitmq:rabbitmq /var/log/rabbitmq
 
