@@ -17,6 +17,7 @@ rabbitmq-server (3.6.5-1) UNRELEASED; urgency=medium
   * Update of debian/copyright for the new deps/* path from upstream, updated
     debian/* info and fixed order.
   * Copy some stuff from the upstream pacakging in debian/rules.
+  * Runtime depends on lsb-base.
 
   [ Ondřej Nový ]
   * Fixed VCS URLs (https).
