@@ -1,4 +1,4 @@
-rabbitmq-server (3.6.0-1) UNRELEASED; urgency=medium
+rabbitmq-server (3.6.5-1) UNRELEASED; urgency=medium
 
   [ James Page ]
   * New upstream release (Closes: #812377).
