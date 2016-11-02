@@ -18,6 +18,7 @@ rabbitmq-server (3.6.5-1) UNRELEASED; urgency=medium
     debian/* info and fixed order.
   * Copy some stuff from the upstream pacakging in debian/rules.
   * Runtime depends on lsb-base.
+  * Overrides lintian false positive error js source missing.
 
   [ Ondřej Nový ]
   * Fixed VCS URLs (https).
