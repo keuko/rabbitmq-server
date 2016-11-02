@@ -21,7 +21,6 @@ override_dh_auto_install:
 
 	$(MAKE) install-bin DESTDIR=$(DEB_DESTDIR)
 
-	rm -f $(RABBIT_LIB)/LICENSE* $(RABBIT_LIB)/INSTALL*
 
 	install -p -D -m 0755 scripts/rabbitmq-server.ocf \
 		$(DEB_DESTDIR)$(PREFIX)/lib/ocf/resource.d/rabbitmq/rabbitmq-server
@@ -34,6 +33,10 @@ override_dh_auto_install:
 	mkdir -p $(DEB_DESTDIR)$(PREFIX)/sbin
 	mv $(DEB_DESTDIR)$(PREFIX)/local/lib/erlang/lib/rabbitmq_server-3.6.5/sbin/* $(DEB_DESTDIR)$(PREFIX)/sbin
 	rm -rf $(DEB_DESTDIR)$(PREFIX)/local
+
+	# Remove extra license files
+	rm -f $(DEB_DESTDIR)$(PREFIX)/lib/erlang/lib/rabbitmq_server-*/LICENSE
+	rm -f $(RABBIT_LIB)/LICENSE* $(RABBIT_LIB)/INSTALL*
 
 override_dh_auto_clean:
 	rm -f plugins-src/rabbitmq-server plugins/README

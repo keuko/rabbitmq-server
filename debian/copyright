@@ -16,7 +16,7 @@ License: Expat
 Comments: Downloaded from http://jquery.com/
 
 Files: deps/rabbitmq_management/priv/www/js/ejs*
- plugins-src/rabbitmq-management/priv/www/js/tmpl
+ deps/rabbitmq_management/priv/www/js/tmpl/*
 Copyright: (c) 2007, Edward Benson
 License: Expat
 Comments: downloaded from http://embeddedjs.com/
