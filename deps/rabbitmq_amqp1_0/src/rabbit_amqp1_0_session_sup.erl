@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2014 GoPivotal, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_amqp1_0_session_sup).
@@ -26,19 +26,14 @@
 
 %%----------------------------------------------------------------------------
 
--ifdef(use_specs).
-
 -export_type([start_link_args/0]).
 
--type(start_link_args() ::
+-type start_link_args() ::
         {rabbit_types:protocol(), rabbit_net:socket(),
          rabbit_channel:channel_number(), non_neg_integer(), pid(),
-         rabbit_access_control:username(), rabbit_types:vhost(), pid()}).
+         rabbit_access_control:username(), rabbit_types:vhost(), pid()}.
 
--spec(start_link/1 :: (start_link_args()) -> {'ok', pid(), pid()}).
-
--endif.
-
+-spec start_link(start_link_args()) -> {'ok', pid(), pid()}.
 
 %%----------------------------------------------------------------------------
 start_link({rabbit_amqp1_0_framing, Sock, Channel, FrameMax, ReaderPid,
@@ -50,14 +45,14 @@ start_link({rabbit_amqp1_0_framing, Sock, Channel, FrameMax, ReaderPid,
           {writer, {rabbit_amqp1_0_writer, start_link,
                     [Sock, Channel, FrameMax, rabbit_amqp1_0_framing,
                      ReaderPid]},
-           intrinsic, ?MAX_WAIT, worker, [rabbit_amqp1_0_writer]}),
+           intrinsic, ?WORKER_WAIT, worker, [rabbit_amqp1_0_writer]}),
     {ok, ChannelPid} =
         supervisor2:start_child(
           SupPid,
           {channel, {rabbit_amqp1_0_session_process, start_link,
                      [{Channel, ReaderPid, WriterPid, Username, VHost, FrameMax,
                        adapter_info(Sock), Collector}]},
-           intrinsic, ?MAX_WAIT, worker, [rabbit_amqp1_0_session_process]}),
+           intrinsic, ?WORKER_WAIT, worker, [rabbit_amqp1_0_session_process]}),
     {ok, SupPid, ChannelPid}.
 
 %%----------------------------------------------------------------------------

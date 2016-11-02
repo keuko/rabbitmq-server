@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 %% Priority queues have essentially the same interface as ordinary
@@ -45,8 +45,6 @@
 
 %%----------------------------------------------------------------------------
 
--ifdef(use_specs).
-
 -export_type([q/0]).
 
 -type(q() :: pqueue()).
@@ -54,23 +52,21 @@
 -type(squeue() :: {queue, [any()], [any()], non_neg_integer()}).
 -type(pqueue() ::  squeue() | {pqueue, [{priority(), squeue()}]}).
 
--spec(new/0 :: () -> pqueue()).
--spec(is_queue/1 :: (any()) -> boolean()).
--spec(is_empty/1 :: (pqueue()) -> boolean()).
--spec(len/1 :: (pqueue()) -> non_neg_integer()).
--spec(to_list/1 :: (pqueue()) -> [{priority(), any()}]).
--spec(from_list/1 :: ([{priority(), any()}]) -> pqueue()).
--spec(in/2 :: (any(), pqueue()) -> pqueue()).
--spec(in/3 :: (any(), priority(), pqueue()) -> pqueue()).
--spec(out/1 :: (pqueue()) -> {empty | {value, any()}, pqueue()}).
--spec(out_p/1 :: (pqueue()) -> {empty | {value, any(), priority()}, pqueue()}).
--spec(join/2 :: (pqueue(), pqueue()) -> pqueue()).
--spec(filter/2 :: (fun ((any()) -> boolean()), pqueue()) -> pqueue()).
--spec(fold/3 ::
-        (fun ((any(), priority(), A) -> A), A, pqueue()) -> A).
--spec(highest/1 :: (pqueue()) -> priority() | 'empty').
-
--endif.
+-spec new() -> pqueue().
+-spec is_queue(any()) -> boolean().
+-spec is_empty(pqueue()) -> boolean().
+-spec len(pqueue()) -> non_neg_integer().
+-spec to_list(pqueue()) -> [{priority(), any()}].
+-spec from_list([{priority(), any()}]) -> pqueue().
+-spec in(any(), pqueue()) -> pqueue().
+-spec in(any(), priority(), pqueue()) -> pqueue().
+-spec out(pqueue()) -> {empty | {value, any()}, pqueue()}.
+-spec out_p(pqueue()) -> {empty | {value, any(), priority()}, pqueue()}.
+-spec join(pqueue(), pqueue()) -> pqueue().
+-spec filter(fun ((any()) -> boolean()), pqueue()) -> pqueue().
+-spec fold
+        (fun ((any(), priority(), A) -> A), A, pqueue()) -> A.
+-spec highest(pqueue()) -> priority() | 'empty'.
 
 %%----------------------------------------------------------------------------
 

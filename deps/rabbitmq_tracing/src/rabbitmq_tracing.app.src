@@ -1,6 +1,6 @@
 {application, rabbitmq_tracing,
  [{description, "RabbitMQ message logging / tracing"},
-  {vsn, "3.6.0"},
+  {vsn, "3.6.5"},
   {modules, []},
   {registered, []},
   {mod, {rabbit_tracing_app, []}},

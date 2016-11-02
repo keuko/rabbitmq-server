@@ -11,12 +11,14 @@
 %%   The Original Code is RabbitMQ Management Plugin.
 %%
 %%   The Initial Developer of the Original Code is GoPivotal, Inc.
-%%   Copyright (c) 2010-2015 Pivotal Software, Inc.  All rights reserved.
+%%   Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_mgmt_wm_overview).
 
 -export([init/1, to_json/2, content_types_provided/2, is_authorized/2]).
+-export([finish_request/2, allowed_methods/2]).
+-export([encodings_provided/2]).
 
 -import(rabbit_misc, [pget/2, pget/3]).
 
@@ -28,8 +30,18 @@
 
 init(_Config) -> {ok, #context{}}.
 
+finish_request(ReqData, Context) ->
+    {ok, rabbit_mgmt_cors:set_headers(ReqData, ?MODULE), Context}.
+
+allowed_methods(ReqData, Context) ->
+    {['HEAD', 'GET', 'OPTIONS'], ReqData, Context}.
+
 content_types_provided(ReqData, Context) ->
    {[{"application/json", to_json}], ReqData, Context}.
+
+encodings_provided(ReqData, Context) ->
+    {[{"identity", fun(X) -> X end},
+     {"gzip", fun(X) -> zlib:gzip(X) end}], ReqData, Context}.
 
 to_json(ReqData, Context = #context{user = User = #user{tags = Tags}}) ->
     {ok, RatesMode} = application:get_env(rabbitmq_management, rates_mode),
@@ -43,23 +55,28 @@ to_json(ReqData, Context = #context{user = User = #user{tags = Tags}}) ->
                  {cluster_name,        rabbit_nodes:cluster_name()},
                  {erlang_version,      erlang_version()},
                  {erlang_full_version, erlang_full_version()}],
-    Range = rabbit_mgmt_util:range(ReqData),
-    Overview =
-        case rabbit_mgmt_util:is_monitor(Tags) of
-            true ->
-                Overview0 ++
-                    [{K, maybe_struct(V)} ||
-                        {K,V} <- rabbit_mgmt_db:get_overview(Range)] ++
-                    [{node,               node()},
-                     {statistics_db_node, stats_db_node()},
-                     {listeners,          listeners()},
-                     {contexts,           web_contexts(ReqData)}];
-            _ ->
-                Overview0 ++
-                    [{K, maybe_struct(V)} ||
-                        {K, V} <- rabbit_mgmt_db:get_overview(User, Range)]
-        end,
-    rabbit_mgmt_util:reply(Overview, ReqData, Context).
+    try
+        Range = rabbit_mgmt_util:range(ReqData),
+        Overview =
+            case rabbit_mgmt_util:is_monitor(Tags) of
+                true ->
+                    Overview0 ++
+                        [{K, maybe_struct(V)} ||
+                            {K,V} <- rabbit_mgmt_db:get_overview(Range)] ++
+                        [{node,               node()},
+                         {statistics_db_node, stats_db_node()},
+                         {listeners,          listeners()},
+                         {contexts,           web_contexts(ReqData)}];
+                _ ->
+                    Overview0 ++
+                        [{K, maybe_struct(V)} ||
+                            {K, V} <- rabbit_mgmt_db:get_overview(User, Range)]
+            end,
+        rabbit_mgmt_util:reply(Overview, ReqData, Context)
+    catch
+        {error, invalid_range_parameters, Reason} ->
+            rabbit_mgmt_util:bad_request(iolist_to_binary(Reason), ReqData, Context)
+    end.
 
 is_authorized(ReqData, Context) ->
     rabbit_mgmt_util:is_authorized(ReqData, Context).

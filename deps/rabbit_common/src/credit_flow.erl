@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(credit_flow).
@@ -65,22 +65,19 @@
 
 %%----------------------------------------------------------------------------
 
--ifdef(use_specs).
-
 -export_type([bump_msg/0]).
 
 -opaque(bump_msg() :: {pid(), non_neg_integer()}).
 -type(credit_spec() :: {non_neg_integer(), non_neg_integer()}).
 
--spec(send/1 :: (pid()) -> 'ok').
--spec(send/2 :: (pid(), credit_spec()) -> 'ok').
--spec(ack/1 :: (pid()) -> 'ok').
--spec(ack/2 :: (pid(), credit_spec()) -> 'ok').
--spec(handle_bump_msg/1 :: (bump_msg()) -> 'ok').
--spec(blocked/0 :: () -> boolean()).
--spec(peer_down/1 :: (pid()) -> 'ok').
-
--endif.
+-spec send
+        (pid()) -> 'ok';
+        (credit_spec()) -> 'ok'.
+-spec ack(pid()) -> 'ok'.
+-spec ack(pid(), credit_spec()) -> 'ok'.
+-spec handle_bump_msg(bump_msg()) -> 'ok'.
+-spec blocked() -> boolean().
+-spec peer_down(pid()) -> 'ok'.
 
 %%----------------------------------------------------------------------------
 

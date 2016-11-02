@@ -1,6 +1,6 @@
 %% @author Justin Sheehy <justin@basho.com>
 %% @author Andy Gross <andy@basho.com>
-%% @copyright 2007-2014 Basho Technologies
+%% @copyright 2007-2009 Basho Technologies
 %%
 %%    Licensed under the Apache License, Version 2.0 (the "License");
 %%    you may not use this file except in compliance with the License.
@@ -27,13 +27,8 @@
 %% @spec start() -> ok
 %% @doc Start the webmachine server.
 start() ->
-    ok = webmachine_deps:ensure(),
-    ok = case application:start(crypto) of
-             ok -> ok;
-             {error, {already_started, crypto}} -> ok;
-             Error -> Error
-         end,
-    ok = application:start(webmachine).
+    webmachine_deps:ensure(),
+    application:start(webmachine).
 
 %% @spec stop() -> ok
 %% @doc Stop the webmachine server.
@@ -60,22 +55,18 @@ new_request(mochiweb, Request) ->
                           reqdata=wrq:create(Method,Scheme,Version,RawPath,Headers)},
 
     InitReq = {webmachine_request,InitState},
-    {Peer, _ReqState} = InitReq:get_peer(),
-    {Sock, ReqState} = InitReq:get_sock(),
-    ReqData = wrq:set_sock(Sock,
-                           wrq:set_peer(Peer,
-                                        ReqState#wm_reqstate.reqdata)),
-    LogData = #wm_log_data{start_time=os:timestamp(),
+    {Peer, ReqState} = InitReq:get_peer(),
+    PeerState = ReqState#wm_reqstate{reqdata=wrq:set_peer(Peer,
+                                              ReqState#wm_reqstate.reqdata)},
+    LogData = #wm_log_data{start_time=now(),
                            method=Method,
                            headers=Headers,
-                           peer=Peer,
-                           sock=Sock,
+                           peer=PeerState#wm_reqstate.peer,
                            path=RawPath,
                            version=Version,
                            response_code=404,
                            response_length=0},
-    webmachine_request:new(ReqState#wm_reqstate{log_data=LogData,
-                                                reqdata=ReqData}).
+    webmachine_request:new(PeerState#wm_reqstate{log_data=LogData}).
 
 do_rewrite(RewriteMod, Method, Scheme, Version, Headers, RawPath) ->
     case RewriteMod:rewrite(Method, Scheme, Version, Headers, RawPath) of
@@ -85,23 +76,3 @@ do_rewrite(RewriteMod, Method, Scheme, Version, Headers, RawPath) ->
         %% headers and raw path rewritten (new style rewriting)
         {NewHeaders, NewPath} -> {NewHeaders,NewPath}
     end.
-
-%%
-%% TEST
-%%
--ifdef(TEST).
-
--include_lib("eunit/include/eunit.hrl").
-
-start_mochiweb() ->
-    webmachine_util:ensure_all_started(mochiweb).
-
-start_stop_test() ->
-    {Res, Apps} = start_mochiweb(),
-    ?assertEqual(ok, Res),
-    ?assertEqual(ok, webmachine:start()),
-    ?assertEqual(ok, webmachine:stop()),
-    [application:stop(App) || App <- Apps],
-    ok.
-
--endif.

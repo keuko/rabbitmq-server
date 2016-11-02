@@ -4,7 +4,7 @@ If you have any questions regarding licensing, please contact us at
 info@rabbitmq.com.
 
 The files amqp-rabbitmq-0.8.json and amqp-rabbitmq-0.9.1.json are
-"Copyright (C) 2008-2013 GoPivotal", Inc. and are covered by the MIT
+"Copyright (C) 2008-2016 Pivotal Software, Inc", Inc. and are covered by the MIT
 license.
 
 jQuery is "Copyright (c) 2010 John Resig" and is covered by the MIT

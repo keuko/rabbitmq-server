@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_sasl_report_file_h).
@@ -36,6 +36,8 @@
 
 %% Used only when swapping handlers and performing
 %% log rotation
+init({{File, ""}, _}) ->
+    init(File);
 init({{File, Suffix}, []}) ->
     case rabbit_file:append_file(File, Suffix) of
         ok -> file:delete(File),

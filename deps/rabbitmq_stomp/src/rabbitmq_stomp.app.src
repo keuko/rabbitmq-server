@@ -1,6 +1,6 @@
 {application, rabbitmq_stomp,
- [{description, "Embedded Rabbit Stomp Adapter"},
-  {vsn, "3.6.0"},
+ [{description, "RabbitMQ STOMP plugin"},
+  {vsn, "3.6.5"},
   {modules, []},
   {registered, []},
   {mod, {rabbit_stomp, []}},
@@ -11,9 +11,13 @@
          {ssl_cert_login, false},
          {implicit_connect, false},
          {tcp_listeners, [61613]},
+         {num_tcp_acceptors, 10},
          {ssl_listeners, []},
+         {num_ssl_acceptors, 1},
          {tcp_listen_options, [{backlog,   128},
                                {nodelay,   true}]},
         %% see rabbitmq/rabbitmq-stomp#39
-        {trailing_lf, true}]},
+        {trailing_lf, true},
+        %% see rabbitmq/rabbitmq-stomp#57
+        {hide_server_info, false}]},
   {applications, [kernel, stdlib, rabbit, amqp_client]}]}.

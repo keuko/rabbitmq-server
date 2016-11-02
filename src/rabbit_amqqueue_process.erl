@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_amqqueue_process).
@@ -33,40 +33,69 @@
          prioritise_cast/3, prioritise_info/3, format_message_queue/2]).
 
 %% Queue's state
--record(q, {q,
+-record(q, {
+            %% an #amqqueue record
+            q,
+            %% none | {exclusive consumer channel PID, consumer tag}
             exclusive_consumer,
+            %% Set to true if a queue has ever had a consumer.
+            %% This is used to determine when to delete auto-delete queues.
             has_had_consumers,
+            %% backing queue module.
+            %% for mirrored queues, this will be rabbit_mirror_queue_master.
+            %% for non-priority and non-mirrored queues, rabbit_variable_queue.
+            %% see rabbit_backing_queue.
             backing_queue,
+            %% backing queue state.
+            %% see rabbit_backing_queue, rabbit_variable_queue.
             backing_queue_state,
+            %% consumers state, see rabbit_queue_consumers
             consumers,
+            %% queue expiration value
             expires,
+            %% timer used to periodically sync (flush) queue index
             sync_timer_ref,
+            %% timer used to update ingress/egress rates and queue RAM duration target
             rate_timer_ref,
+            %% timer used to clean up this queue due to TTL (on when unused)
             expiry_timer_ref,
+            %% stats emission timer
             stats_timer,
+            %% maps message IDs to {channel pid, MsgSeqNo}
+            %% pairs
             msg_id_to_channel,
+            %% message TTL value
             ttl,
+            %% timer used to delete expired messages
             ttl_timer_ref,
             ttl_timer_expiry,
+            %% Keeps track of channels that publish to this queue.
+            %% When channel process goes down, queues have to perform
+            %% certain cleanup.
             senders,
+            %% dead letter exchange as a #resource record, if any
             dlx,
             dlx_routing_key,
+            %% max length in messages, if configured
             max_length,
+            %% max length in bytes, if configured
             max_bytes,
+            %% when policies change, this version helps queue
+            %% determine what previously scheduled/set up state to ignore,
+            %% e.g. message expiration messages from previously set up timers
+            %% that may or may not be still valid
             args_policy_version,
+            %% running | flow | idle
             status
            }).
 
 %%----------------------------------------------------------------------------
 
--ifdef(use_specs).
-
--spec(info_keys/0 :: () -> rabbit_types:info_keys()).
--spec(init_with_backing_queue_state/7 ::
+-spec info_keys() -> rabbit_types:info_keys().
+-spec init_with_backing_queue_state
         (rabbit_types:amqqueue(), atom(), tuple(), any(),
-         [rabbit_types:delivery()], pmon:pmon(), dict:dict()) -> #q{}).
-
--endif.
+         [rabbit_types:delivery()], pmon:pmon(), ?DICT_TYPE()) ->
+            #q{}.
 
 %%----------------------------------------------------------------------------
 
@@ -84,7 +113,9 @@
          slave_pids,
          synchronised_slave_pids,
          recoverable_slaves,
-         state
+         state,
+         reductions,
+         garbage_collection
         ]).
 
 -define(CREATION_EVENT_KEYS,
@@ -893,6 +924,11 @@ i(recoverable_slaves, #q{q = #amqqueue{name    = Name,
     end;
 i(state, #q{status = running}) -> credit_flow:state();
 i(state, #q{status = State})   -> State;
+i(garbage_collection, _State) ->
+    rabbit_misc:get_gc_info(self());
+i(reductions, _State) ->
+    {reductions, Reductions} = erlang:process_info(self(), reductions),
+    Reductions;
 i(Item, #q{backing_queue_state = BQS, backing_queue = BQ}) ->
     BQ:info(Item, BQS).
 

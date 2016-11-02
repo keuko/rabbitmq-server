@@ -11,13 +11,15 @@
 %%   The Original Code is RabbitMQ Management Plugin.
 %%
 %%   The Initial Developer of the Original Code is GoPivotal, Inc.
-%%   Copyright (c) 2010-2015 Pivotal Software, Inc.  All rights reserved.
+%%   Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_mgmt_wm_queue_purge).
 
 -export([init/1, resource_exists/2, is_authorized/2, allowed_methods/2,
          delete_resource/2]).
+-export([finish_request/2]).
+-export([encodings_provided/2]).
 
 -include("rabbit_mgmt.hrl").
 -include_lib("webmachine/include/webmachine.hrl").
@@ -26,8 +28,15 @@
 %%--------------------------------------------------------------------
 init(_Config) -> {ok, #context{}}.
 
+finish_request(ReqData, Context) ->
+    {ok, rabbit_mgmt_cors:set_headers(ReqData, Context), Context}.
+
 allowed_methods(ReqData, Context) ->
-    {['DELETE'], ReqData, Context}.
+    {['DELETE', 'OPTIONS'], ReqData, Context}.
+
+encodings_provided(ReqData, Context) ->
+    {[{"identity", fun(X) -> X end},
+     {"gzip", fun(X) -> zlib:gzip(X) end}], ReqData, Context}.
 
 resource_exists(ReqData, Context) ->
     {case rabbit_mgmt_wm_queue:queue(ReqData) of

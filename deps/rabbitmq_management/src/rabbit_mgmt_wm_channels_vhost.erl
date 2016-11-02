@@ -20,6 +20,8 @@
 
 -export([init/1, to_json/2, content_types_provided/2, is_authorized/2,
          augmented/2, resource_exists/2]).
+-export([finish_request/2, allowed_methods/2]).
+-export([encodings_provided/2]).
 
 -import(rabbit_misc, [pget/2]).
 
@@ -31,14 +33,29 @@
 
 init(_Config) -> {ok, #context{}}.
 
+finish_request(ReqData, Context) ->
+    {ok, rabbit_mgmt_cors:set_headers(ReqData, ?MODULE), Context}.
+
+allowed_methods(ReqData, Context) ->
+    {['HEAD', 'GET', 'OPTIONS'], ReqData, Context}.
+
 content_types_provided(ReqData, Context) ->
    {[{"application/json", to_json}], ReqData, Context}.
+
+encodings_provided(ReqData, Context) ->
+    {[{"identity", fun(X) -> X end},
+     {"gzip", fun(X) -> zlib:gzip(X) end}], ReqData, Context}.
 
 resource_exists(ReqData, Context) ->
     {rabbit_vhost:exists(rabbit_mgmt_util:id(vhost, ReqData)), ReqData, Context}.
 
 to_json(ReqData, Context) ->
-    rabbit_mgmt_util:reply_list(augmented(ReqData, Context), ReqData, Context).
+    try
+        rabbit_mgmt_util:reply_list(augmented(ReqData, Context), ReqData, Context)
+    catch
+        {error, invalid_range_parameters, Reason} ->
+            rabbit_mgmt_util:bad_request(iolist_to_binary(Reason), ReqData, Context)
+    end.
 
 is_authorized(ReqData, Context) ->
     rabbit_mgmt_util:is_authorized_vhost(ReqData, Context).

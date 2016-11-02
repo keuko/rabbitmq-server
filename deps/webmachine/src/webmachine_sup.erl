@@ -1,6 +1,6 @@
 %% @author Justin Sheehy <justin@basho.com>
 %% @author Andy Gross <andy@basho.com>
-%% @copyright 2007-2014 Basho Technologies
+%% @copyright 2007-2008 Basho Technologies
 %%
 %%    Licensed under the Apache License, Version 2.0 (the "License");
 %%    you may not use this file except in compliance with the License.
@@ -44,26 +44,22 @@ upgrade() ->
     Kill = sets:subtract(Old, New),
 
     sets:fold(fun (Id, ok) ->
-                      _ = supervisor:terminate_child(?MODULE, Id),
-                      _ = supervisor:delete_child(?MODULE, Id),
+                      supervisor:terminate_child(?MODULE, Id),
+                      supervisor:delete_child(?MODULE, Id),
                       ok
               end, ok, Kill),
 
-    _ = [supervisor:start_child(?MODULE, Spec) || Spec <- Specs],
+    [supervisor:start_child(?MODULE, Spec) || Spec <- Specs],
     ok.
 
 %% @spec init([]) -> SupervisorTree
 %% @doc supervisor callback.
 init([]) ->
-    Router =
-        {webmachine_router,
-         {webmachine_router, start_link, []},
-         permanent, 5000, worker, [webmachine_router]},
-    LogHandler =
-        [{webmachine_logger,
-          {gen_event, start_link, [{local, ?EVENT_LOGGER}]},
-          permanent, 5000, worker, [dynamic]},
-         {webmachine_logger_watcher_sup,
-          {webmachine_logger_watcher_sup, start_link, []},
-          permanent, 5000, supervisor, [webmachine_logger_watcher_sup]}],
-    {ok, {{one_for_one, 9, 10}, LogHandler ++ [Router]}}.
+    Router = {webmachine_router,
+              {webmachine_router, start_link, []},
+              permanent, 5000, worker, [webmachine_router]},
+    LogHandler = [{webmachine_logger, {gen_event, start_link, [{local, ?EVENT_LOGGER}]},
+                   permanent, 5000, worker, [dynamic]},
+                  {webmachine_logger_watcher_sup, {webmachine_logger_watcher_sup, start_link, []},
+                   permanent, 5000, supervisor, [webmachine_logger_watcher_sup]}],
+    {ok, {{one_for_one, 9, 10},  LogHandler ++ [Router]}}.

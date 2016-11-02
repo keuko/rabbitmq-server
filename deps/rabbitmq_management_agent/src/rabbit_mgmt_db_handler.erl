@@ -11,10 +11,12 @@
 %%   The Original Code is RabbitMQ Management Console.
 %%
 %%   The Initial Developer of the Original Code is GoPivotal, Inc.
-%%   Copyright (c) 2010-2015 Pivotal Software, Inc.  All rights reserved.
+%%   Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_mgmt_db_handler).
+
+-include_lib("rabbit_common/include/rabbit.hrl").
 
 %% Make sure our database is hooked in *before* listening on the network or
 %% recovering queues (i.e. so there can't be any events fired before it starts).
@@ -93,8 +95,17 @@ init([]) ->
 handle_call(_Request, State) ->
     {ok, not_understood, State}.
 
+handle_event(#event{type = Type} = Event, State) when Type == channel_stats;
+                                                      Type == channel_created;
+                                                      Type == channel_closed ->
+    gen_server:cast({global, rabbit_mgmt_channel_stats_collector}, {event, Event}),
+    {ok, State};
+handle_event(#event{type = Type} = Event, State) when Type == queue_stats;
+                                                      Type == queue_deleted ->
+    gen_server:cast({global, rabbit_mgmt_queue_stats_collector}, {event, Event}),
+    {ok, State};
 handle_event(Event, State) ->
-    gen_server:cast({global, rabbit_mgmt_db}, {event, Event}),
+    gen_server:cast({global, rabbit_mgmt_event_collector}, {event, Event}),
     {ok, State}.
 
 handle_info(_Info, State) ->

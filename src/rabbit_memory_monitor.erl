@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 
@@ -55,16 +55,12 @@
 
 %%----------------------------------------------------------------------------
 
--ifdef(use_specs).
-
--spec(start_link/0 :: () -> rabbit_types:ok_pid_or_error()).
--spec(register/2 :: (pid(), {atom(),atom(),[any()]}) -> 'ok').
--spec(deregister/1 :: (pid()) -> 'ok').
--spec(report_ram_duration/2 ::
-        (pid(), float() | 'infinity') -> number() | 'infinity').
--spec(stop/0 :: () -> 'ok').
-
--endif.
+-spec start_link() -> rabbit_types:ok_pid_or_error().
+-spec register(pid(), {atom(),atom(),[any()]}) -> 'ok'.
+-spec deregister(pid()) -> 'ok'.
+-spec report_ram_duration
+        (pid(), float() | 'infinity') -> number() | 'infinity'.
+-spec stop() -> 'ok'.
 
 %%----------------------------------------------------------------------------
 %% Public API

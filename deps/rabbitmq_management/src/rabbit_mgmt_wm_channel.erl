@@ -11,12 +11,14 @@
 %%   The Original Code is RabbitMQ Management Plugin.
 %%
 %%   The Initial Developer of the Original Code is GoPivotal, Inc.
-%%   Copyright (c) 2010-2015 Pivotal Software, Inc.  All rights reserved.
+%%   Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_mgmt_wm_channel).
 
 -export([init/1, to_json/2, content_types_provided/2, is_authorized/2]).
+-export([finish_request/2, allowed_methods/2]).
+-export([encodings_provided/2]).
 -export([resource_exists/2]).
 
 -include("rabbit_mgmt.hrl").
@@ -27,8 +29,18 @@
 
 init(_Config) -> {ok, #context{}}.
 
+finish_request(ReqData, Context) ->
+    {ok, rabbit_mgmt_cors:set_headers(ReqData, ?MODULE), Context}.
+
+allowed_methods(ReqData, Context) ->
+    {['HEAD', 'GET', 'OPTIONS'], ReqData, Context}.
+
 content_types_provided(ReqData, Context) ->
    {[{"application/json", to_json}], ReqData, Context}.
+
+encodings_provided(ReqData, Context) ->
+    {[{"identity", fun(X) -> X end},
+     {"gzip", fun(X) -> zlib:gzip(X) end}], ReqData, Context}.
 
 resource_exists(ReqData, Context) ->
     case channel(ReqData) of
@@ -42,7 +54,12 @@ to_json(ReqData, Context) ->
       ReqData, Context).
 
 is_authorized(ReqData, Context) ->
-    rabbit_mgmt_util:is_authorized_user(ReqData, Context, channel(ReqData)).
+    try
+        rabbit_mgmt_util:is_authorized_user(ReqData, Context, channel(ReqData))
+    catch
+        {error, invalid_range_parameters, Reason} ->
+            rabbit_mgmt_util:bad_request(iolist_to_binary(Reason), ReqData, Context)
+    end.
 
 %%--------------------------------------------------------------------
 

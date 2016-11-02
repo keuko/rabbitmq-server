@@ -11,45 +11,61 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_cli).
 -include("rabbit_cli.hrl").
 
 -export([main/3, start_distribution/0, start_distribution/1,
-         parse_arguments/4, rpc_call/4, rpc_call/5, rpc_call/7]).
+         parse_arguments/4, filter_opts/2,
+         rpc_call/4, rpc_call/5, rpc_call/7]).
 
 %%----------------------------------------------------------------------------
 
--ifdef(use_specs).
+-type option_name() :: string().
+-type option_value() :: string() | node() | boolean().
+-type optdef() :: flag | {option, string()}.
+-type parse_result() :: {'ok', {atom(), [{option_name(), option_value()}], [string()]}} |
+                        'no_command'.
 
--type(optdef() :: flag | {option, string()}).
--type(parse_result() :: {'ok', {atom(), [{string(), string()}], [string()]}} |
-                        'no_command').
-
-
--spec(main/3 :: (fun (([string()], string()) -> parse_result()),
-                     fun ((atom(), atom(), [any()], [any()]) -> any()),
-                         atom()) -> no_return()).
--spec(start_distribution/0 :: () -> {'ok', pid()} | {'error', any()}).
--spec(start_distribution/1 :: (string()) -> {'ok', pid()} | {'error', any()}).
--spec(usage/1 :: (atom()) -> no_return()).
--spec(parse_arguments/4 ::
+-spec main
+        (fun (([string()], string()) -> parse_result()),
+         fun ((atom(), atom(), [any()], [any()]) -> any()),
+         atom()) ->
+            no_return().
+-spec start_distribution() -> {'ok', pid()} | {'error', any()}.
+-spec start_distribution(string()) -> {'ok', pid()} | {'error', any()}.
+-spec usage(atom()) -> no_return().
+-spec parse_arguments
         ([{atom(), [{string(), optdef()}]} | atom()],
-         [{string(), optdef()}], string(), [string()]) -> parse_result()).
--spec(rpc_call/4 :: (node(), atom(), atom(), [any()]) -> any()).
--spec(rpc_call/5 :: (node(), atom(), atom(), [any()], number()) -> any()).
--spec(rpc_call/7 :: (node(), atom(), atom(), [any()], reference(), pid(),
-                     number()) -> any()).
+         [{string(), optdef()}], string(), [string()]) ->
+          parse_result().
 
--endif.
+-spec filter_opts([{option_name(), option_value()}], [option_name()]) ->
+          [boolean()].
+
+-spec rpc_call(node(), atom(), atom(), [any()]) -> any().
+-spec rpc_call(node(), atom(), atom(), [any()], number()) -> any().
+-spec rpc_call
+        (node(), atom(), atom(), [any()], reference(), pid(), number()) ->
+            any().
+
+ensure_cli_distribution() ->
+    case start_distribution() of
+        {ok, _} ->
+            ok;
+        {error, Error} ->
+            print_error("Failed to initialize erlang distribution: ~p.",
+                        [Error]),
+            rabbit_misc:quit(?EX_TEMPFAIL)
+    end.
 
 %%----------------------------------------------------------------------------
 
 main(ParseFun, DoFun, UsageMod) ->
     error_logger:tty(false),
-    start_distribution(),
+    ensure_cli_distribution(),
     {ok, [[NodeStr|_]|_]} = init:get_argument(nodename),
     {Command, Opts, Args} =
         case ParseFun(init:get_plain_arguments(), NodeStr) of
@@ -107,7 +123,10 @@ main(ParseFun, DoFun, UsageMod) ->
                 _ ->
                     print_error("unable to connect to node ~w: ~w", [Node, Reason]),
                     print_badrpc_diagnostics([Node]),
-                    rabbit_misc:quit(?EX_UNAVAILABLE)
+                    case Command of
+                        stop -> rabbit_misc:quit(?EX_OK);
+                        _    -> rabbit_misc:quit(?EX_UNAVAILABLE)
+                    end
             end;
         {badrpc_multi, Reason, Nodes} ->
             print_error("unable to connect to nodes ~p: ~w", [Nodes, Reason]),
@@ -125,9 +144,22 @@ main(ParseFun, DoFun, UsageMod) ->
             rabbit_misc:quit(?EX_SOFTWARE)
     end.
 
+start_distribution_anon(0, LastError) ->
+    {error, LastError};
+start_distribution_anon(TriesLeft, _) ->
+    NameCandidate = list_to_atom(rabbit_misc:format("rabbitmq-cli-~2..0b", [rand_compat:uniform(100)])),
+    case net_kernel:start([NameCandidate, name_type()]) of
+        {ok, _} = Result ->
+            Result;
+        {error, Reason} ->
+            start_distribution_anon(TriesLeft - 1, Reason)
+    end.
+
+%% Tries to start distribution with randonm name choosen from limited list of candidates - to
+%% prevent atom table pollution on target nodes.
 start_distribution() ->
-    start_distribution(list_to_atom(
-                         rabbit_misc:format("rabbitmq-cli-~s", [os:getpid()]))).
+    rabbit_nodes:ensure_epmd(),
+    start_distribution_anon(10, undefined).
 
 start_distribution(Name) ->
     rabbit_nodes:ensure_epmd(),
@@ -218,6 +250,22 @@ process_opts(Defs, C, [A | As], Found, KVs, Outs) ->
         {none, _, _}     -> no_command
     end.
 
+%% When we have a set of flags that are used for filtering, we want by
+%% default to include every such option in our output. But if a user
+%% explicitly specified any such flag, we want to include only items
+%% which he has requested.
+filter_opts(CurrentOptionValues, AllOptionNames) ->
+    Explicit = lists:map(fun(OptName) ->
+                                 proplists:get_bool(OptName, CurrentOptionValues)
+                         end,
+                         AllOptionNames),
+    case lists:member(true, Explicit) of
+        true ->
+            Explicit;
+        false ->
+            lists:duplicate(length(AllOptionNames), true)
+    end.
+
 %%----------------------------------------------------------------------------
 
 fmt_stderr(Format, Args) -> rabbit_misc:format_stderr(Format ++ "~n", Args).
@@ -232,14 +280,10 @@ print_badrpc_diagnostics(Nodes) ->
 %% a timeout unless we set our ticktime to be the same. So let's do
 %% that.
 rpc_call(Node, Mod, Fun, Args) ->
-    rpc_call(Node, Mod, Fun, Args, ?RPC_TIMEOUT).
+    rabbit_misc:rpc_call(Node, Mod, Fun, Args).
 
 rpc_call(Node, Mod, Fun, Args, Timeout) ->
-    case rpc:call(Node, net_kernel, get_net_ticktime, [], Timeout) of
-        {badrpc, _} = E -> E;
-        Time            -> net_kernel:set_net_ticktime(Time, 0),
-                           rpc:call(Node, Mod, Fun, Args, Timeout)
-    end.
+    rabbit_misc:rpc_call(Node, Mod, Fun, Args, Timeout).
 
 rpc_call(Node, Mod, Fun, Args, Ref, Pid, Timeout) ->
-    rpc_call(Node, Mod, Fun, Args++[Ref, Pid], Timeout).
+    rabbit_misc:rpc_call(Node, Mod, Fun, Args, Ref, Pid, Timeout).

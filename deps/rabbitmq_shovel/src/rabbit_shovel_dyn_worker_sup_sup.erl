@@ -11,7 +11,7 @@
 %%  The Original Code is RabbitMQ.
 %%
 %%  The Initial Developer of the Original Code is GoPivotal, Inc.
-%%  Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%%  Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_shovel_dyn_worker_sup_sup).
@@ -44,7 +44,7 @@ start_child(Name, Def) ->
     case mirrored_supervisor:start_child(
            ?SUPERVISOR,
            {Name, {rabbit_shovel_dyn_worker_sup, start_link, [Name, Def]},
-            transient, ?MAX_WAIT, worker, [rabbit_shovel_dyn_worker_sup]}) of
+            transient, ?WORKER_WAIT, worker, [rabbit_shovel_dyn_worker_sup]}) of
         {ok,                      _Pid}  -> ok;
         {error, {already_started, _Pid}} -> ok
     end.

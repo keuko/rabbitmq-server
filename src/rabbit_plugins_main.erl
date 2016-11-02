@@ -32,12 +32,8 @@
 
 %%----------------------------------------------------------------------------
 
--ifdef(use_specs).
-
--spec(start/0 :: () -> no_return()).
--spec(stop/0 :: () -> 'ok').
-
--endif.
+-spec start() -> no_return().
+-spec stop() -> 'ok'.
 
 %%----------------------------------------------------------------------------
 
@@ -173,7 +169,7 @@ format_plugins(Node, Pattern, Opts, #cli{all      = All,
 
     EnabledImplicitly = Implicit -- Enabled,
     {StatusMsg, Running} =
-        case rabbit_cli:rpc_call(Node, rabbit_plugins, active, []) of
+        case rabbit_misc:rpc_call(Node, rabbit_plugins, active, []) of
             {badrpc, _} -> {"[failed to contact ~s - status not shown]", []};
             Active      -> {"* = running on ~s", Active}
         end,
@@ -279,7 +275,7 @@ sync(Node, ForceOnline, #cli{file = File}) ->
 
 rpc_call(Node, Online, Mod, Fun, Args) ->
     io:format("~nApplying plugin configuration to ~s...", [Node]),
-    case rabbit_cli:rpc_call(Node, Mod, Fun, Args) of
+    case rabbit_misc:rpc_call(Node, Mod, Fun, Args) of
         {ok, [], []} ->
             io:format(" nothing to do.~n", []);
         {ok, Start, []} ->

@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_mqtt_frame).
@@ -164,9 +164,10 @@ serialise_payload(undefined)           -> <<>>;
 serialise_payload(B) when is_binary(B) -> B.
 
 serialise_variable(#mqtt_frame_fixed   { type        = ?CONNACK } = Fixed,
-                   #mqtt_frame_connack { return_code = ReturnCode },
+                   #mqtt_frame_connack { session_present = SessionPresent,
+                                         return_code = ReturnCode },
                    <<>> = PayloadBin) ->
-    VariableBin = <<?RESERVED:8, ReturnCode:8>>,
+    VariableBin = <<?RESERVED:7, (opt(SessionPresent)):1, ReturnCode:8>>,
     serialise_fixed(Fixed, VariableBin, PayloadBin);
 
 serialise_variable(#mqtt_frame_fixed  { type       = SubAck } = Fixed,

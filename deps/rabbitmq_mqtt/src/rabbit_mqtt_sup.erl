@@ -11,13 +11,13 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_mqtt_sup).
 -behaviour(supervisor2).
 
--define(MAX_WAIT, 16#ffffffff).
+-include_lib("rabbit_common/include/rabbit.hrl").
 
 -export([start_link/2, init/1]).
 
@@ -25,11 +25,13 @@ start_link(Listeners, []) ->
     supervisor2:start_link({local, ?MODULE}, ?MODULE, [Listeners]).
 
 init([{Listeners, SslListeners0}]) ->
+    NumTcpAcceptors = application:get_env(rabbitmq_mqtt, num_tcp_acceptors, 10),
     {ok, SocketOpts} = application:get_env(rabbitmq_mqtt, tcp_listen_options),
-    {SslOpts, SslListeners}
+    {SslOpts, NumSslAcceptors, SslListeners}
         = case SslListeners0 of
-              [] -> {none, []};
+              [] -> {none, 0, []};
               _  -> {rabbit_networking:ensure_ssl(),
+                     application:get_env(rabbitmq_mqtt, num_ssl_acceptors, 1),
                      case rabbit_networking:poodle_check('MQTT') of
                          ok     -> SslListeners0;
                          danger -> []
@@ -38,28 +40,28 @@ init([{Listeners, SslListeners0}]) ->
     {ok, {{one_for_all, 10, 10},
           [{collector,
             {rabbit_mqtt_collector, start_link, []},
-            transient, ?MAX_WAIT, worker, [rabbit_mqtt_collector]},
+            transient, ?WORKER_WAIT, worker, [rabbit_mqtt_collector]},
            {rabbit_mqtt_retainer_sup,
             {rabbit_mqtt_retainer_sup, start_link, [{local, rabbit_mqtt_retainer_sup}]},
-             transient, ?MAX_WAIT, supervisor, [rabbit_mqtt_retainer_sup]} |
+             transient, ?SUPERVISOR_WAIT, supervisor, [rabbit_mqtt_retainer_sup]} |
            listener_specs(fun tcp_listener_spec/1,
-                          [SocketOpts], Listeners) ++
+                          [SocketOpts, NumTcpAcceptors], Listeners) ++
            listener_specs(fun ssl_listener_spec/1,
-                          [SocketOpts, SslOpts], SslListeners)]}}.
+                          [SocketOpts, SslOpts, NumSslAcceptors], SslListeners)]}}.
 
 listener_specs(Fun, Args, Listeners) ->
     [Fun([Address | Args]) ||
         Listener <- Listeners,
         Address  <- rabbit_networking:tcp_listener_addresses(Listener)].
 
-tcp_listener_spec([Address, SocketOpts]) ->
+tcp_listener_spec([Address, SocketOpts, NumAcceptors]) ->
     rabbit_networking:tcp_listener_spec(
       rabbit_mqtt_listener_sup, Address, SocketOpts,
       ranch_tcp, rabbit_mqtt_connection_sup, [],
-      mqtt, "MQTT TCP Listener").
+      mqtt, NumAcceptors, "MQTT TCP Listener").
 
-ssl_listener_spec([Address, SocketOpts, SslOpts]) ->
+ssl_listener_spec([Address, SocketOpts, SslOpts, NumAcceptors]) ->
     rabbit_networking:tcp_listener_spec(
       rabbit_mqtt_listener_sup, Address, SocketOpts ++ SslOpts,
       ranch_ssl, rabbit_mqtt_connection_sup, [],
-      'mqtt/ssl', "MQTT SSL Listener").
+      'mqtt/ssl', NumAcceptors, "MQTT SSL Listener").

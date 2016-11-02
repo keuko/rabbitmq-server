@@ -11,7 +11,7 @@
 %%   The Original Code is RabbitMQ Management Console.
 %%
 %%   The Initial Developer of the Original Code is GoPivotal, Inc.
-%%   Copyright (c) 2010-2015 Pivotal Software, Inc.  All rights reserved.
+%%   Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_mgmt_external_stats).
@@ -36,11 +36,17 @@
                uptime, run_queue, processors, exchange_types,
                auth_mechanisms, applications, contexts,
                log_file, sasl_log_file, db_dir, config_files, net_ticktime,
-               enabled_plugins, persister_stats]).
+               enabled_plugins, persister_stats, gc_num, gc_bytes_reclaimed,
+               context_switches]).
 
 %%--------------------------------------------------------------------
 
--record(state, {fd_total, fhc_stats, fhc_stats_derived, node_owners}).
+-record(state, {
+    fd_total,
+    fhc_stats,
+    node_owners,
+    last_ts
+}).
 
 %%--------------------------------------------------------------------
 
@@ -196,7 +202,16 @@ i(auth_mechanisms, _State) ->
       fun (N) -> lists:member(list_to_atom(binary_to_list(N)), Mechanisms) end);
 i(applications,    _State) ->
     [format_application(A) ||
-        A <- lists:keysort(1, rabbit_misc:which_applications())].
+        A <- lists:keysort(1, rabbit_misc:which_applications())];
+i(gc_num, _State) ->
+    {GCs, _, _} = erlang:statistics(garbage_collection),
+    GCs;
+i(gc_bytes_reclaimed, _State) ->
+    {_, Words, _} = erlang:statistics(garbage_collection),
+    Words * erlang:system_info(wordsize);
+i(context_switches, _State) ->
+    {Sw, 0} = erlang:statistics(context_switches),
+    Sw.
 
 log_location(Type) ->
     case rabbit:log_location(Type) of
@@ -227,11 +242,8 @@ set_plugin_name(Name, Module) ->
     [{name, list_to_binary(atom_to_list(Name))} |
      proplists:delete(name, Module:description())].
 
-persister_stats(#state{fhc_stats         = FHC,
-                       fhc_stats_derived = FHCD}) ->
-    [{flatten_key(K), V} || {{_Op, Type} = K, V} <- FHC,
-                            Type =/= time] ++
-        [{flatten_key(K), V} || {K, V} <- FHCD].
+persister_stats(#state{fhc_stats = FHC}) ->
+    [{flatten_key(K), V} || {{_Op, _Type} = K, V} <- FHC].
 
 flatten_key({A, B}) ->
     list_to_atom(atom_to_list(A) ++ "_" ++ atom_to_list(B)).
@@ -345,7 +357,8 @@ code_change(_, State, _) -> {ok, State}.
 
 emit_update(State0) ->
     State = update_state(State0),
-    rabbit_event:notify(node_stats, infos(?KEYS, State)),
+    Stats = infos(?KEYS, State),
+    rabbit_event:notify(node_stats, Stats),
     erlang:send_after(?REFRESH_RATIO, self(), emit_update),
     emit_node_node_stats(State).
 
@@ -362,20 +375,8 @@ emit_node_node_stats(State = #state{node_owners = Owners}) ->
         {Node, _Owner, Stats} <- Links],
     State#state{node_owners = NewOwners}.
 
-update_state(State0 = #state{fhc_stats = FHC0}) ->
+update_state(State0) ->
+    %% Store raw data, the average operation time is calculated during querying
+    %% from the accumulated total
     FHC = file_handle_cache_stats:get(),
-    Avgs = [{{Op, avg_time}, avg_op_time(Op, V, FHC, FHC0)}
-            || {{Op, time}, V} <- FHC],
-    State0#state{fhc_stats         = FHC,
-                 fhc_stats_derived = Avgs}.
-
--define(MICRO_TO_MILLI, 1000).
-
-avg_op_time(Op, Time, FHC, FHC0) ->
-    Time0 = pget({Op, time}, FHC0),
-    TimeDelta = Time - Time0,
-    OpDelta = pget({Op, count}, FHC) - pget({Op, count}, FHC0),
-    case OpDelta of
-        0 -> 0;
-        _ -> (TimeDelta / OpDelta) / ?MICRO_TO_MILLI
-    end.
+    State0#state{fhc_stats = FHC}.

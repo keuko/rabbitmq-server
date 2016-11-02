@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2012-2014 GoPivotal, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_ws_client).
@@ -26,7 +26,7 @@
 -export([init/1, handle_call/3, handle_info/2, terminate/2,
          code_change/3, handle_cast/2]).
 
--record(state, {conn, proc_state, parse_state}).
+-record(state, {conn, proc_state, parse_state, stats_timer, connection, heartbeat_mode, heartbeat, heartbeat_sup}).
 
 %%----------------------------------------------------------------------------
 
@@ -44,57 +44,71 @@ sockjs_closed(Pid) ->
 init({SupPid, Conn, Heartbeat, Conn}) ->
     ok = file_handle_cache:obtain(),
     process_flag(trap_exit, true),
-    {ok, ProcessorState} = init_processor_state(SupPid, Conn, Heartbeat),
-    {ok, #state{conn        = Conn,
-                proc_state  = ProcessorState,
-                parse_state = rabbit_stomp_frame:initial_state()}}.
+    {ok, ProcessorState} = init_processor_state(Conn),
+    {ok, rabbit_event:init_stats_timer(
+           #state{conn           = Conn,
+                  proc_state     = ProcessorState,
+                  parse_state    = rabbit_stomp_frame:initial_state(),
+                  heartbeat_sup  = SupPid,
+                  heartbeat      = {none, none},
+                  heartbeat_mode = Heartbeat},
+           #state.stats_timer)}.
 
-init_processor_state(SupPid, Conn, Heartbeat) ->
-    StompConfig = #stomp_configuration{implicit_connect = false},
-
+init_processor_state(Conn) ->
     SendFun = fun (_Sync, Data) ->
                       Conn:send(Data),
                       ok
               end,
-    Pid = self(),
-    ReceiveFun = fun() -> gen_server:cast(Pid, client_timeout) end,
     Info = Conn:info(),
-    Sock = proplists:get_value(socket, Info),
-    {PeerAddr, PeerPort} = proplists:get_value(peername, Info),
-    {SockAddr, SockPort} = proplists:get_value(sockname, Info),
-    Name = rabbit_misc:format("~s:~b -> ~s:~b",
-                              [rabbit_misc:ntoa(PeerAddr), PeerPort,
-                               rabbit_misc:ntoa(SockAddr), SockPort]),
-    AdapterInfo = #amqp_adapter_info{protocol        = {'Web STOMP', 0},
-                                     host            = SockAddr,
-                                     port            = SockPort,
-                                     peer_host       = PeerAddr,
-                                     peer_port       = PeerPort,
-                                     name            = list_to_binary(Name),
-                                     additional_info = [{ssl, rabbit_net:is_ssl(Sock)}]},
+    Headers = proplists:get_value(headers, Info),
 
-    StartHeartbeatFun = case Heartbeat of
-        heartbeat ->
-            fun (SendTimeout, SendFin, ReceiveTimeout, ReceiveFin) ->
-                    rabbit_heartbeat:start(SupPid, Sock, SendTimeout,
-                                           SendFin, ReceiveTimeout, ReceiveFin)
-            end;
-        no_heartbeat ->
-            undefined
+    UseHTTPAuth = application:get_env(rabbitmq_web_stomp, use_http_auth, false),
+    StompConfig0 = #stomp_configuration{implicit_connect = false},
+
+    StompConfig = case UseHTTPAuth of
+        true ->
+            {Login, PassCode} = case lists:keyfind(authorization, 1, Headers) of
+                false ->
+                    %% We fall back to the default STOMP credentials.
+                    UserConfig = application:get_env(rabbitmq_stomp,
+                                                     default_user, []),
+                    {proplists:get_value(login, UserConfig),
+                     proplists:get_value(passcode, UserConfig)};
+                {_, AuthHd} ->
+                    {<<"basic">>, {HTTPLogin, HTTPPassCode}}
+                        = cowboy_http:token_ci(list_to_binary(AuthHd),
+                                               fun cowboy_http:authorization/2),
+                    {HTTPLogin, HTTPPassCode}
+            end,
+            StompConfig0#stomp_configuration{default_login = Login,
+                                             default_passcode = PassCode,
+                                             force_default_creds = true};
+        false ->
+            StompConfig0
     end,
+
+    Sock = proplists:get_value(socket, Info),
+    {PeerAddr, _} = proplists:get_value(peername, Info),
+    AdapterInfo0 = #amqp_adapter_info{additional_info=Extra}
+        = amqp_connection:socket_adapter_info(Sock, {'Web STOMP', 0}),
+    %% Flow control is not supported for Web-STOMP connections.
+    AdapterInfo = AdapterInfo0#amqp_adapter_info{
+        additional_info=[{state, running}|Extra]},
 
     ProcessorState = rabbit_stomp_processor:initial_state(
         StompConfig, 
-        {SendFun, ReceiveFun, AdapterInfo, StartHeartbeatFun, none, PeerAddr}),
+        {SendFun, AdapterInfo, none, PeerAddr}),
     {ok, ProcessorState}.
 
 handle_cast({sockjs_msg, Data}, State = #state{proc_state  = ProcessorState,
-                                               parse_state = ParseState}) ->
-    case process_received_bytes(Data, ProcessorState, ParseState) of
-        {ok, NewProcState, ParseState1} ->
-            {noreply, State#state{
-                            parse_state = ParseState1,
-                            proc_state  = NewProcState}};
+                                               parse_state = ParseState,
+                                               connection  = ConnPid}) ->
+    case process_received_bytes(Data, ProcessorState, ParseState, ConnPid) of
+        {ok, NewProcState, ParseState1, ConnPid1} ->
+            {noreply, ensure_stats_timer(State#state{
+                        parse_state = ParseState1,
+                        proc_state  = NewProcState,
+                        connection  = ConnPid1})};
         {stop, Reason, NewProcState, ParseState1} ->
             {stop, Reason, State#state{
                                 parse_state = ParseState1,
@@ -146,6 +160,27 @@ handle_info(#'basic.cancel'{consumer_tag = Ctag}, State) ->
         {stop, Reason, processor_state(NewProcState, State)}
     end;
 
+handle_info({start_heartbeats, _}, 
+            State = #state{heartbeat_mode = no_heartbeat}) ->
+    {noreply, State};
+
+handle_info({start_heartbeats, {0, 0}}, State) -> 
+    {noreply, State};
+handle_info({start_heartbeats, {SendTimeout, ReceiveTimeout}},
+            State = #state{conn = Conn, 
+                           heartbeat_sup = SupPid,
+                           heartbeat_mode = heartbeat}) ->
+    Info = Conn:info(),
+    Sock = proplists:get_value(socket, Info),
+    Pid = self(),
+    SendFun = fun () -> Conn:send(<<$\n>>), ok end,
+    ReceiveFun = fun() -> gen_server2:cast(Pid, client_timeout) end,
+    Heartbeat = rabbit_heartbeat:start(SupPid, Sock, SendTimeout,
+                                       SendFun, ReceiveTimeout, ReceiveFun),
+    {noreply, State#state{heartbeat = Heartbeat}};
+
+
+
 %%----------------------------------------------------------------------------
 handle_info({'EXIT', From, Reason}, State) ->
   ProcState = processor_state(State),
@@ -157,6 +192,8 @@ handle_info({'EXIT', From, Reason}, State) ->
   end;
 %%----------------------------------------------------------------------------
 
+handle_info(emit_stats, State) ->
+    {noreply, emit_stats(State)};
 
 handle_info(Info, State) ->
     {stop, {odd_info, Info}, State}.
@@ -166,7 +203,8 @@ handle_info(Info, State) ->
 handle_call(Request, _From, State) ->
     {stop, {odd_request, Request}, State}.
 
-terminate(_Reason, #state{conn = Conn, proc_state = ProcessorState}) ->
+terminate(_Reason, State = #state{conn = Conn, proc_state = ProcessorState}) ->
+    maybe_emit_stats(State),
     ok = file_handle_cache:release(),
     rabbit_stomp_processor:flush_and_die(ProcessorState),
     Conn:close(1000, "STOMP died"),
@@ -179,21 +217,42 @@ code_change(_OldVsn, State, _Extra) ->
 %%----------------------------------------------------------------------------
 
 
-process_received_bytes(Bytes, ProcessorState, ParseState) ->
+process_received_bytes(Bytes, ProcessorState, ParseState, ConnPid) ->
     case rabbit_stomp_frame:parse(Bytes, ParseState) of
         {ok, Frame, Rest} ->
             case rabbit_stomp_processor:process_frame(Frame, ProcessorState) of
-                {ok, NewProcState} ->
+                {ok, NewProcState, ConnPid1} ->
                     ParseState1 = rabbit_stomp_frame:initial_state(),
-                    process_received_bytes(Rest, NewProcState, ParseState1);
+                    process_received_bytes(Rest, NewProcState, ParseState1, ConnPid1);
                 {stop, Reason, NewProcState} ->
                     {stop, Reason, NewProcState, ParseState}
             end;
         {more, ParseState1} ->
-            {ok, ProcessorState, ParseState1}
+            {ok, ProcessorState, ParseState1, ConnPid}
     end.
 
 processor_state(#state{ proc_state = ProcState }) -> ProcState.
 processor_state(ProcState, #state{} = State) -> 
   State#state{ proc_state = ProcState}.
 
+%%----------------------------------------------------------------------------
+
+ensure_stats_timer(State) ->
+    rabbit_event:ensure_stats_timer(State, #state.stats_timer, emit_stats).
+
+maybe_emit_stats(State) ->
+    rabbit_event:if_enabled(State, #state.stats_timer,
+                                fun() -> emit_stats(State) end).
+
+emit_stats(State=#state{conn=Conn, connection=ConnPid}) ->
+    Info = Conn:info(),
+    Sock = proplists:get_value(socket, Info),
+    SockInfos = case rabbit_net:getstat(Sock,
+            [recv_oct, recv_cnt, send_oct, send_cnt, send_pend]) of
+        {ok,    SI} -> SI;
+        {error,  _} -> []
+    end,
+    Infos = [{pid, ConnPid}|SockInfos],
+    rabbit_event:notify(connection_stats, Infos),
+    State1 = rabbit_event:reset_stats_timer(State, #state.stats_timer),
+    State1.

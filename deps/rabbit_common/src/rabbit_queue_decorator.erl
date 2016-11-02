@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_queue_decorator).
@@ -21,8 +21,6 @@
 -export([select/1, set/1, register/2, unregister/1]).
 
 %%----------------------------------------------------------------------------
-
--ifdef(use_specs).
 
 -callback startup(rabbit_types:amqqueue()) -> 'ok'.
 
@@ -36,18 +34,6 @@
 %% called with Queue, MaxActivePriority, IsEmpty
 -callback consumer_state_changed(
             rabbit_types:amqqueue(), integer(), boolean()) -> 'ok'.
-
--else.
-
--export([behaviour_info/1]).
-
-behaviour_info(callbacks) ->
-    [{startup, 1}, {shutdown, 1}, {policy_changed, 2},
-     {active_for, 1}, {consumer_state_changed, 3}];
-behaviour_info(_Other) ->
-    undefined.
-
--endif.
 
 %%----------------------------------------------------------------------------
 

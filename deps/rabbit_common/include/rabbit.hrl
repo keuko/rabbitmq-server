@@ -14,6 +14,8 @@
 %% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
 %%
 
+-include("old_builtin_types.hrl").
+
 %% Passed around most places
 -record(user, {username,
                tags,
@@ -99,10 +101,21 @@
 
 -record(runtime_parameters, {key, value}).
 
--record(basic_message, {exchange_name, routing_keys = [], content, id,
-                        is_persistent}).
+-record(basic_message,
+        {exchange_name,     %% The exchange where the message was received
+         routing_keys = [], %% Routing keys used during publish
+         content,           %% The message content
+         id,                %% A `rabbit_guid:gen()` generated id
+         is_persistent}).   %% Whether the message was published as persistent
 
--record(delivery, {mandatory, confirm, sender, message, msg_seq_no, flow}).
+-record(delivery,
+        {mandatory,  %% Whether the message was published as mandatory
+         confirm,    %% Whether the message needs confirming
+         sender,     %% The pid of the process that created the delivery
+         message,    %% The #basic_message record
+         msg_seq_no, %% Msg Sequence Number from the channel publish_seqno field
+         flow}).     %% Should flow control be used for this delivery
+
 -record(amqp_error, {name, explanation = "", method = none}).
 
 -record(event, {type, props, reference = undefined, timestamp}).
@@ -118,7 +131,7 @@
 
 %%----------------------------------------------------------------------------
 
--define(COPYRIGHT_MESSAGE, "Copyright (C) 2007-2015 Pivotal Software, Inc.").
+-define(COPYRIGHT_MESSAGE, "Copyright (C) 2007-2016 Pivotal Software, Inc.").
 -define(INFORMATION_MESSAGE, "Licensed under the MPL.  See http://www.rabbitmq.com/").
 -define(OTP_MINIMUM, "R16B03").
 -define(ERTS_MINIMUM, "5.10.4").
@@ -133,6 +146,8 @@
 -define(EMPTY_FRAME_SIZE, 8).
 
 -define(MAX_WAIT, 16#ffffffff).
+-define(SUPERVISOR_WAIT, infinity).
+-define(WORKER_WAIT, 30000).
 
 -define(HIBERNATE_AFTER_MIN,        1000).
 -define(DESIRED_HIBERNATE,         10000).
@@ -145,6 +160,10 @@
 -define(INVALID_HEADERS_KEY, <<"x-invalid-headers">>).
 -define(ROUTING_HEADERS, [<<"CC">>, <<"BCC">>]).
 -define(DELETED_HEADER, <<"BCC">>).
+
+-define(EXCHANGE_DELETE_IN_PROGRESS_COMPONENT, <<"exchange-delete-in-progress">>).
+
+-define(CHANNEL_OPERATION_TIMEOUT, rabbit_misc:get_channel_operation_timeout()).
 
 %% Trying to send a term across a cluster larger than 2^31 bytes will
 %% cause the VM to exit with "Absurdly large distribution output data

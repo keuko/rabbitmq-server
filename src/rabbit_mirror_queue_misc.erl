@@ -24,6 +24,8 @@
          maybe_auto_sync/1, maybe_drop_master_after_sync/1,
          sync_batch_size/1, log_info/3, log_warning/3]).
 
+-export([sync_queue/1, cancel_sync_queue/1]).
+
 %% for testing only
 -export([module/1]).
 
@@ -48,28 +50,24 @@
 
 %%----------------------------------------------------------------------------
 
--ifdef(use_specs).
-
--spec(remove_from_queue/3 ::
-        (rabbit_amqqueue:name(), pid(), [pid()])
-        -> {'ok', pid(), [pid()], [node()]} | {'error', 'not_found'}).
--spec(on_node_up/0 :: () -> 'ok').
--spec(add_mirrors/3 :: (rabbit_amqqueue:name(), [node()], 'sync' | 'async')
-                       -> 'ok').
--spec(store_updated_slaves/1 :: (rabbit_types:amqqueue()) ->
-                                     rabbit_types:amqqueue()).
--spec(initial_queue_node/2 :: (rabbit_types:amqqueue(), node()) -> node()).
--spec(suggested_queue_nodes/1 :: (rabbit_types:amqqueue()) ->
-                                      {node(), [node()]}).
--spec(is_mirrored/1 :: (rabbit_types:amqqueue()) -> boolean()).
--spec(update_mirrors/2 ::
-        (rabbit_types:amqqueue(), rabbit_types:amqqueue()) -> 'ok').
--spec(maybe_drop_master_after_sync/1 :: (rabbit_types:amqqueue()) -> 'ok').
--spec(maybe_auto_sync/1 :: (rabbit_types:amqqueue()) -> 'ok').
--spec(log_info/3 :: (rabbit_amqqueue:name(), string(), [any()]) -> 'ok').
--spec(log_warning/3 :: (rabbit_amqqueue:name(), string(), [any()]) -> 'ok').
-
--endif.
+-spec remove_from_queue
+        (rabbit_amqqueue:name(), pid(), [pid()]) ->
+            {'ok', pid(), [pid()], [node()]} | {'error', 'not_found'}.
+-spec on_node_up() -> 'ok'.
+-spec add_mirrors(rabbit_amqqueue:name(), [node()], 'sync' | 'async') ->
+          'ok'.
+-spec store_updated_slaves(rabbit_types:amqqueue()) ->
+          rabbit_types:amqqueue().
+-spec initial_queue_node(rabbit_types:amqqueue(), node()) -> node().
+-spec suggested_queue_nodes(rabbit_types:amqqueue()) ->
+          {node(), [node()]}.
+-spec is_mirrored(rabbit_types:amqqueue()) -> boolean().
+-spec update_mirrors
+        (rabbit_types:amqqueue(), rabbit_types:amqqueue()) -> 'ok'.
+-spec maybe_drop_master_after_sync(rabbit_types:amqqueue()) -> 'ok'.
+-spec maybe_auto_sync(rabbit_types:amqqueue()) -> 'ok'.
+-spec log_info(rabbit_amqqueue:name(), string(), [any()]) -> 'ok'.
+-spec log_warning(rabbit_amqqueue:name(), string(), [any()]) -> 'ok'.
 
 %%----------------------------------------------------------------------------
 
@@ -363,6 +361,16 @@ maybe_auto_sync(Q = #amqqueue{pid = QPid}) ->
         _ ->
             ok
     end.
+
+sync_queue(Q) ->
+    rabbit_amqqueue:with(
+      Q, fun(#amqqueue{pid = QPid}) -> rabbit_amqqueue:sync_mirrors(QPid) end).
+
+cancel_sync_queue(Q) ->
+    rabbit_amqqueue:with(
+      Q, fun(#amqqueue{pid = QPid}) ->
+                 rabbit_amqqueue:cancel_sync_mirrors(QPid)
+         end).
 
 sync_batch_size(#amqqueue{} = Q) ->
     case policy(<<"ha-sync-batch-size">>, Q) of

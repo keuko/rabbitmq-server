@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ Federation.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_federation_upstream).
@@ -71,10 +71,7 @@ remove_credentials(URI) ->
     list_to_binary(amqp_uri:remove_credentials(binary_to_list(URI))).
 
 to_params(Upstream = #upstream{uris = URIs}, XorQ) ->
-    random:seed(erlang:phash2([node()]),
-                time_compat:monotonic_time(),
-                time_compat:unique_integer()),
-    URI = lists:nth(random:uniform(length(URIs)), URIs),
+    URI = lists:nth(rand_compat:uniform(length(URIs)), URIs),
     {ok, Params} = amqp_uri:parse(binary_to_list(URI), vhost(XorQ)),
     XorQ1 = with_name(Upstream, vhost(Params), XorQ),
     SafeURI = remove_credentials(URI),

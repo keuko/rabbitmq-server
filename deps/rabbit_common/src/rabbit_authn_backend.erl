@@ -11,14 +11,12 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_authn_backend).
 
 -include("rabbit.hrl").
-
--ifdef(use_specs).
 
 %% Check a user can log in, given a username and a proplist of
 %% authentication information (e.g. [{password, Password}]). If your
@@ -36,14 +34,3 @@
     {'ok', rabbit_types:auth_user()} |
     {'refused', string(), [any()]} |
     {'error', any()}.
-
--else.
-
--export([behaviour_info/1]).
-
-behaviour_info(callbacks) ->
-    [{user_login_authentication, 2}];
-behaviour_info(_Other) ->
-    undefined.
-
--endif.

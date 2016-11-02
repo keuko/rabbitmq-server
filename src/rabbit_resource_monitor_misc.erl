@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 
@@ -19,12 +19,8 @@
 
 -export([parse_information_unit/1]).
 
--ifdef(use_spec).
-
--spec(parse_information_unit/1 :: (integer() | string()) ->
-                                       {ok, integer()} | {error, parse_error}).
-
--endif.
+-spec parse_information_unit(integer() | string()) ->
+          {ok, integer()} | {error, parse_error}.
 
 parse_information_unit(Value) when is_integer(Value) -> {ok, Value};
 parse_information_unit(Value) when is_list(Value) ->

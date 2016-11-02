@@ -11,7 +11,7 @@
 %%   The Original Code is RabbitMQ Management Plugin.
 %%
 %%   The Initial Developer of the Original Code is GoPivotal, Inc.
-%%   Copyright (c) 2010-2015 Pivotal Software, Inc.  All rights reserved.
+%%   Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_mgmt_dispatcher).
@@ -41,9 +41,16 @@ dispatcher() ->
      {["cluster-name"],                                            rabbit_mgmt_wm_cluster_name, []},
      {["nodes"],                                                   rabbit_mgmt_wm_nodes, []},
      {["nodes", node],                                             rabbit_mgmt_wm_node, []},
+     {["nodes", node, "memory"],                                   rabbit_mgmt_wm_node_memory, [absolute]},
+     {["nodes", node, "memory", "relative"],                       rabbit_mgmt_wm_node_memory, [relative]},
+     {["nodes", node, "memory", "ets"],                            rabbit_mgmt_wm_node_memory_ets, [absolute]},
+     {["nodes", node, "memory", "ets", "relative"],                rabbit_mgmt_wm_node_memory_ets, [relative]},
+     {["nodes", node, "memory", "ets", filter],                    rabbit_mgmt_wm_node_memory_ets, [absolute]},
+     {["nodes", node, "memory", "ets", filter, "relative"],        rabbit_mgmt_wm_node_memory_ets, [relative]},
      {["extensions"],                                              rabbit_mgmt_wm_extensions, []},
      {["all-configuration"],                                       rabbit_mgmt_wm_definitions, []}, %% This was the old name, let's not break things gratuitously.
      {["definitions"],                                             rabbit_mgmt_wm_definitions, []},
+     {["definitions", vhost],                                      rabbit_mgmt_wm_definitions, []},
      {["parameters"],                                              rabbit_mgmt_wm_parameters, []},
      {["parameters", component],                                   rabbit_mgmt_wm_parameters, []},
      {["parameters", component, vhost],                            rabbit_mgmt_wm_parameters, []},
@@ -88,5 +95,7 @@ dispatcher() ->
      {["whoami"],                                                  rabbit_mgmt_wm_whoami, []},
      {["permissions"],                                             rabbit_mgmt_wm_permissions, []},
      {["permissions", vhost, user],                                rabbit_mgmt_wm_permission, []},
-     {["aliveness-test", vhost],                                   rabbit_mgmt_wm_aliveness_test, []}
+     {["aliveness-test", vhost],                                   rabbit_mgmt_wm_aliveness_test, []},
+     {["healthchecks", "node"],                                    rabbit_mgmt_wm_healthchecks, []},
+     {["healthchecks", "node", node],                              rabbit_mgmt_wm_healthchecks, []}
     ].

@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_stomp_util).
@@ -20,7 +20,8 @@
 -export([longstr_field/2]).
 -export([ack_mode/1, consumer_tag_reply_to/1, consumer_tag/1, message_headers/1,
          headers_post_process/1, headers/5, message_properties/1, tag_to_id/1,
-         msg_header_name/1, ack_header_name/1, build_arguments/1, build_params/2]).
+         msg_header_name/1, ack_header_name/1, build_arguments/1, build_params/2,
+         has_durable_header/1]).
 -export([negotiate_version/2]).
 -export([trim_headers/1]).
 
@@ -341,6 +342,12 @@ string_to_boolean("false") ->
     false;
 string_to_boolean(_) ->
     undefined.
+
+has_durable_header(Frame) ->
+    rabbit_stomp_frame:boolean_header(
+      Frame, ?HEADER_DURABLE, false) or
+    rabbit_stomp_frame:boolean_header(
+      Frame, ?HEADER_PERSISTENT, false).
 
 %%--------------------------------------------------------------------
 %% Destination Formatting

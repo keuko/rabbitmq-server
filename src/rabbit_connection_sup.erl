@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_connection_sup).
@@ -36,12 +36,9 @@
 
 %%----------------------------------------------------------------------------
 
--ifdef(use_specs).
-
--spec(start_link/4 :: (any(), rabbit_net:socket(), module(), any()) -> {'ok', pid(), pid()}).
--spec(reader/1 :: (pid()) -> pid()).
-
--endif.
+-spec start_link(any(), rabbit_net:socket(), module(), any()) ->
+          {'ok', pid(), pid()}.
+-spec reader(pid()) -> pid().
 
 %%--------------------------------------------------------------------------
 
@@ -66,7 +63,7 @@ start_link(Ref, Sock, _Transport, _Opts) ->
         supervisor2:start_child(
           SupPid,
           {reader, {rabbit_reader, start_link, [HelperSup, Ref, Sock]},
-           intrinsic, ?MAX_WAIT, worker, [rabbit_reader]}),
+           intrinsic, ?WORKER_WAIT, worker, [rabbit_reader]}),
     {ok, SupPid, ReaderPid}.
 
 reader(Pid) ->

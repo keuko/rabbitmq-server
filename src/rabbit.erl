@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit).
@@ -22,7 +22,7 @@
          stop_and_halt/0, await_startup/0, status/0, is_running/0,
          is_running/1, environment/0, rotate_logs/1, force_event_refresh/1,
          start_fhc/0]).
--export([start/2, stop/1]).
+-export([start/2, stop/1, prep_stop/1]).
 -export([start_apps/1, stop_apps/1]).
 -export([log_location/1, config_files/0]). %% for testing and mgmt-agent
 
@@ -198,48 +198,44 @@
 
 %%----------------------------------------------------------------------------
 
--ifdef(use_specs).
-
--type(file_suffix() :: binary()).
+-type file_suffix() :: binary().
 %% this really should be an abstract type
--type(log_location() :: 'tty' | 'undefined' | file:filename()).
--type(param() :: atom()).
--type(app_name() :: atom()).
+-type log_location() :: 'tty' | 'undefined' | file:filename().
+-type param() :: atom().
+-type app_name() :: atom().
 
--spec(start/0 :: () -> 'ok').
--spec(boot/0 :: () -> 'ok').
--spec(stop/0 :: () -> 'ok').
--spec(stop_and_halt/0 :: () -> no_return()).
--spec(await_startup/0 :: () -> 'ok').
--spec(status/0 ::
+-spec start() -> 'ok'.
+-spec boot() -> 'ok'.
+-spec stop() -> 'ok'.
+-spec stop_and_halt() -> no_return().
+-spec await_startup() -> 'ok'.
+-spec status
         () -> [{pid, integer()} |
                {running_applications, [{atom(), string(), string()}]} |
                {os, {atom(), atom()}} |
                {erlang_version, string()} |
-               {memory, any()}]).
--spec(is_running/0 :: () -> boolean()).
--spec(is_running/1 :: (node()) -> boolean()).
--spec(environment/0 :: () -> [{param(), term()}]).
--spec(rotate_logs/1 :: (file_suffix()) -> rabbit_types:ok_or_error(any())).
--spec(force_event_refresh/1 :: (reference()) -> 'ok').
+               {memory, any()}].
+-spec is_running() -> boolean().
+-spec is_running(node()) -> boolean().
+-spec environment() -> [{param(), term()}].
+-spec rotate_logs(file_suffix()) -> rabbit_types:ok_or_error(any()).
+-spec force_event_refresh(reference()) -> 'ok'.
 
--spec(log_location/1 :: ('sasl' | 'kernel') -> log_location()).
+-spec log_location('sasl' | 'kernel') -> log_location().
 
--spec(start/2 :: ('normal',[]) ->
-		      {'error',
-		       {'erlang_version_too_old',
-                        {'found',string(),string()},
-                        {'required',string(),string()}}} |
-		      {'ok',pid()}).
--spec(stop/1 :: (_) -> 'ok').
+-spec start('normal',[]) ->
+          {'error',
+           {'erlang_version_too_old',
+            {'found',string(),string()},
+            {'required',string(),string()}}} |
+          {'ok',pid()}.
+-spec stop(_) -> 'ok'.
 
--spec(maybe_insert_default_data/0 :: () -> 'ok').
--spec(boot_delegate/0 :: () -> 'ok').
--spec(recover/0 :: () -> 'ok').
--spec(start_apps/1 :: ([app_name()]) -> 'ok').
--spec(stop_apps/1 :: ([app_name()]) -> 'ok').
-
--endif.
+-spec maybe_insert_default_data() -> 'ok'.
+-spec boot_delegate() -> 'ok'.
+-spec recover() -> 'ok'.
+-spec start_apps([app_name()]) -> 'ok'.
+-spec stop_apps([app_name()]) -> 'ok'.
 
 %%----------------------------------------------------------------------------
 
@@ -284,12 +280,119 @@ broker_start() ->
     Plugins = rabbit_plugins:setup(),
     ToBeLoaded = Plugins ++ ?APPS,
     start_apps(ToBeLoaded),
-    case code:load_file(sd_notify) of
-        {module, sd_notify} -> SDNotify = sd_notify,
-                               SDNotify:sd_notify(0, "READY=1");
-        {error, _} -> ok
-    end,
+    maybe_sd_notify(),
     ok = log_broker_started(rabbit_plugins:active()).
+
+%% Try to send systemd ready notification if it makes sense in the
+%% current environment. standard_error is used intentionally in all
+%% logging statements, so all this messages will end in systemd
+%% journal.
+maybe_sd_notify() ->
+    case sd_notify_ready() of
+        false ->
+            io:format(standard_error, "systemd READY notification failed, beware of timeouts~n", []);
+        _ ->
+            ok
+    end.
+
+sd_notify_ready() ->
+    case {os:type(), os:getenv("NOTIFY_SOCKET")} of
+        {{win32, _}, _} ->
+            true;
+        {_, [_|_]} -> %% Non-empty NOTIFY_SOCKET, give it a try
+            sd_notify_legacy() orelse sd_notify_socat();
+        _ ->
+            true
+    end.
+
+sd_notify_data() ->
+    "READY=1\nSTATUS=Initialized\nMAINPID=" ++ os:getpid() ++ "\n".
+
+sd_notify_legacy() ->
+    case code:load_file(sd_notify) of
+        {module, sd_notify} ->
+            SDNotify = sd_notify,
+            SDNotify:sd_notify(0, sd_notify_data()),
+            true;
+        {error, _} ->
+            false
+    end.
+
+%% socat(1) is the most portable way the sd_notify could be
+%% implemented in erlang, without introducing some NIF. Currently the
+%% following issues prevent us from implementing it in a more
+%% reasonable way:
+%% - systemd-notify(1) is unstable for non-root users
+%% - erlang doesn't support unix domain sockets.
+%%
+%% Some details on how we ended with such a solution:
+%%   https://github.com/rabbitmq/rabbitmq-server/issues/664
+sd_notify_socat() ->
+    case sd_current_unit() of
+        {ok, Unit} ->
+            io:format(standard_error, "systemd unit for activation check: \"~s\"~n", [Unit]),
+            sd_notify_socat(Unit);
+        _ ->
+            false
+    end.
+
+socat_socket_arg("@" ++ AbstractUnixSocket) ->
+    "abstract-sendto:" ++ AbstractUnixSocket;
+socat_socket_arg(UnixSocket) ->
+    "unix-sendto:" ++ UnixSocket.
+
+sd_open_port() ->
+    open_port(
+      {spawn_executable, os:find_executable("socat")},
+      [{args, [socat_socket_arg(os:getenv("NOTIFY_SOCKET")), "STDIO"]},
+       use_stdio, out]).
+
+sd_notify_socat(Unit) ->
+    case sd_open_port() of
+        {'EXIT', Exit} ->
+            io:format(standard_error, "Failed to start socat ~p~n", [Exit]),
+            false;
+        Port ->
+            Port ! {self(), {command, sd_notify_data()}},
+            Result = sd_wait_activation(Port, Unit),
+            port_close(Port),
+            Result
+    end.
+
+sd_current_unit() ->
+    case catch re:run(os:cmd("systemctl status " ++ os:getpid()), "([-.@0-9a-zA-Z]+)", [unicode, {capture, all_but_first, list}]) of
+        {'EXIT', _} ->
+            error;
+        {match, [Unit]} ->
+            {ok, Unit};
+        _ ->
+            error
+    end.
+
+sd_wait_activation(Port, Unit) ->
+    case os:find_executable("systemctl") of
+        false ->
+            io:format(standard_error, "'systemctl' unavailable, falling back to sleep~n", []),
+            timer:sleep(5000),
+            true;
+        _ ->
+            sd_wait_activation(Port, Unit, 10)
+    end.
+
+sd_wait_activation(_, _, 0) ->
+    io:format(standard_error, "Service still in 'activating' state, bailing out~n", []),
+    false;
+sd_wait_activation(Port, Unit, AttemptsLeft) ->
+    case os:cmd("systemctl show --property=ActiveState " ++ Unit) of
+        "ActiveState=activating\n" ->
+            timer:sleep(1000),
+            sd_wait_activation(Port, Unit, AttemptsLeft - 1);
+        "ActiveState=" ++ _ ->
+            true;
+        _ = Err->
+            io:format(standard_error, "Unexpected status from systemd ~p~n", [Err]),
+            false
+    end.
 
 start_it(StartFun) ->
     Marker = spawn_link(fun() -> receive stop -> ok end end),
@@ -329,6 +432,10 @@ stop_and_halt() ->
         stop()
     after
         rabbit_log:info("Halting Erlang VM~n", []),
+        %% Also duplicate this information to stderr, so console where
+        %% foreground broker was running (or systemd journal) will
+        %% contain information about graceful termination.
+        io:format(standard_error, "Gracefully halting Erlang VM~n", []),
         init:stop()
     end,
     ok.
@@ -378,6 +485,7 @@ await_startup(HaveSeenRabbitBoot) ->
 
 status() ->
     S1 = [{pid,                  list_to_integer(os:getpid())},
+          %% The timeout value used is twice that of gen_server:call/2.
           {running_applications, rabbit_misc:which_applications()},
           {os,                   os:type()},
           {erlang_version,       erlang:system_info(system_version)},
@@ -434,17 +542,23 @@ is_running() -> is_running(node()).
 is_running(Node) -> rabbit_nodes:is_process_running(Node, rabbit).
 
 environment() ->
+    %% The timeout value is twice that of gen_server:call/2.
     [{A, environment(A)} ||
-        {A, _, _} <- lists:keysort(1, application:which_applications())].
+        {A, _, _} <- lists:keysort(1, application:which_applications(10000))].
 
 environment(App) ->
     Ignore = [default_pass, included_applications],
     lists:keysort(1, [P || P = {K, _} <- application:get_all_env(App),
                            not lists:member(K, Ignore)]).
 
+rotate_logs_info("") ->
+    rabbit_log:info("Reopening logs", []);
+rotate_logs_info(Suffix) ->
+    rabbit_log:info("Rotating logs with suffix '~s'~n", [Suffix]).
+
 rotate_logs(BinarySuffix) ->
     Suffix = binary_to_list(BinarySuffix),
-    rabbit_log:info("Rotating logs with suffix '~s'~n", [Suffix]),
+    rotate_logs_info(Suffix),
     log_rotation_result(rotate_logs(log_location(kernel),
                                     Suffix,
                                     rabbit_error_logger_file_h),
@@ -472,17 +586,18 @@ start(normal, []) ->
             Error
     end.
 
-stop(_State) ->
+prep_stop(_State) ->
     ok = rabbit_alarm:stop(),
     ok = case rabbit_mnesia:is_clustered() of
-             true  -> rabbit_amqqueue:on_node_down(node());
+             true  -> ok;
              false -> rabbit_table:clear_ram_only_tables()
          end,
     ok.
 
--ifdef(use_specs).
--spec(boot_error/2 :: (term(), not_available | [tuple()]) -> no_return()).
--endif.
+stop(_) -> ok.
+
+-spec boot_error(term(), not_available | [tuple()]) -> no_return().
+
 boot_error({could_not_start, rabbit, {{timeout_waiting_for_tables, _}, _}},
            _Stacktrace) ->
     AllNodes = rabbit_mnesia:cluster_nodes(all),
@@ -510,10 +625,9 @@ boot_error(Reason, Stacktrace) ->
     Args = [Reason, log_location(kernel), log_location(sasl)],
     boot_error(Reason, Fmt, Args, Stacktrace).
 
--ifdef(use_specs).
--spec(boot_error/4 :: (term(), string(), [any()], not_available | [tuple()])
-                      -> no_return()).
--endif.
+-spec boot_error(term(), string(), [any()], not_available | [tuple()]) ->
+          no_return().
+
 boot_error(Reason, Fmt, Args, not_available) ->
     log_boot_error_and_exit(Reason, Fmt, Args);
 boot_error(Reason, Fmt, Args, Stacktrace) ->
@@ -685,7 +799,8 @@ print_banner() ->
               "~n  ##########  Logs: ~s"
               "~n  ######  ##        ~s"
               "~n  ##########"
-              "~n              Starting broker...",
+              "~n              Starting broker..."
+              "~n",
               [Product, Version, ?COPYRIGHT_MESSAGE, ?INFORMATION_MESSAGE,
                log_location(kernel), log_location(sasl)]).
 
@@ -714,11 +829,16 @@ log_banner() ->
     rabbit_log:info("~s", [Banner]).
 
 warn_if_kernel_config_dubious() ->
-    case erlang:system_info(kernel_poll) of
-        true  -> ok;
-        false -> rabbit_log:warning(
-                   "Kernel poll (epoll, kqueue, etc) is disabled. Throughput "
-                   "and CPU utilization may worsen.~n")
+    case os:type() of
+        {win32, _} ->
+            ok;
+        _ ->
+            case erlang:system_info(kernel_poll) of
+                true  -> ok;
+                false -> rabbit_log:warning(
+                           "Kernel poll (epoll, kqueue, etc) is disabled. Throughput "
+                           "and CPU utilization may worsen.~n")
+            end
     end,
     AsyncThreads = erlang:system_info(thread_pool_size),
     case AsyncThreads < ?ASYNC_THREADS_WARNING_THRESHOLD of

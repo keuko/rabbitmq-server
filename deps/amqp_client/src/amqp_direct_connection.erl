@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 %% @private
@@ -108,6 +108,7 @@ i(port,         #state{adapter_info = I}) -> I#amqp_adapter_info.port;
 i(peer_host,    #state{adapter_info = I}) -> I#amqp_adapter_info.peer_host;
 i(peer_port,    #state{adapter_info = I}) -> I#amqp_adapter_info.peer_port;
 i(name,         #state{adapter_info = I}) -> I#amqp_adapter_info.name;
+i(internal_user, #state{user = U}) -> U;
 
 i(Item, _State) -> throw({bad_argument, Item}).
 
@@ -193,9 +194,14 @@ maybe_ssl_info(Sock) ->
 ssl_info(Sock) ->
     {Protocol, KeyExchange, Cipher, Hash} =
         case rabbit_net:ssl_info(Sock) of
-            {ok, {P, {K, C, H}}}    -> {P, K, C, H};
-            {ok, {P, {K, C, H, _}}} -> {P, K, C, H};
-            _                       -> {unknown, unknown, unknown, unknown}
+            {ok, Infos} ->
+                {_, P} = lists:keyfind(protocol, 1, Infos),
+                case lists:keyfind(cipher_suite, 1, Infos) of
+                    {_,{K, C, H}}    -> {P, K, C, H};
+                    {_,{K, C, H, _}} -> {P, K, C, H}
+                end;
+            _           ->
+                {unknown, unknown, unknown, unknown}
         end,
     [{ssl_protocol,     Protocol},
      {ssl_key_exchange, KeyExchange},

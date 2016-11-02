@@ -11,12 +11,10 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_exchange_type).
-
--ifdef(use_specs).
 
 -type(tx() :: 'transaction' | 'none').
 -type(serial() :: pos_integer() | tx()).
@@ -65,17 +63,3 @@
 -callback assert_args_equivalence(rabbit_types:exchange(),
                                   rabbit_framing:amqp_table()) ->
     'ok' | rabbit_types:connection_exit().
-
--else.
-
--export([behaviour_info/1]).
-
-behaviour_info(callbacks) ->
-    [{description, 0}, {serialise_events, 0}, {route, 2},
-     {validate, 1}, {validate_binding, 2}, {policy_changed, 2},
-     {create, 2}, {delete, 3}, {add_binding, 3}, {remove_bindings, 3},
-     {assert_args_equivalence, 2}];
-behaviour_info(_Other) ->
-    undefined.
-
--endif.

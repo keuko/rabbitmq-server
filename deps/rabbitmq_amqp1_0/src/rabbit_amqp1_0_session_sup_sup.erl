@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2014 GoPivotal, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_amqp1_0_session_sup_sup).
@@ -27,13 +27,9 @@
 
 %%----------------------------------------------------------------------------
 
--ifdef(use_specs).
-
--spec(start_link/0 :: () -> rabbit_types:ok_pid_or_error()).
--spec(start_session/2 :: (pid(), rabbit_amqp1_0_session_sup:start_link_args()) ->
-                              {'ok', pid(), pid()}).
-
--endif.
+-spec start_link() -> rabbit_types:ok_pid_or_error().
+-spec start_session(pid(), rabbit_amqp1_0_session_sup:start_link_args()) ->
+                              {'ok', pid(), pid()}.
 
 %%----------------------------------------------------------------------------
 

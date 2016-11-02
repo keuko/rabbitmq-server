@@ -11,15 +11,15 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_stomp_processor).
 
 -export([initial_state/2, process_frame/2, flush_and_die/1]).
--export([flush_pending_receipts/3, 
-         handle_exit/3, 
-         cancel_consumer/2, 
+-export([flush_pending_receipts/3,
+         handle_exit/3,
+         cancel_consumer/2,
          send_delivery/5]).
 
 -export([adapter_name/1]).
@@ -33,7 +33,7 @@
 -record(proc_state, {session_id, channel, connection, subscriptions,
                 version, start_heartbeat_fun, pending_receipts,
                 config, route_state, reply_queues, frame_transformer,
-                adapter_info, send_fun, receive_fun, ssl_login_name, peer_addr,
+                adapter_info, send_fun, ssl_login_name, peer_addr,
                 %% see rabbitmq/rabbitmq-stomp#39
                 trailing_lf}).
 
@@ -46,16 +46,13 @@ adapter_name(State) ->
   Name.
 
 %%----------------------------------------------------------------------------
--ifdef(use_spec).
 
 -spec initial_state(
-  #stomp_configuration{}, 
-  {SendFun, ReceiveFun, AdapterInfo, StartHeartbeatFun, SSLLoginName, PeerAddr})
+  #stomp_configuration{},
+  {SendFun, AdapterInfo, SSLLoginName, PeerAddr})
     -> #proc_state{}
   when SendFun :: fun((atom(), binary()) -> term()),
-       ReceiveFun :: fun(() -> ok),
        AdapterInfo :: #amqp_adapter_info{},
-       StartHeartbeatFun :: fun((non_neg_integer(), fun(), non_neg_integer(), fun()) -> term()),
        SSLLoginName :: atom() | binary(),
        PeerAddr :: inet:ip_address().
 
@@ -63,17 +60,17 @@ adapter_name(State) ->
     {ok, #proc_state{}} |
     {stop, term(), #proc_state{}}.
 
--spec process_frame(#stomp_frame{}, #proc_state{}) -> 
+-spec process_frame(#stomp_frame{}, #proc_state{}) ->
     process_frame_result().
 
 -spec flush_and_die(#proc_state{}) -> ok.
 
--spec command({Command, Frame}, State) -> process_frame_result() 
+-spec command({Command, Frame}, State) -> process_frame_result()
     when Command :: string(),
          Frame   :: #stomp_frame{},
          State   :: #proc_state{}.
 
--type process_fun() :: fun((#proc_state{}) -> 
+-type process_fun() :: fun((#proc_state{}) ->
         {ok, #stomp_frame{}, #proc_state{}}  |
         {error, string(), string(), #proc_state{}} |
         {stop, term(), #proc_state{}}).
@@ -92,10 +89,9 @@ adapter_name(State) ->
 
 -spec cancel_consumer(binary(), #proc_state{}) -> process_frame_result().
 
--spec send_delivery(#'basic.deliver'{}, term(), term(), term(), 
+-spec send_delivery(#'basic.deliver'{}, term(), term(), term(),
                     #proc_state{}) -> #proc_state{}.
 
--endif.
 %%----------------------------------------------------------------------------
 
 
@@ -109,13 +105,22 @@ process_frame(Frame = #stomp_frame{command = Command}, State) ->
 flush_and_die(State) ->
     close_connection(State).
 
-initial_state(Configuration, 
-    {SendFun, ReceiveFun, AdapterInfo, StartHeartbeatFun, SSLLoginName, PeerAddr}) ->
+initial_state(Configuration,
+    {SendFun, AdapterInfo0 = #amqp_adapter_info{additional_info = Extra},
+     SSLLoginName, PeerAddr}) ->
+  %% STOMP connections use exactly one channel. The frame max is not
+  %% applicable and there is no way to know what client is used.
+  AdapterInfo = AdapterInfo0#amqp_adapter_info{additional_info=[
+       {channels, 1},
+       {channel_max, 1},
+       {frame_max, 0},
+       %% TODO: can we use a header to make it possible for clients
+       %%       to override this value?
+       {client_properties, [{<<"product">>, longstr, <<"STOMP client">>}]}
+       |Extra]},
   #proc_state {
        send_fun            = SendFun,
-       receive_fun         = ReceiveFun,
        adapter_info        = AdapterInfo,
-       start_heartbeat_fun = StartHeartbeatFun,
        ssl_login_name      = SSLLoginName,
        peer_addr           = PeerAddr,
        session_id          = none,
@@ -140,7 +145,7 @@ command({"CONNECT", Frame}, State) ->
 command(Request, State = #proc_state{channel = none,
                              config = #stomp_configuration{
                              implicit_connect = true}}) ->
-    {ok, State1 = #proc_state{channel = Ch}} =
+    {ok, State1 = #proc_state{channel = Ch}, _} =
         process_connect(implicit, #stomp_frame{headers = []}, State),
     case Ch of
         none -> {stop, normal, State1};
@@ -152,7 +157,7 @@ command(_Request, State = #proc_state{channel = none,
                               implicit_connect = false}}) ->
     {ok, send_error("Illegal command",
                     "You must log in using CONNECT first",
-                    State)};
+                    State), none};
 
 command({Command, Frame}, State = #proc_state{frame_transformer = FT}) ->
     Frame1 = FT(Frame),
@@ -168,7 +173,7 @@ command({Command, Frame}, State = #proc_state{frame_transformer = FT}) ->
 
 cancel_consumer(Ctag, State) ->
   process_request(
-    fun(StateN) -> server_cancel_consumer(Ctag, StateN) end, 
+    fun(StateN) -> server_cancel_consumer(Ctag, StateN) end,
     State).
 
 handle_exit(Conn, {shutdown, {server_initiated_close, Code, Explanation}},
@@ -181,6 +186,10 @@ handle_exit(Conn, {shutdown, {connection_closing,
 handle_exit(Conn, Reason, State = #proc_state{connection = Conn}) ->
     send_error("AMQP connection died", "Reason: ~p", [Reason], State),
     {stop, {conn_died, Reason}, State};
+
+handle_exit(Ch, {shutdown, {server_initiated_close, Code, Explanation}},
+            State = #proc_state{channel = Ch}) ->
+    amqp_death(Code, Explanation, State);
 
 handle_exit(Ch, Reason, State = #proc_state{channel = Ch}) ->
     send_error("AMQP channel died", "Reason: ~p", [Reason], State),
@@ -195,7 +204,7 @@ process_request(ProcessFun, State) ->
     process_request(ProcessFun, fun (StateM) -> StateM end, State).
 
 
-process_request(ProcessFun, SuccessFun, State) ->
+process_request(ProcessFun, SuccessFun, State=#proc_state{connection=Conn}) ->
     Res = case catch ProcessFun(State) of
               {'EXIT',
                {{shutdown,
@@ -213,9 +222,9 @@ process_request(ProcessFun, SuccessFun, State) ->
                 none -> ok;
                 _    -> send_frame(Frame, NewState)
             end,
-            {ok, SuccessFun(NewState)};
+            {ok, SuccessFun(NewState), Conn};
         {error, Message, Detail, NewState} ->
-            {ok, send_error(Message, Detail, NewState)};
+            {ok, send_error(Message, Detail, NewState), Conn};
         {stop, normal, NewState} ->
             {stop, normal, SuccessFun(NewState)};
         {stop, R, NewState} ->
@@ -257,6 +266,10 @@ process_connect(Implicit, Frame,
       end,
       State).
 
+creds(_, _, #stomp_configuration{default_login       = DefLogin,
+                                 default_passcode    = DefPasscode,
+                                 force_default_creds = true}) ->
+    {DefLogin, DefPasscode};
 creds(Frame, SSLLoginName,
       #stomp_configuration{default_login    = DefLogin,
                            default_passcode = DefPasscode}) ->
@@ -286,13 +299,18 @@ frame_transformer(_) -> fun(Frame) -> Frame end.
 %% Frame Validation
 %%----------------------------------------------------------------------------
 
+report_missing_id_header(State) ->
+    error("Missing Header",
+          "Header 'id' is required for durable subscriptions", State).
+
 validate_frame(Command, Frame, State)
   when Command =:= "SUBSCRIBE" orelse Command =:= "UNSUBSCRIBE" ->
     Hdr = fun(Name) -> rabbit_stomp_frame:header(Frame, Name) end,
-    case {Hdr(?HEADER_PERSISTENT), Hdr(?HEADER_ID)} of
-        {{ok, "true"}, not_found} ->
-            error("Missing Header",
-                  "Header 'id' is required for durable subscriptions", State);
+    case {Hdr(?HEADER_DURABLE), Hdr(?HEADER_PERSISTENT), Hdr(?HEADER_ID)} of
+        {{ok, "true"}, _, not_found} ->
+            report_missing_id_header(State);
+        {_, {ok, "true"}, not_found} ->
+            report_missing_id_header(State);
         _ ->
             ok(State)
     end;
@@ -453,8 +471,7 @@ tidy_canceled_subscription(ConsumerTag, #subscription{dest_hdr = DestHdr},
 
 maybe_delete_durable_sub({topic, Name}, Frame,
                          State = #proc_state{channel = Channel}) ->
-    case rabbit_stomp_frame:boolean_header(Frame,
-                                           ?HEADER_PERSISTENT, false) of
+    case rabbit_stomp_util:has_durable_header(Frame) of
         true ->
             {ok, Id} = rabbit_stomp_frame:header(Frame, ?HEADER_ID),
             QName = rabbit_stomp_util:subscription_queue_name(Name, Id, Frame),
@@ -537,19 +554,22 @@ do_login(Username, Passwd, VirtualHost, Heartbeat, AdapterInfo, Version,
             link(Channel),
             amqp_channel:enable_delivery_flow_control(Channel),
             SessionId = rabbit_guid:string(rabbit_guid:gen_secure(), "session"),
-            {{SendTimeout, ReceiveTimeout}, State1} =
-                ensure_heartbeats(Heartbeat, State),
-            ok("CONNECTED",
-               [{?HEADER_SESSION, SessionId},
-                {?HEADER_HEART_BEAT,
-                 io_lib:format("~B,~B", [SendTimeout, ReceiveTimeout])},
-                {?HEADER_SERVER, server_header()},
-                {?HEADER_VERSION, Version}],
+            {SendTimeout, ReceiveTimeout} = ensure_heartbeats(Heartbeat),
+
+          Headers = [{?HEADER_SESSION, SessionId},
+                     {?HEADER_HEART_BEAT,
+                      io_lib:format("~B,~B", [SendTimeout, ReceiveTimeout])},
+                     {?HEADER_VERSION, Version}],
+          ok("CONNECTED",
+              case rabbit_misc:get_env(rabbitmq_stomp, hide_server_info, false) of
+                true  -> Headers;
+                false -> [{?HEADER_SERVER, server_header()} | Headers]
+              end,
                "",
-               State1#proc_state{session_id = SessionId,
-                            channel    = Channel,
-                            connection = Connection,
-                            version    = Version});
+               State#proc_state{session_id = SessionId,
+                                channel    = Channel,
+                                connection = Connection,
+                                version    = Version});
         {error, {auth_failure, _}} ->
             rabbit_log:warning("STOMP login failed for user ~p~n",
                                [binary_to_list(Username)]),
@@ -972,24 +992,16 @@ perform_transaction_action({Method, Props, BodyFragments}, State) ->
 %% Heartbeat Management
 %%--------------------------------------------------------------------
 
-%TODO heartbeats
-ensure_heartbeats(_, State = #proc_state{start_heartbeat_fun = undefined}) ->
-    {{0, 0}, State};
-ensure_heartbeats(Heartbeats,
-                  State = #proc_state{start_heartbeat_fun = SHF,
-                                      send_fun            = RawSendFun,
-                                      receive_fun         = ReceiveFun}) ->
+ensure_heartbeats(Heartbeats) ->
+
     [CX, CY] = [list_to_integer(X) ||
                    X <- re:split(Heartbeats, ",", [{return, list}])],
-
-    SendFun = fun() -> RawSendFun(sync, <<$\n>>) end,
 
     {SendTimeout, ReceiveTimeout} =
         {millis_to_seconds(CY), millis_to_seconds(CX)},
 
-    SHF(SendTimeout, SendFun, ReceiveTimeout, ReceiveFun),
-
-    {{SendTimeout * 1000 , ReceiveTimeout * 1000}, State}.
+    rabbit_stomp_reader:start_heartbeats(self(), {SendTimeout, ReceiveTimeout}),
+    {SendTimeout * 1000 , ReceiveTimeout * 1000}.
 
 millis_to_seconds(M) when M =< 0   -> 0;
 millis_to_seconds(M) when M < 1000 -> 1;
@@ -1022,7 +1034,7 @@ ensure_endpoint(Direction, EndPoint, {_, _, Headers, _}, Channel, State) ->
                                         [Arguments | Params], State).
 
 build_subscription_id(Frame) ->
-    case rabbit_stomp_frame:boolean_header(Frame, ?HEADER_PERSISTENT, false) of
+    case rabbit_stomp_util:has_durable_header(Frame) of
         true ->
             {ok, Id} = rabbit_stomp_frame:header(Frame, ?HEADER_ID),
             Id;
