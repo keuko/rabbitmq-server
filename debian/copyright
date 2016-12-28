@@ -41,11 +41,6 @@ Copyright: (c) Basho Technologies
 License: Apache-2.0
 Comments: Downloaded from http://webmachine.basho.com/
 
-Files: plugins-src/eldap-wrapper/*
-Copyright: (c) 2010, Torbjorn Tornkvist
-License: Expat
-Comments: Downloaded from https://github.com/etnt/eldap
-
 Files: deps/mochiweb/*
 Copyright: (c) 2007, Mochi Media, Inc.
 License: Expat
@@ -56,6 +51,11 @@ Files:
 Copyright: (c) 2011, Brandon Jones
 License: BSD-2-Clause
 Comments: Downloaded from http://code.google.com/p/glmatrix/
+
+Files: deps/rabbit_common/src/ec_semver.erl
+ deps/rabbit_common/src/ec_semver_parser.erl
+Copyright: (c) 2011 Erlware, LLC
+License: Expat
 
 Files: debian/*
 Copyright: (c) 2007-2013, GoPivotal, Inc.
