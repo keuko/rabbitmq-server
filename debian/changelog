@@ -1,3 +1,10 @@
+rabbitmq-server (3.6.6-1) UNRELEASED; urgency=medium
+
+  * Team upload.
+  * New upstream release
+
+ -- Ondřej Nový <onovy@debian.org>  Thu, 29 Dec 2016 00:49:19 +0100
+
 rabbitmq-server (3.6.5-1) unstable; urgency=medium
 
   [ James Page ]
