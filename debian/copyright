@@ -2,47 +2,41 @@ Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: RabbitMQ
 Source: http://www.rabbitmq.com/
 
-Files: debian/*
-Copyright: (c) 2007-2013, GoPivotal, Inc.
-           (c) 2007, Tony Garnock-Jones <tonyg@rabbitmq.com>
-           (c) 2014, Blair Hester <bhester@gopivotal.com>
-           (c) 2012-2014, Emile Joubert <emile@rabbitmq.com>
-           (c) 2008-2012, John Leuner <jewel@debian.org>
-           (c) 2014, James Page <james.page@canonical.com>
-           (c) 2014, Thomas Goirand <zigo@debian.org>
+Files: *
+Copyright: (c) 2007-2014 GoPivotal, Inc.
 License: MPL-1.1
 
-Files: codegen/amqp-rabbitmq-*.json
+Files: deps/rabbitmq_codegen/amqp-rabbitmq-*.json
 Copyright: (c) 2008-2013, GoPivotal Inc.
 License: Expat
 
-Files: plugins-src/rabbitmq-management/priv/www/js/jquery*.js
+Files: deps/rabbitmq_management/priv/www/js/jquery*.js
 Copyright: (c) 2010 John Resig
 License: Expat
 Comments: Downloaded from http://jquery.com/
 
-Files: plugins-src/rabbitmq-management/priv/www/js/ejs*
- plugins-src/rabbitmq-management/priv/www/js/tmpl
+Files: deps/rabbitmq_management/priv/www/js/ejs*
+ deps/rabbitmq_management/priv/www/js/tmpl/*
 Copyright: (c) 2007, Edward Benson
 License: Expat
 Comments: downloaded from http://embeddedjs.com/
 
-Files: plugins-src/rabbitmq-management/priv/www/js/sammy*.js
+Files: deps/rabbitmq_management/priv/www/js/sammy*.js
 Copyright: (c) 2008 Aaron Quint, Quirkey NYC, LLC
 License: Expat
 Comments: Downloaded from http://code.quirkey.com/sammy/
 
-Files: plugins-src/rabbitmq-management/priv/www/js/excanvas*.js
+Files: deps/rabbitmq_management/priv/www/js/excanvas*.js
 Copyright: (c) 2006, Google Inc
 License: Apache-2.0
-Comments: Downloaded from http://code.google.com/p/explorercanvas/
+Comments: Downloaded from https://github.com/arv/explorercanvas
 
-Files: plugins-src/rabbitmq-management/priv/www/js/jquery.flot*.js
+Files: deps/rabbitmq_management/priv/www/js/jquery.flot*.js
 Copyright: (c) 2007-2013, IOLA and Ole Laursen
 License: Expat
 Comments: Downloaded from http://www.flotcharts.org/
 
-Files: plugins-src/webmachine-wrapper/*
+Files: deps/webmachine/*
 Copyright: (c) Basho Technologies
 License: Apache-2.0
 Comments: Downloaded from http://webmachine.basho.com/
@@ -52,19 +46,26 @@ Copyright: (c) 2010, Torbjorn Tornkvist
 License: Expat
 Comments: Downloaded from https://github.com/etnt/eldap
 
-Files: plugins-src/mochiweb-wrapper/mochiweb-git/*
+Files: deps/mochiweb/*
 Copyright: (c) 2007, Mochi Media, Inc.
 License: Expat
 Comments: Downloaded from http://github.com/mochi/mochiweb/
 
 Files:
- plugins-src/rabbitmq-management-visualiser/priv/www/visualiser/js/glMatrix*.js
+ deps/rabbitmq_management_visualiser/priv/www/visualiser/js/glMatrix*.js
 Copyright: (c) 2011, Brandon Jones
 License: BSD-2-Clause
 Comments: Downloaded from http://code.google.com/p/glmatrix/
 
-Files: *
-Copyright: (c) 2007-2014 GoPivotal, Inc.
+Files: debian/*
+Copyright: (c) 2007-2013, GoPivotal, Inc.
+           (c) 2007, Tony Garnock-Jones <tonyg@rabbitmq.com>
+           (c) 2014, Blair Hester <bhester@gopivotal.com>
+           (c) 2012-2014, Emile Joubert <emile@rabbitmq.com>
+           (c) 2008-2012, John Leuner <jewel@debian.org>
+           (c) 2015, Antonio Terceiro <terceiro@debian.org>
+           (c) 2014-2016, James Page <james.page@canonical.com>
+           (c) 2014-2016, Thomas Goirand <zigo@debian.org>
 License: MPL-1.1
 
 License: Expat

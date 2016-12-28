@@ -18,11 +18,13 @@
 
 -export([init/3, terminate/2, delete_and_terminate/2,
          purge/1, purge_acks/1, publish/6, publish_delivered/5,
+         batch_publish/4, batch_publish_delivered/4,
          discard/4, fetch/2, drop/2, ack/2, requeue/2, ackfold/4, fold/3,
          len/1, is_empty/1, depth/1, drain_confirmed/1,
          dropwhile/2, fetchwhile/4, set_ram_duration_target/2, ram_duration/1,
          needs_timeout/1, timeout/1, handle_pre_hibernate/1, resume/1,
-         msg_rates/1, info/2, invoke/3, is_duplicate/2]).
+         msg_rates/1, info/2, invoke/3, is_duplicate/2, set_queue_mode/2,
+         zip_msgs_and_acks/4]).
 
 -export([start/1, stop/0, delete_crashed/1]).
 
@@ -41,38 +43,36 @@
                  backing_queue_state,
                  seen_status,
                  confirmed,
-                 known_senders
+                 known_senders,
+                 wait_timeout
                }).
-
--ifdef(use_specs).
 
 -export_type([death_fun/0, depth_fun/0, stats_fun/0]).
 
--type(death_fun() :: fun ((pid()) -> 'ok')).
--type(depth_fun() :: fun (() -> 'ok')).
--type(stats_fun() :: fun ((any()) -> 'ok')).
--type(master_state() :: #state { name                :: rabbit_amqqueue:name(),
+-type death_fun() :: fun ((pid()) -> 'ok').
+-type depth_fun() :: fun (() -> 'ok').
+-type stats_fun() :: fun ((any()) -> 'ok').
+-type master_state() :: #state { name                :: rabbit_amqqueue:name(),
                                  gm                  :: pid(),
                                  coordinator         :: pid(),
                                  backing_queue       :: atom(),
                                  backing_queue_state :: any(),
-                                 seen_status         :: dict:dict(),
+                                 seen_status         :: ?DICT_TYPE(),
                                  confirmed           :: [rabbit_guid:guid()],
-                                 known_senders       :: sets:set()
-                               }).
-
--spec(promote_backing_queue_state/8 ::
+                                 known_senders       :: ?SET_TYPE()
+                               }.
+-spec promote_backing_queue_state
         (rabbit_amqqueue:name(), pid(), atom(), any(), pid(), [any()],
-         dict:dict(), [pid()]) -> master_state()).
--spec(sender_death_fun/0 :: () -> death_fun()).
--spec(depth_fun/0 :: () -> depth_fun()).
--spec(init_with_existing_bq/3 :: (rabbit_types:amqqueue(), atom(), any()) ->
-                                      master_state()).
--spec(stop_mirroring/1 :: (master_state()) -> {atom(), any()}).
--spec(sync_mirrors/3 :: (stats_fun(), stats_fun(), master_state()) ->
-    {'ok', master_state()} | {stop, any(), master_state()}).
+         ?DICT_TYPE(), [pid()]) ->
+            master_state().
 
--endif.
+-spec sender_death_fun() -> death_fun().
+-spec depth_fun() -> depth_fun().
+-spec init_with_existing_bq(rabbit_types:amqqueue(), atom(), any()) ->
+          master_state().
+-spec stop_mirroring(master_state()) -> {atom(), any()}.
+-spec sync_mirrors(stats_fun(), stats_fun(), master_state()) ->
+          {'ok', master_state()} | {stop, any(), master_state()}.
 
 %% For general documentation of HA design, see
 %% rabbit_mirror_queue_coordinator
@@ -128,7 +128,8 @@ init_with_existing_bq(Q = #amqqueue{name = QName}, BQ, BQS) ->
              backing_queue_state = BQS,
              seen_status         = dict:new(),
              confirmed           = [],
-             known_senders       = sets:new() }.
+             known_senders       = sets:new(),
+             wait_timeout        = rabbit_misc:get_env(rabbit, slave_wait_timeout, 15000) }.
 
 stop_mirroring(State = #state { coordinator         = CPid,
                                 backing_queue       = BQ,
@@ -147,13 +148,15 @@ sync_mirrors(HandleInfo, EmitStats,
                     QName, "Synchronising: " ++ Fmt ++ "~n", Params)
           end,
     Log("~p messages to synchronise", [BQ:len(BQS)]),
-    {ok, #amqqueue{slave_pids = SPids}} = rabbit_amqqueue:lookup(QName),
+    {ok, #amqqueue{slave_pids = SPids} = Q} = rabbit_amqqueue:lookup(QName),
+    SyncBatchSize = rabbit_mirror_queue_misc:sync_batch_size(Q),
+    Log("batch size: ~p", [SyncBatchSize]),
     Ref = make_ref(),
     Syncer = rabbit_mirror_queue_sync:master_prepare(Ref, QName, Log, SPids),
     gm:broadcast(GM, {sync_start, Ref, Syncer, SPids}),
     S = fun(BQSN) -> State#state{backing_queue_state = BQSN} end,
     case rabbit_mirror_queue_sync:master_go(
-           Syncer, Ref, Log, HandleInfo, EmitStats, BQ, BQS) of
+           Syncer, Ref, Log, HandleInfo, EmitStats, SyncBatchSize, BQ, BQS) of
         {shutdown,  R, BQS1}   -> {stop, R, S(BQS1)};
         {sync_died, R, BQS1}   -> Log("~p", [R]),
                                   {ok, S(BQS1)};
@@ -199,7 +202,7 @@ delete_and_terminate(Reason, State = #state { backing_queue       = BQ,
     stop_all_slaves(Reason, State),
     State#state{backing_queue_state = BQ:delete_and_terminate(Reason, BQS)}.
 
-stop_all_slaves(Reason, #state{name = QName, gm = GM}) ->
+stop_all_slaves(Reason, #state{name = QName, gm = GM, wait_timeout = WT}) ->
     {ok, #amqqueue{slave_pids = SPids}} = rabbit_amqqueue:lookup(QName),
     PidsMRefs = [{Pid, erlang:monitor(process, Pid)} || Pid <- [GM | SPids]],
     ok = gm:broadcast(GM, {delete_and_terminate, Reason}),
@@ -208,7 +211,15 @@ stop_all_slaves(Reason, #state{name = QName, gm = GM}) ->
     %% monitor them but they would not have received the GM
     %% message. So only wait for slaves which are still
     %% not-partitioned.
-    [receive {'DOWN', MRef, process, _Pid, _Info} -> ok end
+    [receive
+         {'DOWN', MRef, process, _Pid, _Info} ->
+             ok
+     after WT ->
+             rabbit_mirror_queue_misc:log_warning(
+               QName, "Missing 'DOWN' message from ~p in node ~p~n",
+               [Pid, node(Pid)]),
+             ok
+     end
      || {Pid, MRef} <- PidsMRefs, rabbit_mnesia:on_running_node(Pid)],
     %% Normally when we remove a slave another slave or master will
     %% notice and update Mnesia. But we just removed them all, and
@@ -241,6 +252,27 @@ publish(Msg = #basic_message { id = MsgId }, MsgProps, IsDelivered, ChPid, Flow,
     BQS1 = BQ:publish(Msg, MsgProps, IsDelivered, ChPid, Flow, BQS),
     ensure_monitoring(ChPid, State #state { backing_queue_state = BQS1 }).
 
+batch_publish(Publishes, ChPid, Flow,
+              State = #state { gm                  = GM,
+                               seen_status         = SS,
+                               backing_queue       = BQ,
+                               backing_queue_state = BQS }) ->
+    {Publishes1, false, MsgSizes} =
+        lists:foldl(fun ({Msg = #basic_message { id = MsgId },
+                          MsgProps, _IsDelivered}, {Pubs, false, Sizes}) ->
+                            {[{Msg, MsgProps, true} | Pubs], %% [0]
+                             false = dict:is_key(MsgId, SS), %% ASSERTION
+                             Sizes + rabbit_basic:msg_size(Msg)}
+                    end, {[], false, 0}, Publishes),
+    Publishes2 = lists:reverse(Publishes1),
+    ok = gm:broadcast(GM, {batch_publish, ChPid, Flow, Publishes2},
+                      MsgSizes),
+    BQS1 = BQ:batch_publish(Publishes2, ChPid, Flow, BQS),
+    ensure_monitoring(ChPid, State #state { backing_queue_state = BQS1 }).
+%% [0] When the slave process handles the publish command, it sets the
+%% IsDelivered flag to true, so to avoid iterating over the messages
+%% again at the slave, we do it here.
+
 publish_delivered(Msg = #basic_message { id = MsgId }, MsgProps,
                   ChPid, Flow, State = #state { gm                  = GM,
                                                 seen_status         = SS,
@@ -252,6 +284,23 @@ publish_delivered(Msg = #basic_message { id = MsgId }, MsgProps,
     {AckTag, BQS1} = BQ:publish_delivered(Msg, MsgProps, ChPid, Flow, BQS),
     State1 = State #state { backing_queue_state = BQS1 },
     {AckTag, ensure_monitoring(ChPid, State1)}.
+
+batch_publish_delivered(Publishes, ChPid, Flow,
+                        State = #state { gm                  = GM,
+                                         seen_status         = SS,
+                                         backing_queue       = BQ,
+                                         backing_queue_state = BQS }) ->
+    {false, MsgSizes} =
+        lists:foldl(fun ({Msg = #basic_message { id = MsgId }, _MsgProps},
+                         {false, Sizes}) ->
+                            {false = dict:is_key(MsgId, SS), %% ASSERTION
+                             Sizes + rabbit_basic:msg_size(Msg)}
+                    end, {false, 0}, Publishes),
+    ok = gm:broadcast(GM, {batch_publish_delivered, ChPid, Flow, Publishes},
+                      MsgSizes),
+    {AckTags, BQS1} = BQ:batch_publish_delivered(Publishes, ChPid, Flow, BQS),
+    State1 = State #state { backing_queue_state = BQS1 },
+    {AckTags, ensure_monitoring(ChPid, State1)}.
 
 discard(MsgId, ChPid, Flow, State = #state { gm                  = GM,
                                              backing_queue       = BQ,
@@ -311,7 +360,7 @@ fetch(AckRequired, State = #state { backing_queue       = BQ,
     State1 = State #state { backing_queue_state = BQS1 },
     {Result, case Result of
                  empty                          -> State1;
-                 {_MsgId, _IsDelivered, AckTag} -> drop_one(AckTag, State1)
+                 {_MsgId, _IsDelivered, _AckTag} -> drop_one(AckRequired, State1)
              end}.
 
 drop(AckRequired, State = #state { backing_queue       = BQ,
@@ -320,7 +369,7 @@ drop(AckRequired, State = #state { backing_queue       = BQ,
     State1 = State #state { backing_queue_state = BQS1 },
     {Result, case Result of
                  empty            -> State1;
-                 {_MsgId, AckTag} -> drop_one(AckTag, State1)
+                 {_MsgId, _AckTag} -> drop_one(AckRequired, State1)
              end}.
 
 ack(AckTags, State = #state { gm                  = GM,
@@ -444,6 +493,18 @@ is_duplicate(Message = #basic_message { id = MsgId },
                                   confirmed = [MsgId | Confirmed] }}
     end.
 
+set_queue_mode(Mode, State = #state { gm                  = GM,
+                                      backing_queue       = BQ,
+                                      backing_queue_state = BQS }) ->
+    ok = gm:broadcast(GM, {set_queue_mode, Mode}),
+    BQS1 = BQ:set_queue_mode(Mode, BQS),
+    State #state { backing_queue_state = BQS1 }.
+
+zip_msgs_and_acks(Msgs, AckTags, Accumulator,
+                  #state { backing_queue = BQ,
+                           backing_queue_state = BQS }) ->
+    BQ:zip_msgs_and_acks(Msgs, AckTags, Accumulator, BQS).
+
 %% ---------------------------------------------------------------------------
 %% Other exported functions
 %% ---------------------------------------------------------------------------
@@ -454,6 +515,7 @@ promote_backing_queue_state(QName, CPid, BQ, BQS, GM, AckTags, Seen, KS) ->
     Depth = BQ:depth(BQS1),
     true = Len == Depth, %% ASSERTION: everything must have been requeued
     ok = gm:broadcast(GM, {depth, Depth}),
+    WaitTimeout = rabbit_misc:get_env(rabbit, slave_wait_timeout, 15000),
     #state { name                = QName,
              gm                  = GM,
              coordinator         = CPid,
@@ -461,7 +523,8 @@ promote_backing_queue_state(QName, CPid, BQ, BQS, GM, AckTags, Seen, KS) ->
              backing_queue_state = BQS1,
              seen_status         = Seen,
              confirmed           = [],
-             known_senders       = sets:from_list(KS) }.
+             known_senders       = sets:from_list(KS),
+             wait_timeout        = WaitTimeout }.
 
 sender_death_fun() ->
     Self = self(),
@@ -492,10 +555,10 @@ depth_fun() ->
 %% Helpers
 %% ---------------------------------------------------------------------------
 
-drop_one(AckTag, State = #state { gm                  = GM,
-                                  backing_queue       = BQ,
-                                  backing_queue_state = BQS }) ->
-    ok = gm:broadcast(GM, {drop, BQ:len(BQS), 1, AckTag =/= undefined}),
+drop_one(AckRequired, State = #state { gm                  = GM,
+                                       backing_queue       = BQ,
+                                       backing_queue_state = BQS }) ->
+    ok = gm:broadcast(GM, {drop, BQ:len(BQS), 1, AckRequired}),
     State.
 
 drop(PrevLen, AckRequired, State = #state { gm                  = GM,

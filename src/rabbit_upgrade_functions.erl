@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_upgrade_functions).
@@ -51,41 +51,39 @@
 -rabbit_upgrade({down_slave_nodes,      mnesia, [queue_decorators]}).
 -rabbit_upgrade({queue_state,           mnesia, [down_slave_nodes]}).
 -rabbit_upgrade({recoverable_slaves,    mnesia, [queue_state]}).
+-rabbit_upgrade({user_password_hashing, mnesia, [hash_passwords]}).
 
 %% -------------------------------------------------------------------
 
--ifdef(use_specs).
-
--spec(remove_user_scope/0     :: () -> 'ok').
--spec(hash_passwords/0        :: () -> 'ok').
--spec(add_ip_to_listener/0    :: () -> 'ok').
--spec(internal_exchanges/0    :: () -> 'ok').
--spec(user_to_internal_user/0 :: () -> 'ok').
--spec(topic_trie/0            :: () -> 'ok').
--spec(semi_durable_route/0    :: () -> 'ok').
--spec(exchange_event_serial/0 :: () -> 'ok').
--spec(trace_exchanges/0       :: () -> 'ok').
--spec(user_admin_to_tags/0    :: () -> 'ok').
--spec(ha_mirrors/0            :: () -> 'ok').
--spec(gm/0                    :: () -> 'ok').
--spec(exchange_scratch/0      :: () -> 'ok').
--spec(mirrored_supervisor/0   :: () -> 'ok').
--spec(topic_trie_node/0       :: () -> 'ok').
--spec(runtime_parameters/0    :: () -> 'ok').
--spec(policy/0                :: () -> 'ok').
--spec(sync_slave_pids/0       :: () -> 'ok').
--spec(no_mirror_nodes/0       :: () -> 'ok').
--spec(gm_pids/0               :: () -> 'ok').
--spec(exchange_decorators/0   :: () -> 'ok').
--spec(policy_apply_to/0       :: () -> 'ok').
--spec(queue_decorators/0      :: () -> 'ok').
--spec(internal_system_x/0     :: () -> 'ok').
--spec(cluster_name/0          :: () -> 'ok').
--spec(down_slave_nodes/0      :: () -> 'ok').
--spec(queue_state/0           :: () -> 'ok').
--spec(recoverable_slaves/0    :: () -> 'ok').
-
--endif.
+-spec remove_user_scope() -> 'ok'.
+-spec hash_passwords() -> 'ok'.
+-spec add_ip_to_listener() -> 'ok'.
+-spec internal_exchanges() -> 'ok'.
+-spec user_to_internal_user() -> 'ok'.
+-spec topic_trie() -> 'ok'.
+-spec semi_durable_route() -> 'ok'.
+-spec exchange_event_serial() -> 'ok'.
+-spec trace_exchanges() -> 'ok'.
+-spec user_admin_to_tags() -> 'ok'.
+-spec ha_mirrors() -> 'ok'.
+-spec gm() -> 'ok'.
+-spec exchange_scratch() -> 'ok'.
+-spec mirrored_supervisor() -> 'ok'.
+-spec topic_trie_node() -> 'ok'.
+-spec runtime_parameters() -> 'ok'.
+-spec policy() -> 'ok'.
+-spec sync_slave_pids() -> 'ok'.
+-spec no_mirror_nodes() -> 'ok'.
+-spec gm_pids() -> 'ok'.
+-spec exchange_decorators() -> 'ok'.
+-spec policy_apply_to() -> 'ok'.
+-spec queue_decorators() -> 'ok'.
+-spec internal_system_x() -> 'ok'.
+-spec cluster_name() -> 'ok'.
+-spec down_slave_nodes() -> 'ok'.
+-spec queue_state() -> 'ok'.
+-spec recoverable_slaves() -> 'ok'.
+-spec user_password_hashing() -> 'ok'.
 
 %%--------------------------------------------------------------------
 
@@ -103,11 +101,15 @@ remove_user_scope() ->
       end,
       [user_vhost, permission]).
 
+%% this is an early migration that hashes passwords using MD5,
+%% only relevant to those migrating from 2.1.1.
+%% all users created after in 3.6.0 or later will use SHA-256 (unless configured
+%% otherwise)
 hash_passwords() ->
     transform(
       rabbit_user,
       fun ({user, Username, Password, IsAdmin}) ->
-              Hash = rabbit_auth_backend_internal:hash_password(Password),
+              Hash = rabbit_auth_backend_internal:hash_password(rabbit_password_hashing_md5, Password),
               {user, Username, Hash, IsAdmin}
       end,
       [username, password_hash, is_admin]).
@@ -431,6 +433,17 @@ recoverable_slaves(Table) ->
        sync_slave_pids, recoverable_slaves, policy, gm_pids, decorators,
        state]).
 
+%% Prior to 3.6.0, passwords were hashed using MD5, this populates
+%% existing records with said default.  Users created with 3.6.0+ will
+%% have internal_user.hashing_algorithm populated by the internal
+%% authn backend.
+user_password_hashing() ->
+    transform(
+      rabbit_user,
+      fun ({internal_user, Username, Hash, Tags}) ->
+              {internal_user, Username, Hash, Tags, rabbit_password_hashing_md5}
+      end,
+      [username, password_hash, tags, hashing_algorithm]).
 
 %%--------------------------------------------------------------------
 
@@ -452,8 +465,8 @@ create(Tab, TabDef) ->
 %% Dumb replacement for rabbit_exchange:declare that does not require
 %% the exchange type registry or worker pool to be running by dint of
 %% not validating anything and assuming the exchange type does not
-%% require serialisation.
-%% NB: this assumes the pre-exchange-scratch-space format
+%% require serialisation.  NB: this assumes the
+%% pre-exchange-scratch-space format
 declare_exchange(XName, Type) ->
     X = {exchange, XName, Type, true, false, false, []},
     ok = mnesia:dirty_write(rabbit_durable_exchange, X).

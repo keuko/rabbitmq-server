@@ -1,13 +1,32 @@
-rabbitmq-server (3.5.7-2) unstable; urgency=medium
+rabbitmq-server (3.6.5-1) unstable; urgency=medium
 
-  [ Ondřej Nový ]
-  * Standards-Version is 3.9.8 now (no change).
+  [ James Page ]
+  * New upstream release (Closes: #812377):
+    - Builds fine with the new erlang (Closes: #837241).
+  * [fa2d29e] Update watch file for upstream xz compression. (Closes: #813628).
+  * [b008e08] Imported Upstream version 3.6.0.
+  * [d0dc477] Update gbp configuration for dch use.
 
   [ Thomas Goirand ]
-  * Fixed debian/watch file (Closes: #813628).
-  * Also packages rabbitmqadmin in /usr/bin.
+  * Also packaging the rabbitmqadmin cli.
+  * Do not do dh_auto_clean, as it removes all the deps folder.
+  * Disabled tests, as they download from github.
+  * Replaced git-core transition package by git in build-depends.
+  * Added rsync as build-depends-indep.
+  * Fix DESTDIR=$(DEB_DESTDIR) PREFIX=/usr as upstream Makefile changed.
+  * Added python-all and dh-python as build-depends.
+  * Update of debian/copyright for the new deps/* path from upstream, updated
+    debian/* info and fixed order.
+  * Copy some stuff from the upstream pacakging in debian/rules.
+  * Runtime depends on lsb-base.
+  * Overrides lintian false positive error js source missing.
 
- -- Thomas Goirand <zigo@debian.org>  Thu, 19 May 2016 15:28:36 +0200
+  [ Ondřej Nový ]
+  * Fixed VCS URLs (https).
+  * Fixed python shebang.
+  * Standards-Version is 3.9.8 now (no change).
+
+ -- Thomas Goirand <zigo@debian.org>  Sun, 14 Feb 2016 13:35:22 +0800
 
 rabbitmq-server (3.5.7-1) unstable; urgency=medium
 

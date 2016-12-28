@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(background_gc).
@@ -26,18 +26,15 @@
 
 -define(MAX_RATIO, 0.01).
 -define(IDEAL_INTERVAL, 60000).
+-define(MAX_INTERVAL, 240000).
 
 -record(state, {last_interval}).
 
 %%----------------------------------------------------------------------------
 
--ifdef(use_specs).
-
--spec(start_link/0 :: () -> {'ok', pid()} | {'error', any()}).
--spec(run/0 :: () -> 'ok').
--spec(gc/0 :: () -> 'ok').
-
--endif.
+-spec start_link() -> {'ok', pid()} | {'error', any()}.
+-spec run() -> 'ok'.
+-spec gc() -> 'ok'.
 
 %%----------------------------------------------------------------------------
 
@@ -70,7 +67,7 @@ terminate(_Reason, State) -> State.
 interval_gc(State = #state{last_interval = LastInterval}) ->
     {ok, Interval} = rabbit_misc:interval_operation(
                        {?MODULE, gc, []},
-                       ?MAX_RATIO, ?IDEAL_INTERVAL, LastInterval),
+                       ?MAX_RATIO, ?MAX_INTERVAL, ?IDEAL_INTERVAL, LastInterval),
     erlang:send_after(Interval, self(), run),
     State#state{last_interval = Interval}.
 

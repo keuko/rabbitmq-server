@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_amqqueue_process).
@@ -33,40 +33,69 @@
          prioritise_cast/3, prioritise_info/3, format_message_queue/2]).
 
 %% Queue's state
--record(q, {q,
+-record(q, {
+            %% an #amqqueue record
+            q,
+            %% none | {exclusive consumer channel PID, consumer tag}
             exclusive_consumer,
+            %% Set to true if a queue has ever had a consumer.
+            %% This is used to determine when to delete auto-delete queues.
             has_had_consumers,
+            %% backing queue module.
+            %% for mirrored queues, this will be rabbit_mirror_queue_master.
+            %% for non-priority and non-mirrored queues, rabbit_variable_queue.
+            %% see rabbit_backing_queue.
             backing_queue,
+            %% backing queue state.
+            %% see rabbit_backing_queue, rabbit_variable_queue.
             backing_queue_state,
+            %% consumers state, see rabbit_queue_consumers
             consumers,
+            %% queue expiration value
             expires,
+            %% timer used to periodically sync (flush) queue index
             sync_timer_ref,
+            %% timer used to update ingress/egress rates and queue RAM duration target
             rate_timer_ref,
+            %% timer used to clean up this queue due to TTL (on when unused)
             expiry_timer_ref,
+            %% stats emission timer
             stats_timer,
+            %% maps message IDs to {channel pid, MsgSeqNo}
+            %% pairs
             msg_id_to_channel,
+            %% message TTL value
             ttl,
+            %% timer used to delete expired messages
             ttl_timer_ref,
             ttl_timer_expiry,
+            %% Keeps track of channels that publish to this queue.
+            %% When channel process goes down, queues have to perform
+            %% certain cleanup.
             senders,
+            %% dead letter exchange as a #resource record, if any
             dlx,
             dlx_routing_key,
+            %% max length in messages, if configured
             max_length,
+            %% max length in bytes, if configured
             max_bytes,
+            %% when policies change, this version helps queue
+            %% determine what previously scheduled/set up state to ignore,
+            %% e.g. message expiration messages from previously set up timers
+            %% that may or may not be still valid
             args_policy_version,
+            %% running | flow | idle
             status
            }).
 
 %%----------------------------------------------------------------------------
 
--ifdef(use_specs).
-
--spec(info_keys/0 :: () -> rabbit_types:info_keys()).
--spec(init_with_backing_queue_state/7 ::
+-spec info_keys() -> rabbit_types:info_keys().
+-spec init_with_backing_queue_state
         (rabbit_types:amqqueue(), atom(), tuple(), any(),
-         [rabbit_types:delivery()], pmon:pmon(), dict:dict()) -> #q{}).
-
--endif.
+         [rabbit_types:delivery()], pmon:pmon(), ?DICT_TYPE()) ->
+            #q{}.
 
 %%----------------------------------------------------------------------------
 
@@ -84,7 +113,9 @@
          slave_pids,
          synchronised_slave_pids,
          recoverable_slaves,
-         state
+         state,
+         reductions,
+         garbage_collection
         ]).
 
 -define(CREATION_EVENT_KEYS,
@@ -318,7 +349,8 @@ process_args_policy(State = #q{q                   = Q,
          {<<"dead-letter-routing-key">>, fun res_arg/2, fun init_dlx_rkey/2},
          {<<"message-ttl">>,             fun res_min/2, fun init_ttl/2},
          {<<"max-length">>,              fun res_min/2, fun init_max_length/2},
-         {<<"max-length-bytes">>,        fun res_min/2, fun init_max_bytes/2}],
+         {<<"max-length-bytes">>,        fun res_min/2, fun init_max_bytes/2},
+         {<<"queue-mode">>,              fun res_arg/2, fun init_queue_mode/2}],
       drop_expired_msgs(
          lists:foldl(fun({Name, Resolve, Fun}, StateN) ->
                              Fun(args_policy_lookup(Name, Resolve, Q), StateN)
@@ -360,6 +392,13 @@ init_max_length(MaxLen, State) ->
 init_max_bytes(MaxBytes, State) ->
     {_Dropped, State1} = maybe_drop_head(State#q{max_bytes = MaxBytes}),
     State1.
+
+init_queue_mode(undefined, State) ->
+    State;
+init_queue_mode(Mode, State = #q {backing_queue = BQ,
+                                  backing_queue_state = BQS}) ->
+    BQS1 = BQ:set_queue_mode(binary_to_existing_atom(Mode, utf8), BQS),
+    State#q{backing_queue_state = BQS1}.
 
 reply(Reply, NewState) ->
     {NewState1, Timeout} = next_state(NewState),
@@ -422,7 +461,7 @@ ensure_ttl_timer(undefined, State) ->
     State;
 ensure_ttl_timer(Expiry, State = #q{ttl_timer_ref       = undefined,
                                     args_policy_version = Version}) ->
-    After = (case Expiry - now_micros() of
+    After = (case Expiry - time_compat:os_system_time(micro_seconds) of
                  V when V > 0 -> V + 999; %% always fire later
                  _            -> 0
              end) div 1000,
@@ -742,7 +781,7 @@ calculate_msg_expiry(#basic_message{content = Content}, TTL) ->
     {ok, MsgTTL} = rabbit_basic:parse_expiration(Props),
     case lists:min([TTL, MsgTTL]) of
         undefined -> undefined;
-        T         -> now_micros() + T * 1000
+        T         -> time_compat:os_system_time(micro_seconds) + T * 1000
     end.
 
 %% Logically this function should invoke maybe_send_drained/2.
@@ -753,7 +792,8 @@ calculate_msg_expiry(#basic_message{content = Content}, TTL) ->
 drop_expired_msgs(State) ->
     case is_empty(State) of
         true  -> State;
-        false -> drop_expired_msgs(now_micros(), State)
+        false -> drop_expired_msgs(time_compat:os_system_time(micro_seconds),
+                                   State)
     end.
 
 drop_expired_msgs(Now, State = #q{backing_queue_state = BQS,
@@ -815,8 +855,6 @@ stop(State) -> stop(noreply, State).
 
 stop(noreply, State) -> {stop, normal, State};
 stop(Reply,   State) -> {stop, normal, Reply, State}.
-
-now_micros() -> timer:now_diff(now(), {0,0,0}).
 
 infos(Items, State) -> [{Item, i(Item, State)} || Item <- Items].
 
@@ -886,6 +924,11 @@ i(recoverable_slaves, #q{q = #amqqueue{name    = Name,
     end;
 i(state, #q{status = running}) -> credit_flow:state();
 i(state, #q{status = State})   -> State;
+i(garbage_collection, _State) ->
+    rabbit_misc:get_gc_info(self());
+i(reductions, _State) ->
+    {reductions, Reductions} = erlang:process_info(self(), reductions),
+    Reductions;
 i(Item, #q{backing_queue_state = BQS, backing_queue = BQ}) ->
     BQ:info(Item, BQS).
 
@@ -1330,8 +1373,11 @@ handle_pre_hibernate(State = #q{backing_queue = BQ,
     BQS3 = BQ:handle_pre_hibernate(BQS2),
     rabbit_event:if_enabled(
       State, #q.stats_timer,
-      fun () -> emit_stats(State, [{idle_since,           now()},
-                                   {consumer_utilisation, ''}]) end),
+      fun () -> emit_stats(State,
+                           [{idle_since,
+                             time_compat:os_system_time(milli_seconds)},
+                            {consumer_utilisation, ''}])
+                end),
     State1 = rabbit_event:stop_stats_timer(State#q{backing_queue_state = BQS3},
                                            #q.stats_timer),
     {hibernate, stop_rate_timer(State1)}.

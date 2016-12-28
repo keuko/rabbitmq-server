@@ -11,10 +11,14 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_policies).
+
+%% Provides built-in policy parameter
+%% validation functions.
+
 -behaviour(rabbit_policy_validator).
 
 -include("rabbit.hrl").
@@ -35,7 +39,8 @@ register() ->
                           {policy_validator, <<"message-ttl">>},
                           {policy_validator, <<"expires">>},
                           {policy_validator, <<"max-length">>},
-                          {policy_validator, <<"max-length-bytes">>}]],
+                          {policy_validator, <<"max-length-bytes">>},
+                          {policy_validator, <<"queue-mode">>}]],
     ok.
 
 validate_policy(Terms) ->
@@ -83,4 +88,11 @@ validate_policy0(<<"max-length-bytes">>, Value)
   when is_integer(Value), Value >= 0 ->
     ok;
 validate_policy0(<<"max-length-bytes">>, Value) ->
-    {error, "~p is not a valid maximum length in bytes", [Value]}.
+    {error, "~p is not a valid maximum length in bytes", [Value]};
+
+validate_policy0(<<"queue-mode">>, <<"default">>) ->
+    ok;
+validate_policy0(<<"queue-mode">>, <<"lazy">>) ->
+    ok;
+validate_policy0(<<"queue-mode">>, Value) ->
+    {error, "~p is not a valid queue-mode value", [Value]}.

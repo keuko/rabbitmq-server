@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2015 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
 %%
 
 
@@ -41,7 +41,6 @@
                }).
 
 -define(SERVER, ?MODULE).
--define(DEFAULT_UPDATE_INTERVAL, 2500).
 -define(TABLE_NAME, ?MODULE).
 
 %% If all queues are pushed to disk (duration 0), then the sum of
@@ -56,16 +55,12 @@
 
 %%----------------------------------------------------------------------------
 
--ifdef(use_specs).
-
--spec(start_link/0 :: () -> rabbit_types:ok_pid_or_error()).
--spec(register/2 :: (pid(), {atom(),atom(),[any()]}) -> 'ok').
--spec(deregister/1 :: (pid()) -> 'ok').
--spec(report_ram_duration/2 ::
-        (pid(), float() | 'infinity') -> number() | 'infinity').
--spec(stop/0 :: () -> 'ok').
-
--endif.
+-spec start_link() -> rabbit_types:ok_pid_or_error().
+-spec register(pid(), {atom(),atom(),[any()]}) -> 'ok'.
+-spec deregister(pid()) -> 'ok'.
+-spec report_ram_duration
+        (pid(), float() | 'infinity') -> number() | 'infinity'.
+-spec stop() -> 'ok'.
 
 %%----------------------------------------------------------------------------
 %% Public API
@@ -87,7 +82,9 @@ report_ram_duration(Pid, QueueDuration) ->
 stop() ->
     gen_server2:cast(?SERVER, stop).
 
-conserve_resources(Pid, disk, Conserve) ->
+%% Paging should be enabled/disabled only in response to disk resource alarms
+%% for the current node.
+conserve_resources(Pid, disk, {_, Conserve, Node}) when node(Pid) =:= Node ->
     gen_server2:cast(Pid, {disk_alarm, Conserve});
 conserve_resources(_Pid, _Source, _Conserve) ->
     ok.
@@ -110,7 +107,8 @@ memory_use(ratio) ->
 %%----------------------------------------------------------------------------
 
 init([]) ->
-    {ok, TRef} = timer:send_interval(?DEFAULT_UPDATE_INTERVAL, update),
+    {ok, Interval} = application:get_env(rabbit, memory_monitor_interval),
+    {ok, TRef} = timer:send_interval(Interval, update),
 
     Ets = ets:new(?TABLE_NAME, [set, private, {keypos, #process.pid}]),
     Alarms = rabbit_alarm:register(self(), {?MODULE, conserve_resources, []}),
