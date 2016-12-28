@@ -22,3 +22,5 @@ pre-deps::
 pre-app::
 
 include ../../erlang.mk
+
+ERLC_OPTS += $(SOCKJS_ERLC_OPTS)

@@ -1,7 +1,7 @@
 PROJECT = rabbit_common
 
 BUILD_DEPS = rabbitmq_codegen
-TEST_DEPS = mochiweb
+TEST_DEPS = mochiweb proper
 
 .DEFAULT_GOAL = all
 
@@ -22,6 +22,7 @@ include mk/rabbitmq-components.mk
 include erlang.mk
 include mk/rabbitmq-build.mk
 include mk/rabbitmq-dist.mk
+include mk/rabbitmq-tools.mk
 
 # --------------------------------------------------------------------
 # Compilation.
