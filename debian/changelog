@@ -3,6 +3,7 @@ rabbitmq-server (3.6.6-1) UNRELEASED; urgency=medium
   * Team upload.
   * New upstream release
   * d/copyright: Fixed for new release
+  * d/ocf: Removed, use upstream one
 
  -- Ondřej Nový <onovy@debian.org>  Thu, 29 Dec 2016 00:49:19 +0100
 
