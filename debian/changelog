@@ -1,11 +1,12 @@
-rabbitmq-server (3.6.6-1) UNRELEASED; urgency=medium
+rabbitmq-server (3.6.6-1) unstable; urgency=medium
 
+  [ Ondřej Nový ]
   * Team upload.
-  * New upstream release
+  * New upstream release (Closes: #849849, CVE-2016-9877)
   * d/copyright: Fixed for new release
   * d/ocf: Removed, use upstream one
 
- -- Ondřej Nový <onovy@debian.org>  Thu, 29 Dec 2016 00:49:19 +0100
+ -- Ondřej Kobližek <koblizeko@gmail.com>  Mon, 02 Jan 2017 15:49:03 +0100
 
 rabbitmq-server (3.6.5-1) unstable; urgency=medium
 
