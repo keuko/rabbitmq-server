@@ -32,6 +32,9 @@ HELP = {
     'queue-max-priority':
       'Maximum number of priority levels for the queue to support; if not set, the queue will not support message priorities.<br/>(Sets the "<a target="_blank" href="http://rabbitmq.com/priority.html">x-max-priority</a>" argument.)',
 
+    'queue-lazy':
+      'Set the queue into lazy mode, keeping as many messages as possible on disk to reduce RAM usage; if not set, the queue will keep an in-memory cache to deliver messages as fast as possible.<br/>(Sets the "<a target="_blank" href="https://www.rabbitmq.com/lazy-queues.html">x-queue-mode</a>" argument.)',
+
     'queue-messages':
       '<p>Message counts.</p><p>Note that "in memory" and "persistent" are not mutually exclusive; persistent messages can be in memory as well as on disc, and transient messages can be paged out if memory is tight. Non-durable queues will consider all messages to be transient.</p>',
 
@@ -210,20 +213,20 @@ HELP = {
       <dl>\
         <dt>Publish</dt>\
         <dd>Rate at which messages are entering the server.</dd>\
-        <dt>Confirm</dt>\
+        <dt>Publisher confirm</dt>\
         <dd>Rate at which the server is confirming publishes.</dd>\
-        <dt>Deliver</dt>\
-        <dd>Rate at which messages requiring acknowledgement are being delivered in response to basic.consume.</dd>\
-        <dt>Deliver (noack)</dt>\
-        <dd>Rate at which messages not requiring acknowledgement are being delivered in response to basic.consume.</dd>\
-        <dt>Get</dt>\
-        <dd>Rate at which messages requiring acknowledgement are being delivered in response to basic.get.</dd>\
-        <dt>Get (noack)</dt>\
-        <dd>Rate at which messages not requiring acknowledgement are being delivered in response to basic.get.</dd>\
-        <dt>Acknowledge</dt>\
-        <dd>Rate at which messages are being acknowledged.</dd>\
+        <dt>Deliver (manual ack)</dt>\
+        <dd>Rate at which messages are delivered to consumers that use manual acknowledgements.</dd>\
+        <dt>Deliver (auto ack)</dt>\
+        <dd>Rate at which messages are delivered to consumers that use automatic acknowledgements.</dd>\
+        <dt>Consumer ack</dt>\
+        <dd>Rate at which messages are being acknowledged by consumers.</dd>\
         <dt>Redelivered</dt>\
         <dd>Rate at which messages with the \'redelivered\' flag set are being delivered. Note that these messages will <b>also</b> be counted in one of the delivery rates above.</dd>\
+        <dt>Get (manual ack)</dt>\
+        <dd>Rate at which messages requiring acknowledgement are being delivered in response to basic.get.</dd>\
+        <dt>Get (auto ack)</dt>\
+        <dd>Rate at which messages not requiring acknowledgement are being delivered in response to basic.get.</dd>\
         <dt>Return</dt>\
         <dd>Rate at which basic.return is sent to publishers for unroutable messages published with the \'mandatory\' flag set.</dd>\
         <dt>Disk read</dt>\

@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_networking).
@@ -40,21 +40,16 @@
 -export([tcp_listener_addresses/1, tcp_listener_spec/9,
          ensure_ssl/0, fix_ssl_options/1, poodle_check/1]).
 
--export([tcp_listener_started/3, tcp_listener_stopped/3]).
+-export([tcp_listener_started/4, tcp_listener_stopped/4]).
 
 %% Internal
 -export([connections_local/0]).
-
--import(rabbit_misc, [pget/2, pget/3, pset/3]).
 
 -include("rabbit.hrl").
 -include_lib("kernel/include/inet.hrl").
 
 %% IANA-suggested ephemeral port range is 49152 to 65535
 -define(FIRST_TEST_BIND_PORT, 49152).
-
-%% POODLE
--define(BAD_SSL_PROTOCOL_VERSIONS, [sslv3]).
 
 %%----------------------------------------------------------------------------
 
@@ -101,18 +96,17 @@
          protocol(), any(), non_neg_integer(), label()) ->
             supervisor:child_spec().
 -spec ensure_ssl() -> rabbit_types:infos().
--spec fix_ssl_options(rabbit_types:infos()) -> rabbit_types:infos().
 -spec poodle_check(atom()) -> 'ok' | 'danger'.
 
 -spec boot() -> 'ok'.
 -spec tcp_listener_started
-        (_,
+        (_, _,
          string() |
          {byte(),byte(),byte(),byte()} |
          {char(),char(),char(),char(),char(),char(),char(),char()}, _) ->
             'ok'.
 -spec tcp_listener_stopped
-        (_,
+        (_, _,
          string() |
          {byte(),byte(),byte(),byte()} |
          {char(),char(),char(),char(),char(),char(),char(),char()},
@@ -149,7 +143,7 @@ ensure_ssl() ->
     {ok, SslAppsConfig} = application:get_env(rabbit, ssl_apps),
     ok = app_utils:start_applications(SslAppsConfig),
     {ok, SslOptsConfig} = application:get_env(rabbit, ssl_options),
-    fix_ssl_options(SslOptsConfig).
+    rabbit_ssl_options:fix(SslOptsConfig).
 
 poodle_check(Context) ->
     {ok, Vsn} = application:get_key(ssl, vsn),
@@ -177,70 +171,7 @@ log_poodle_fail(Context) ->
       [rabbit_misc:otp_release(), Context]).
 
 fix_ssl_options(Config) ->
-    fix_verify_fun(fix_ssl_protocol_versions(Config)).
-
-fix_verify_fun(SslOptsConfig) ->
-    %% Starting with ssl 4.0.1 in Erlang R14B, the verify_fun function
-    %% takes 3 arguments and returns a tuple.
-    case rabbit_misc:pget(verify_fun, SslOptsConfig) of
-        {Module, Function, InitialUserState} ->
-            Fun = make_verify_fun(Module, Function, InitialUserState),
-            rabbit_misc:pset(verify_fun, Fun, SslOptsConfig);
-        {Module, Function} when is_atom(Module) ->
-            Fun = make_verify_fun(Module, Function, none),
-            rabbit_misc:pset(verify_fun, Fun, SslOptsConfig);
-        {Verifyfun, _InitialUserState} when is_function(Verifyfun, 3) ->
-            SslOptsConfig;
-        undefined ->
-            SslOptsConfig
-    end.
-
-make_verify_fun(Module, Function, InitialUserState) ->
-    try
-        %% Preload the module: it is required to use
-        %% erlang:function_exported/3.
-        Module:module_info()
-    catch
-        _:Exception ->
-            rabbit_log:error("SSL verify_fun: module ~s missing: ~p~n",
-                             [Module, Exception]),
-            throw({error, {invalid_verify_fun, missing_module}})
-    end,
-    NewForm = erlang:function_exported(Module, Function, 3),
-    OldForm = erlang:function_exported(Module, Function, 1),
-    case {NewForm, OldForm} of
-        {true, _} ->
-            %% This verify_fun is supported by Erlang R14B+ (ssl
-            %% 4.0.1 and later).
-            Fun = fun(OtpCert, Event, UserState) ->
-                    Module:Function(OtpCert, Event, UserState)
-            end,
-            {Fun, InitialUserState};
-        {_, true} ->
-            %% This verify_fun is supported by Erlang R14B+ for 
-            %% undocumented backward compatibility.
-            %%
-            %% InitialUserState is ignored in this case.
-            fun(Args) ->
-                    Module:Function(Args)
-            end;
-        _ ->
-            rabbit_log:error("SSL verify_fun: no ~s:~s/3 exported~n",
-              [Module, Function]),
-            throw({error, {invalid_verify_fun, function_not_exported}})
-    end.
-
-fix_ssl_protocol_versions(Config) ->
-    case application:get_env(rabbit, ssl_allow_poodle_attack) of
-        {ok, true} ->
-            Config;
-        _ ->
-            Configured = case pget(versions, Config) of
-                             undefined -> pget(available, ssl:versions(), []);
-                             Vs        -> Vs
-                         end,
-            pset(versions, Configured -- ?BAD_SSL_PROTOCOL_VERSIONS, Config)
-    end.
+    rabbit_ssl_options:fix(Config).
 
 tcp_listener_addresses(Port) when is_integer(Port) ->
     tcp_listener_addresses_auto(Port);
@@ -267,8 +198,8 @@ tcp_listener_spec(NamePrefix, {IPAddress, Port, Family}, SocketOpts,
     {rabbit_misc:tcp_name(NamePrefix, IPAddress, Port),
      {tcp_listener_sup, start_link,
       [IPAddress, Port, Transport, [Family | SocketOpts], ProtoSup, ProtoOpts,
-       {?MODULE, tcp_listener_started, [Protocol]},
-       {?MODULE, tcp_listener_stopped, [Protocol]},
+       {?MODULE, tcp_listener_started, [Protocol, SocketOpts]},
+       {?MODULE, tcp_listener_stopped, [Protocol, SocketOpts]},
        NumAcceptors, Label]},
      transient, infinity, supervisor, [tcp_listener_sup]}.
 
@@ -308,7 +239,7 @@ stop_tcp_listener0({IPAddress, Port, _Family}) ->
     ok = supervisor:terminate_child(rabbit_sup, Name),
     ok = supervisor:delete_child(rabbit_sup, Name).
 
-tcp_listener_started(Protocol, IPAddress, Port) ->
+tcp_listener_started(Protocol, Opts, IPAddress, Port) ->
     %% We need the ip to distinguish e.g. 0.0.0.0 and 127.0.0.1
     %% We need the host so we can distinguish multiple instances of the above
     %% in a cluster.
@@ -318,21 +249,23 @@ tcp_listener_started(Protocol, IPAddress, Port) ->
                      protocol = Protocol,
                      host = tcp_host(IPAddress),
                      ip_address = IPAddress,
-                     port = Port}).
+                     port = Port,
+                     opts = Opts}).
 
-tcp_listener_stopped(Protocol, IPAddress, Port) ->
+tcp_listener_stopped(Protocol, Opts, IPAddress, Port) ->
     ok = mnesia:dirty_delete_object(
            rabbit_listener,
            #listener{node = node(),
                      protocol = Protocol,
                      host = tcp_host(IPAddress),
                      ip_address = IPAddress,
-                     port = Port}).
+                     port = Port,
+                     opts = Opts}).
 
 record_distribution_listener() ->
     {Name, Host} = rabbit_nodes:parts(node()),
     {port, Port, _Version} = erl_epmd:port_please(Name, Host),
-    tcp_listener_started(clustering, {0,0,0,0,0,0,0,0}, Port).
+    tcp_listener_started(clustering, [], {0,0,0,0,0,0,0,0}, Port).
 
 active_listeners() ->
     rabbit_misc:dirty_read_all(rabbit_listener).

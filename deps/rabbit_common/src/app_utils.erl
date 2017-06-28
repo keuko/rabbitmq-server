@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
 %%
 -module(app_utils).
 
@@ -58,7 +58,10 @@ start_applications(Apps, ErrorHandler) ->
 
 stop_applications(Apps, ErrorHandler) ->
     manage_applications(fun lists:foldr/3,
-                        fun application:stop/1,
+                        fun(App) ->
+                            rabbit_log:info("Stopping application '~s'", [App]),
+                            application:stop(App)
+                        end,
                         fun application:start/1,
                         not_started,
                         ErrorHandler,

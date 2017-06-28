@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_ws_client).
@@ -63,6 +63,7 @@ init_processor_state(Conn) ->
     Headers = proplists:get_value(headers, Info),
 
     UseHTTPAuth = application:get_env(rabbitmq_web_stomp, use_http_auth, false),
+
     StompConfig0 = #stomp_configuration{implicit_connect = false},
 
     StompConfig = case UseHTTPAuth of
@@ -70,7 +71,9 @@ init_processor_state(Conn) ->
             case lists:keyfind(authorization, 1, Headers) of
                 false ->
                     %% We fall back to the default STOMP credentials.
-                    StompConfig0;
+                    UserConfig = application:get_env(rabbitmq_stomp, default_user, undefined),
+                    StompConfig1 = rabbit_stomp:parse_default_user(UserConfig, StompConfig0),
+                    StompConfig1#stomp_configuration{force_default_creds = true};
                 {_, AuthHd} ->
                     {<<"basic">>, {HTTPLogin, HTTPPassCode}}
                         = cowboy_http:token_ci(list_to_binary(AuthHd),
@@ -151,7 +154,7 @@ handle_info({Delivery = #'basic.deliver'{},
 handle_info(#'basic.cancel'{consumer_tag = Ctag}, State) ->
     ProcState = processor_state(State),
     case rabbit_stomp_processor:cancel_consumer(Ctag, ProcState) of
-      {ok, NewProcState} ->
+      {ok, NewProcState, _Connection} ->
         {noreply, processor_state(NewProcState, State)};
       {stop, Reason, NewProcState} ->
         {stop, Reason, processor_state(NewProcState, State)}
@@ -241,6 +244,11 @@ maybe_emit_stats(State) ->
     rabbit_event:if_enabled(State, #state.stats_timer,
                                 fun() -> emit_stats(State) end).
 
+emit_stats(State=#state{connection = C}) when C == none; C == undefined ->
+    %% Avoid emitting stats on terminate when the connection has not yet been
+    %% established, as this causes orphan entries on the stats database
+    State1 = rabbit_event:reset_stats_timer(State, #state.stats_timer),
+    State1;
 emit_stats(State=#state{conn=Conn, connection=ConnPid}) ->
     Info = Conn:info(),
     Sock = proplists:get_value(socket, Info),
@@ -250,6 +258,7 @@ emit_stats(State=#state{conn=Conn, connection=ConnPid}) ->
         {error,  _} -> []
     end,
     Infos = [{pid, ConnPid}|SockInfos],
+    rabbit_core_metrics:connection_stats(ConnPid, Infos),
     rabbit_event:notify(connection_stats, Infos),
     State1 = rabbit_event:reset_stats_timer(State, #state.stats_timer),
     State1.

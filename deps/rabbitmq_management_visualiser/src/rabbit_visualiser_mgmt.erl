@@ -11,7 +11,7 @@
 %%   The Original Code is RabbitMQ Visualiser.
 %%
 %%   The Initial Developer of the Original Code is GoPivotal, Inc.
-%%   Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
+%%   Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_visualiser_mgmt).
@@ -20,6 +20,6 @@
 
 -export([dispatcher/0, web_ui/0]).
 
-dispatcher() -> [{["all"],        rabbit_mgmt_wm_all, []},
-                 {["all", vhost], rabbit_mgmt_wm_all, []}].
+dispatcher() -> [{"/all",        rabbit_mgmt_wm_all, []},
+                 {"/all/:vhost", rabbit_mgmt_wm_all, []}].
 web_ui()     -> [{javascript, <<"visualiser.js">>}].

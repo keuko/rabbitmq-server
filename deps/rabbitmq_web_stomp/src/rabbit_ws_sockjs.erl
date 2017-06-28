@@ -11,12 +11,15 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_ws_sockjs).
 
 -export([init/0]).
+
+%% for testing purposes
+-export([get_binding_address/1, get_tcp_port/1, get_tcp_conf/2]).
 
 -include_lib("rabbitmq_stomp/include/rabbit_stomp.hrl").
 
@@ -25,16 +28,9 @@
 
 -spec init() -> ok.
 init() ->
-    %% The 'tcp_config' option may include the port, but we already have
-    %% a 'port' option, so we prioritize the 'port' option over the one
-    %% found in 'tcp_config', if any.
-    TCPConf0 = get_env(tcp_config, []),
-    {TCPConf, Port} = case application:get_env(rabbitmq_web_stomp, port) of
-        undefined ->
-            {TCPConf0, proplists:get_value(port, TCPConf0, 15674)};
-        {ok, Port0} ->
-            {[{port, Port0}|TCPConf0], Port0}
-    end,
+    Port = get_tcp_port(application:get_all_env(rabbitmq_web_stomp)),
+
+    TcpConf = get_tcp_conf(get_env(tcp_config, []), Port),
 
     WsFrame = get_env(ws_frame, text),
     CowboyOpts = get_env(cowboy_opts, []),
@@ -52,27 +48,44 @@ init() ->
         undefined -> get_env(num_acceptors, 10);
         {ok, NumTcp}  -> NumTcp
     end,
-    cowboy:start_http(http, NumTcpAcceptors,
-                      TCPConf,
-                      [{env, [{dispatch, Routes}]}|CowboyOpts]),
+    case cowboy:start_http(http, NumTcpAcceptors,
+                           TcpConf,
+                           [{env, [{dispatch, Routes}]}|CowboyOpts]) of
+        {ok, _}                       -> ok;
+        {error, {already_started, _}} -> ok;
+        {error, Err}                  ->
+            rabbit_log:error("Failed to start an HTTP listener for SockJS. Error: ~p, listener settings: ~p~n", [Err, TcpConf]),
+            throw(Err)
+    end,
+    listener_started('http/web-stomp', TcpConf),
     rabbit_log:info("rabbit_web_stomp: listening for HTTP connections on ~s:~w~n",
-                    ["0.0.0.0", Port]),
+                    [get_binding_address(TcpConf), Port]),
     case get_env(ssl_config, []) of
         [] ->
             ok;
-        TLSConf ->
+        TLSConf0 ->
             rabbit_networking:ensure_ssl(),
-            TLSPort = proplists:get_value(port, TLSConf),
+            TLSPort = proplists:get_value(port, TLSConf0),
+            TLSConf = maybe_parse_ip(TLSConf0),
             NumSslAcceptors = case application:get_env(rabbitmq_web_stomp, num_ssl_acceptors) of
-                undefined -> get_env(num_acceptors, 1);
+                undefined     -> get_env(num_acceptors, 1);
                 {ok, NumSsl}  -> NumSsl
             end,
-            cowboy:start_https(https, NumSslAcceptors,
-                               TLSConf,
-                               [{env, [{dispatch, Routes}]}|CowboyOpts]),
+            {ok, _} = cowboy:start_https(https, NumSslAcceptors,
+                                         TLSConf,
+                                         [{env, [{dispatch, Routes}]} | CowboyOpts]),
+            listener_started('https/web-stomp', TLSConf),
             rabbit_log:info("rabbit_web_stomp: listening for HTTPS connections on ~s:~w~n",
-                            ["0.0.0.0", TLSPort])
+                            [get_binding_address(TLSConf), TLSPort])
     end,
+    ok.
+
+listener_started(Protocol, Listener) ->
+    Port = rabbit_misc:pget(port, Listener),
+    [rabbit_networking:tcp_listener_started(Protocol, Listener,
+                                            IPAddress, Port)
+     || {IPAddress, _Port, _Family}
+        <- rabbit_networking:tcp_listener_addresses(Port)],
     ok.
 
 get_env(Key, Default) ->
@@ -81,6 +94,43 @@ get_env(Key, Default) ->
         {ok, V}   -> V
     end.
 
+
+get_tcp_port(Configuration) ->
+    %% The 'tcp_config' option may include the port, and we already have
+    %% a 'port' option. We prioritize the 'port' option  in 'tcp_config' (if any)
+    %% over the one found at the root of the env proplist.
+    TcpConfiguration = proplists:get_value(tcp_config, Configuration, []),
+    case proplists:get_value(port, TcpConfiguration) of
+        undefined ->
+            proplists:get_value(port, Configuration, 15674);
+        Port ->
+            Port
+    end.
+
+get_tcp_conf(TcpConfiguration, Port0) ->
+    Port = [{port, Port0} | proplists:delete(port, TcpConfiguration)],
+    maybe_parse_ip(Port).
+
+maybe_parse_ip(Configuration) ->
+    case proplists:get_value(ip, Configuration) of
+        undefined ->
+            Configuration;
+        IP when is_tuple(IP) ->
+            Configuration;
+        IP when is_list(IP) ->
+            {ok, ParsedIP} = inet_parse:address(IP),
+            [{ip, ParsedIP} | proplists:delete(ip, Configuration)]
+    end.
+
+get_binding_address(Configuration) ->
+    case proplists:get_value(ip, Configuration) of
+        undefined ->
+            "0.0.0.0";
+        IP when is_tuple(IP) ->
+            inet:ntoa(IP);
+        IP when is_list(IP) ->
+            IP
+    end.
 
 %% Don't print sockjs logs
 logger(_Service, Req, _Type) ->

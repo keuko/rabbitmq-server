@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_upgrade_functions).
@@ -19,11 +19,12 @@
 %% If you are tempted to add include("rabbit.hrl"). here, don't. Using record
 %% defs here leads to pain later.
 
--compile([export_all]).
+-compile([nowarn_export_all, export_all]).
 
 -rabbit_upgrade({remove_user_scope,     mnesia, []}).
 -rabbit_upgrade({hash_passwords,        mnesia, []}).
 -rabbit_upgrade({add_ip_to_listener,    mnesia, []}).
+-rabbit_upgrade({add_opts_to_listener,  mnesia, [add_ip_to_listener]}).
 -rabbit_upgrade({internal_exchanges,    mnesia, []}).
 -rabbit_upgrade({user_to_internal_user, mnesia, [hash_passwords]}).
 -rabbit_upgrade({topic_trie,            mnesia, []}).
@@ -59,6 +60,7 @@
 -spec remove_user_scope() -> 'ok'.
 -spec hash_passwords() -> 'ok'.
 -spec add_ip_to_listener() -> 'ok'.
+-spec add_opts_to_listener() -> 'ok'.
 -spec internal_exchanges() -> 'ok'.
 -spec user_to_internal_user() -> 'ok'.
 -spec topic_trie() -> 'ok'.
@@ -122,6 +124,14 @@ add_ip_to_listener() ->
               {listener, Node, Protocol, Host, {0,0,0,0}, Port}
       end,
       [node, protocol, host, ip_address, port]).
+
+add_opts_to_listener() ->
+    transform(
+      rabbit_listener,
+      fun ({listener, Node, Protocol, Host, IP, Port}) ->
+              {listener, Node, Protocol, Host, IP, Port, []}
+      end,
+      [node, protocol, host, ip_address, port, opts]).
 
 internal_exchanges() ->
     Tables = [rabbit_exchange, rabbit_durable_exchange],

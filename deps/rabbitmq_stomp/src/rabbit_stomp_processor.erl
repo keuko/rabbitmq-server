@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_stomp_processor).
@@ -23,6 +23,7 @@
          send_delivery/5]).
 
 -export([adapter_name/1]).
+-export([info/2]).
 
 -include_lib("amqp_client/include/amqp_client.hrl").
 -include_lib("amqp_client/include/rabbit_routing_prefixes.hrl").
@@ -57,13 +58,13 @@ adapter_name(State) ->
        PeerAddr :: inet:ip_address().
 
 -type process_frame_result() ::
-    {ok, #proc_state{}} |
+    {ok, term(), #proc_state{}} |
     {stop, term(), #proc_state{}}.
 
 -spec process_frame(#stomp_frame{}, #proc_state{}) ->
     process_frame_result().
 
--spec flush_and_die(#proc_state{}) -> ok.
+-spec flush_and_die(#proc_state{}) -> #proc_state{}.
 
 -spec command({Command, Frame}, State) -> process_frame_result()
     when Command :: string(),
@@ -104,6 +105,30 @@ process_frame(Frame = #stomp_frame{command = Command}, State) ->
 
 flush_and_die(State) ->
     close_connection(State).
+
+info(session_id, #proc_state{session_id = Val}) ->
+    Val;
+info(channel, #proc_state{channel = Val}) -> Val;
+info(version, #proc_state{version = Val}) -> Val;
+info(ssl_cert_login, #proc_state{config = #stomp_configuration{ssl_cert_login = Val}}) ->  Val;
+info(implicit_connect, #proc_state{config = #stomp_configuration{implicit_connect = Val}}) ->  Val;
+info(default_login, #proc_state{config = #stomp_configuration{default_login = Val}}) ->  Val;
+info(default_passcode, #proc_state{config = #stomp_configuration{default_passcode = Val}}) ->  Val;
+info(ssl_login_name, #proc_state{ssl_login_name = Val}) -> Val;
+info(peer_addr, #proc_state{peer_addr = Val}) -> Val;
+info(host, #proc_state{adapter_info = #amqp_adapter_info{host = Val}}) -> Val;
+info(port, #proc_state{adapter_info = #amqp_adapter_info{port = Val}}) -> Val;
+info(peer_host, #proc_state{adapter_info = #amqp_adapter_info{peer_host = Val}}) -> Val;
+info(peer_port, #proc_state{adapter_info = #amqp_adapter_info{peer_port = Val}}) -> Val;
+info(protocol, #proc_state{adapter_info = #amqp_adapter_info{protocol = Val}}) ->
+    case Val of
+        {Proto, Version} -> {Proto, rabbit_data_coercion:to_binary(Version)};
+        Other -> Other
+    end;
+info(channels, PState) -> additional_info(channels, PState);
+info(channel_max, PState) -> additional_info(channel_max, PState);
+info(frame_max, PState) -> additional_info(frame_max, PState);
+info(client_properties, PState) -> additional_info(client_properties, PState).
 
 initial_state(Configuration,
     {SendFun, AdapterInfo0 = #amqp_adapter_info{additional_info = Extra},
@@ -184,7 +209,7 @@ handle_exit(Conn, {shutdown, {connection_closing,
             State = #proc_state{connection = Conn}) ->
     amqp_death(Code, Explanation, State);
 handle_exit(Conn, Reason, State = #proc_state{connection = Conn}) ->
-    send_error("AMQP connection died", "Reason: ~p", [Reason], State),
+    _ = send_error("AMQP connection died", "Reason: ~p", [Reason], State),
     {stop, {conn_died, Reason}, State};
 
 handle_exit(Ch, {shutdown, {server_initiated_close, Code, Explanation}},
@@ -192,7 +217,7 @@ handle_exit(Ch, {shutdown, {server_initiated_close, Code, Explanation}},
     amqp_death(Code, Explanation, State);
 
 handle_exit(Ch, Reason, State = #proc_state{channel = Ch}) ->
-    send_error("AMQP channel died", "Reason: ~p", [Reason], State),
+    _ = send_error("AMQP channel died", "Reason: ~p", [Reason], State),
     {stop, {channel_died, Reason}, State};
 handle_exit(Ch, {shutdown, {server_initiated_close, Code, Explanation}},
             State = #proc_state{channel = Ch}) ->
@@ -204,7 +229,7 @@ process_request(ProcessFun, State) ->
     process_request(ProcessFun, fun (StateM) -> StateM end, State).
 
 
-process_request(ProcessFun, SuccessFun, State=#proc_state{connection=Conn}) ->
+process_request(ProcessFun, SuccessFun, State) ->
     Res = case catch ProcessFun(State) of
               {'EXIT',
                {{shutdown,
@@ -217,13 +242,13 @@ process_request(ProcessFun, SuccessFun, State=#proc_state{connection=Conn}) ->
                   Result
           end,
     case Res of
-        {ok, Frame, NewState} ->
-            case Frame of
-                none -> ok;
-                _    -> send_frame(Frame, NewState)
-            end,
+        {ok, Frame, NewState = #proc_state{connection = Conn}} ->
+            _ = case Frame of
+                    none -> ok;
+                    _    -> send_frame(Frame, NewState)
+                end,
             {ok, SuccessFun(NewState), Conn};
-        {error, Message, Detail, NewState} ->
+        {error, Message, Detail, NewState = #proc_state{connection = Conn}} ->
             {ok, send_error(Message, Detail, NewState), Conn};
         {stop, normal, NewState} ->
             {stop, normal, SuccessFun(NewState)};
@@ -269,7 +294,7 @@ process_connect(Implicit, Frame,
 creds(_, _, #stomp_configuration{default_login       = DefLogin,
                                  default_passcode    = DefPasscode,
                                  force_default_creds = true}) ->
-    {DefLogin, DefPasscode};
+    {iolist_to_binary(DefLogin), iolist_to_binary(DefPasscode)};
 creds(Frame, SSLLoginName,
       #stomp_configuration{default_login    = DefLogin,
                            default_passcode = DefPasscode}) ->
@@ -417,14 +442,14 @@ server_cancel_consumer(ConsumerTag, State = #proc_state{subscriptions = Subs}) -
                      {ok,    {_, Id1}} -> Id1;
                      {error, {_, Id1}} -> "Unknown[" ++ Id1 ++ "]"
                  end,
-            send_error_frame("Server cancelled subscription",
-                             [{?HEADER_SUBSCRIPTION, Id}],
-                             "The server has canceled a subscription.~n"
-                             "No more messages will be delivered for ~p.~n",
-                             [Description],
-                             State),
+            _ = send_error_frame("Server cancelled subscription",
+                                 [{?HEADER_SUBSCRIPTION, Id}],
+                                 "The server has canceled a subscription.~n"
+                                 "No more messages will be delivered for ~p.~n",
+                                 [Description],
+                                 State),
             tidy_canceled_subscription(ConsumerTag, Subscription,
-                                       #stomp_frame{}, State)
+                                       undefined, State)
     end.
 
 cancel_subscription({error, invalid_prefix}, _Frame, State) ->
@@ -463,6 +488,15 @@ cancel_subscription({ok, ConsumerTag, Description}, Frame,
             end
     end.
 
+%% Server-initiated cancelations will pass an undefined instead of a
+%% STOMP frame. In this case we know that the queue was deleted and
+%% thus we don't have to clean it up.
+tidy_canceled_subscription(ConsumerTag, _Subscription,
+                           undefined, State = #proc_state{subscriptions = Subs}) ->
+    Subs1 = dict:erase(ConsumerTag, Subs),
+    ok(State#proc_state{subscriptions = Subs1});
+
+%% Client-initiated cancelations will pass an actual frame
 tidy_canceled_subscription(ConsumerTag, #subscription{dest_hdr = DestHdr},
                            Frame, State = #proc_state{subscriptions = Subs}) ->
     Subs1 = dict:erase(ConsumerTag, Subs),
@@ -605,7 +639,7 @@ start_connection(Params, Username, Addr) ->
     end.
 
 server_header() ->
-    {ok, Product} = application:get_key(rabbit, id),
+    {ok, Product} = application:get_key(rabbit, description),
     {ok, Version} = application:get_key(rabbit, vsn),
     rabbit_misc:format("~s/~s", [Product, Version]).
 
@@ -630,8 +664,8 @@ do_subscribe(Destination, DestHdr, Frame,
                 {ok, _} ->
                     Message = "Duplicated subscription identifier",
                     Detail = "A subscription identified by '~s' alredy exists.",
-                    error(Message, Detail, [ConsumerTag], State),
-                    send_error(Message, Detail, [ConsumerTag], State),
+                    _ = error(Message, Detail, [ConsumerTag], State),
+                    _ = send_error(Message, Detail, [ConsumerTag], State),
                     {stop, normal, close_connection(State)};
                 error ->
                     ExchangeAndKey =
@@ -1000,7 +1034,7 @@ ensure_heartbeats(Heartbeats) ->
     {SendTimeout, ReceiveTimeout} =
         {millis_to_seconds(CY), millis_to_seconds(CX)},
 
-    rabbit_stomp_reader:start_heartbeats(self(), {SendTimeout, ReceiveTimeout}),
+    _ = rabbit_stomp_reader:start_heartbeats(self(), {SendTimeout, ReceiveTimeout}),
     {SendTimeout * 1000 , ReceiveTimeout * 1000}.
 
 millis_to_seconds(M) when M =< 0   -> 0;
@@ -1112,3 +1146,7 @@ send_error(Message, Detail, State) ->
 send_error(Message, Format, Args, State) ->
     send_error(Message, rabbit_misc:format(Format, Args), State).
 
+additional_info(Key,
+                #proc_state{adapter_info =
+                                #amqp_adapter_info{additional_info = AddInfo}}) ->
+    proplists:get_value(Key, AddInfo).

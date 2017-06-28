@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ Federation.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_federation_exchange_link).
@@ -80,6 +80,7 @@ init({Upstream, XName}) ->
             gen_server2:cast(self(), maybe_go),
             {ok, {not_started, {Upstream, UParams, XName}}};
         {error, not_found} ->
+            rabbit_federation_link_util:log_warning(XName, "not found, stopping link~n", []),
             {stop, gone}
     end.
 
@@ -106,9 +107,17 @@ handle_cast(go, State) ->
 handle_cast({enqueue, _, _}, State = {not_started, _}) ->
     {noreply, State};
 
-handle_cast({enqueue, Serial, Cmd}, State = #state{waiting_cmds = Waiting}) ->
+handle_cast({enqueue, Serial, Cmd},
+            State = #state{waiting_cmds = Waiting,
+                           downstream_exchange = XName}) ->
     Waiting1 = gb_trees:insert(Serial, Cmd, Waiting),
-    {noreply, play_back_commands(State#state{waiting_cmds = Waiting1})};
+    try
+        {noreply, play_back_commands(State#state{waiting_cmds = Waiting1})}
+    catch exit:{{shutdown, {server_initiated_close, 404, Text}}, _} ->
+            rabbit_federation_link_util:log_warning(
+              XName, "detected upstream changes, restarting link: ~p~n", [Text]),
+            {stop, {shutdown, restart}, State}
+    end;
 
 handle_cast(Msg, State) ->
     {stop, {unexpected_cast, Msg}, State}.
@@ -345,8 +354,7 @@ update_binding(Args, #state{downstream_exchange = X,
     Hops = case rabbit_misc:table_lookup(Args, ?BINDING_HEADER) of
                undefined    -> MaxHops;
                {array, All} -> [{table, Prev} | _] = All,
-                               {short, PrevHops} =
-                                   rabbit_misc:table_lookup(Prev, <<"hops">>),
+                               PrevHops = get_hops(Prev),
                                case rabbit_federation_util:already_seen(
                                       UName, All) of
                                    true  -> 0;
@@ -366,6 +374,8 @@ update_binding(Args, #state{downstream_exchange = X,
                      {<<"hops">>,         short,   Hops}],
              rabbit_basic:prepend_table_header(?BINDING_HEADER, Info, Args)
     end.
+
+
 
 key(#binding{key = Key, args = Args}) -> {Key, Args}.
 
@@ -542,3 +552,16 @@ update_headers(#upstream_params{table = Table}, UName, Redelivered, Headers) ->
 
 header_for_name(unknown) -> [];
 header_for_name(Name)    -> [{<<"cluster-name">>, longstr, Name}].
+
+get_hops(Table) ->
+  case rabbit_misc:table_lookup(Table, <<"hops">>) of
+    %% see rabbit_binary_generator
+    {short, N}         -> N;
+    {long, N}          -> N;
+    {byte, N}          -> N;
+    {signedint, N}     -> N;
+    {unsignedbyte, N}  -> N;
+    {unsignedshort, N} -> N;
+    {unsignedint, N}   -> N;
+    {_, N} when is_integer(N) andalso N >= 0 -> N
+  end.

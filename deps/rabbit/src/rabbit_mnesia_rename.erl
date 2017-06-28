@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_mnesia_rename).
@@ -187,7 +187,7 @@ delete_rename_files() -> ok = rabbit_file:recursive_delete([dir()]).
 
 start_mnesia() -> rabbit_misc:ensure_ok(mnesia:start(), cannot_start_mnesia),
                   rabbit_table:force_load(),
-                  rabbit_table:wait_for_replicated().
+                  rabbit_table:wait_for_replicated(_Retry = false).
 stop_mnesia()  -> stopped = mnesia:stop().
 
 convert_backup(NodeMap, FromBackup, ToBackup) ->

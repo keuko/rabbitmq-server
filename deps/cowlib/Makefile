@@ -2,8 +2,11 @@
 
 PROJECT = cowlib
 PLT_APPS = crypto
+CI_OTP = OTP_R15B OTP_R15B01 OTP_R15B02 OTP_R15B03-1 OTP_R16B OTP_R16B01 OTP_R16B02 OTP_R16B03-1 OTP-17.0.2 OTP-17.1.2 OTP-17.2.2 OTP-17.3.4 OTP-17.4.1 OTP-17.5.6.3 OTP-18.0.3
 
 include erlang.mk
+
+TEST_ERLC_OPTS += +'{parse_transform, eunit_autoexport}' -DEXTRA=1
 
 .PHONY: gen perfs
 
