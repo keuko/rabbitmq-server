@@ -1,3 +1,13 @@
+rabbitmq-server (3.6.10-1) unstable; urgency=medium
+
+  * New upstream release (Closes: #863586), fixing multiple issues:
+    - CVE-2017-4965: XSS vulnerabilities in management UI
+    - CVE-2017-4966: authentication details are stored in browser-local storage
+      without expiration
+    - CVE-2017-4967: XSS vulnerabilities in management UI
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 28 Jun 2017 15:00:41 +0200
+
 rabbitmq-server (3.6.6-1) unstable; urgency=medium
 
   [ Ondřej Nový ]
