@@ -10,7 +10,6 @@ export ERLC_OPTS
 
 DEPS += cowboy
 dep_cowboy = git https://github.com/ninenines/cowboy.git 1.0.3
-COMPILE_FIRST +=
 
 
 rebar_dep: preprocess pre-deps deps pre-app app
@@ -22,5 +21,3 @@ pre-deps::
 pre-app::
 
 include ../../erlang.mk
-
-ERLC_OPTS += $(SOCKJS_ERLC_OPTS)

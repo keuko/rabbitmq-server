@@ -1,38 +1,22 @@
 PROJECT = rabbitmq_server_release
-VERSION ?= 0.0.0
+PROJECT_DESCRIPTION = RabbitMQ Server
+
+# Propagate PROJECT_VERSION (from the command line or environment) to
+# other components. If PROJECT_VERSION is unset, then an empty variable
+# is propagated and the default version will fallback to the default
+# value from rabbitmq-components.mk.
+export RABBITMQ_VERSION = $(PROJECT_VERSION)
 
 # Release artifacts are put in $(PACKAGES_DIR).
 PACKAGES_DIR ?= $(abspath PACKAGES)
 
+# List of plugins to include in a RabbitMQ release.
+include plugins.mk
+
 DEPS = rabbit_common rabbit $(PLUGINS)
 
-# List of plugins to include in a RabbitMQ release.
-PLUGINS := rabbitmq_amqp1_0 \
-	   rabbitmq_auth_backend_ldap \
-	   rabbitmq_auth_mechanism_ssl \
-	   rabbitmq_consistent_hash_exchange \
-	   rabbitmq_event_exchange \
-	   rabbitmq_federation \
-	   rabbitmq_federation_management \
-	   rabbitmq_jms_topic_exchange \
-	   rabbitmq_management \
-	   rabbitmq_management_agent \
-	   rabbitmq_management_visualiser \
-	   rabbitmq_mqtt \
-	   rabbitmq_recent_history_exchange \
-	   rabbitmq_sharding \
-	   rabbitmq_shovel \
-	   rabbitmq_shovel_management \
-	   rabbitmq_stomp \
-	   rabbitmq_top \
-	   rabbitmq_tracing \
-	   rabbitmq_trust_store \
-	   rabbitmq_web_dispatch \
-	   rabbitmq_web_stomp \
-	   rabbitmq_web_stomp_examples
-
-DEP_PLUGINS = rabbit_common/mk/rabbitmq-run.mk \
-	      rabbit_common/mk/rabbitmq-dist.mk \
+DEP_PLUGINS = rabbit_common/mk/rabbitmq-dist.mk \
+	      rabbit_common/mk/rabbitmq-run.mk \
 	      rabbit_common/mk/rabbitmq-tools.mk
 
 # FIXME: Use erlang.mk patched for RabbitMQ, while waiting for PRs to be
@@ -52,7 +36,7 @@ include erlang.mk
 
 SOURCE_DIST_BASE ?= rabbitmq-server
 SOURCE_DIST_SUFFIXES ?= tar.xz zip
-SOURCE_DIST ?= $(PACKAGES_DIR)/$(SOURCE_DIST_BASE)-$(VERSION)
+SOURCE_DIST ?= $(PACKAGES_DIR)/$(SOURCE_DIST_BASE)-$(PROJECT_VERSION)
 
 # The first source distribution file is used by packages: if the archive
 # type changes, you must update all packages' Makefile.
@@ -78,27 +62,36 @@ RSYNC_FLAGS += -a $(RSYNC_V)		\
 	       --exclude '.travis.yml'			\
 	       --exclude '.*.plt'			\
 	       --exclude '$(notdir $(ERLANG_MK_TMP))'	\
-	       --exclude 'ebin'				\
-	       --exclude 'packaging'			\
-	       --exclude 'erl_crash.dump'		\
-	       --exclude 'MnesiaCore.*'			\
+	       --exclude '_build/'			\
 	       --exclude 'cover/'			\
 	       --exclude 'deps/'			\
 	       --exclude 'ebin/'			\
+	       --exclude 'erl_crash.dump'		\
+	       --exclude 'MnesiaCore.*'			\
 	       --exclude '$(notdir $(DEPS_DIR))/'	\
+	       --exclude 'hexer*'			\
 	       --exclude 'logs/'			\
+	       --exclude 'packaging'			\
 	       --exclude 'plugins/'			\
 	       --exclude '$(notdir $(DIST_DIR))/'	\
 	       --exclude 'test'				\
 	       --exclude 'xrefr'			\
 	       --exclude '/$(notdir $(PACKAGES_DIR))/'	\
 	       --exclude '/PACKAGES/'			\
+	       --exclude '/upgrade/'			\
+	       --exclude '/amqp_client/doc/'		\
+	       --exclude '/amqp_client/rebar.config'	\
 	       --exclude '/cowboy/doc/'			\
 	       --exclude '/cowboy/examples/'		\
+	       --exclude '/rabbit/escript/'		\
 	       --exclude '/rabbitmq_amqp1_0/test/swiftmq/build/'\
 	       --exclude '/rabbitmq_amqp1_0/test/swiftmq/swiftmq*'\
+	       --exclude '/rabbitmq_cli/escript/'	\
 	       --exclude '/rabbitmq_mqtt/test/build/'	\
 	       --exclude '/rabbitmq_mqtt/test/test_client/'\
+	       --exclude '/ranch/doc/'			\
+	       --exclude '/ranch/examples/'		\
+	       --exclude '/sockjs/examples/'		\
 	       --delete					\
 	       --delete-excluded
 
@@ -124,7 +117,8 @@ ZIP_V = $(ZIP_V_$(V))
 $(SOURCE_DIST): $(ERLANG_MK_RECURSIVE_DEPS_LIST)
 	$(verbose) mkdir -p $(dir $@)
 	$(gen_verbose) $(RSYNC) $(RSYNC_FLAGS) ./ $@/
-	$(verbose) echo "$(PROJECT) $$(git rev-parse HEAD) $$(git describe --tags --exact-match 2>/dev/null || git symbolic-ref -q --short HEAD)" > $@/git-revisions.txt
+	$(verbose) echo "$(PROJECT_DESCRIPTION) $(PROJECT_VERSION)" > $@/git-revisions.txt
+	$(verbose) echo "$(PROJECT) $$(git rev-parse HEAD) $$(git describe --tags --exact-match 2>/dev/null || git symbolic-ref -q --short HEAD)" >> $@/git-revisions.txt
 	$(verbose) cat packaging/common/LICENSE.head > $@/LICENSE
 	$(verbose) mkdir -p $@/deps/licensing
 	$(verbose) for dep in $$(cat $(ERLANG_MK_RECURSIVE_DEPS_LIST) | LC_COLLATE=C sort); do \
@@ -149,49 +143,47 @@ $(SOURCE_DIST): $(ERLANG_MK_RECURSIVE_DEPS_LIST)
 	$(verbose) cat packaging/common/LICENSE.tail >> $@/LICENSE
 	$(verbose) find $@/deps/licensing -name 'LICENSE-*' -exec cp '{}' $@ \;
 	$(verbose) for file in $$(find $@ -name '*.app.src'); do \
-		sed -E -i.bak -e 's/[{]vsn[[:blank:]]*,[[:blank:]]*(""|"0.0.0")[[:blank:]]*}/{vsn, "$(VERSION)"}/' $$file; \
+		sed -E -i.bak \
+		  -e 's/[{]vsn[[:blank:]]*,[[:blank:]]*(""|"0.0.0")[[:blank:]]*}/{vsn, "$(PROJECT_VERSION)"}/' \
+		  -e 's/[{]broker_version_requirements[[:blank:]]*,[[:blank:]]*\[\][[:blank:]]*}/{broker_version_requirements, ["$(PROJECT_VERSION)"]}/' \
+		  $$file; \
 		rm $$file.bak; \
 	done
+	$(verbose) echo "PLUGINS := $(PLUGINS)" > $@/plugins.mk
+
+$(SOURCE_DIST).manifest: $(SOURCE_DIST)
+	$(gen_verbose) cd $(dir $(SOURCE_DIST)) && \
+		find $(notdir $(SOURCE_DIST)) | LC_COLLATE=C sort > $@
 
 # TODO: Fix file timestamps to have reproducible source archives.
 # $(verbose) find $@ -not -name 'git-revisions.txt' -print0 | xargs -0 touch -r $@/git-revisions.txt
 
-$(SOURCE_DIST).tar.gz: $(SOURCE_DIST)
+$(SOURCE_DIST).tar.gz: $(SOURCE_DIST).manifest
 	$(gen_verbose) cd $(dir $(SOURCE_DIST)) && \
-		find $(notdir $(SOURCE_DIST)) -print0 | LC_COLLATE=C sort -z | \
-		xargs -0 $(TAR) $(TAR_V) --no-recursion -cf - | \
+		$(TAR) $(TAR_V) -T $(SOURCE_DIST).manifest --no-recursion -cf - | \
 		$(GZIP) --best > $@
 
-$(SOURCE_DIST).tar.bz2: $(SOURCE_DIST)
+$(SOURCE_DIST).tar.bz2: $(SOURCE_DIST).manifest
 	$(gen_verbose) cd $(dir $(SOURCE_DIST)) && \
-		find $(notdir $(SOURCE_DIST)) -print0 | LC_COLLATE=C sort -z | \
-		xargs -0 $(TAR) $(TAR_V) --no-recursion -cf - | \
+		$(TAR) $(TAR_V) -T $(SOURCE_DIST).manifest --no-recursion -cf - | \
 		$(BZIP2) > $@
 
-$(SOURCE_DIST).tar.xz: $(SOURCE_DIST)
+$(SOURCE_DIST).tar.xz: $(SOURCE_DIST).manifest
 	$(gen_verbose) cd $(dir $(SOURCE_DIST)) && \
-		find $(notdir $(SOURCE_DIST)) -print0 | LC_COLLATE=C sort -z | \
-		xargs -0 $(TAR) $(TAR_V) --no-recursion -cf - | \
+		$(TAR) $(TAR_V) -T $(SOURCE_DIST).manifest --no-recursion -cf - | \
 		$(XZ) > $@
 
-$(SOURCE_DIST).zip: $(SOURCE_DIST)
+$(SOURCE_DIST).zip: $(SOURCE_DIST).manifest
 	$(verbose) rm -f $@
 	$(gen_verbose) cd $(dir $(SOURCE_DIST)) && \
-		find $(notdir $(SOURCE_DIST)) -print0 | LC_COLLATE=C sort -z | \
-		xargs -0 $(ZIP) $(ZIP_V) $@
+		$(ZIP) $(ZIP_V) --names-stdin $@ < $(SOURCE_DIST).manifest
 
-clean:: clean-source-dist clean-upgrade
-
-clean-upgrade:
-	cd upgrade && make clean
+clean:: clean-source-dist
 
 clean-source-dist:
 	$(gen_verbose) rm -rf -- $(SOURCE_DIST_BASE)-*
 
-distclean:: distclean-packages distclean-upgrade
-
-distclean-upgrade:
-	cd upgrade && make distclean
+distclean:: distclean-packages
 
 distclean-packages:
 	$(gen_verbose) rm -rf -- $(PACKAGES_DIR)
@@ -210,6 +202,8 @@ clean-unpacked-source-dist:
 .PHONY: packages package-deb \
 	package-rpm package-rpm-fedora package-rpm-suse \
 	package-windows package-standalone-macosx \
+	package-standalone-linux-x86_64 \
+	package-standalone-freebsd-x86_64 \
 	package-generic-unix
 
 # This variable is exported so sub-make instances know where to find the
@@ -218,6 +212,8 @@ PACKAGES_SOURCE_DIST_FILE ?= $(firstword $(SOURCE_DIST_FILES))
 
 packages package-deb package-rpm package-rpm-fedora \
 package-rpm-suse package-windows package-standalone-macosx \
+package-standalone-linux-x86_64 \
+package-standalone-freebsd-x86_64 \
 package-generic-unix: $(PACKAGES_SOURCE_DIST_FILE)
 	$(verbose) $(MAKE) -C packaging $@ \
 		SOURCE_DIST_FILE=$(abspath $(PACKAGES_SOURCE_DIST_FILE))
@@ -238,13 +234,13 @@ manpages web-manpages distclean-manpages:
 DESTDIR ?=
 
 PREFIX ?= /usr/local
-WINDOWS_PREFIX ?= rabbitmq-server-windows-$(VERSION)
+WINDOWS_PREFIX ?= rabbitmq-server-windows-$(PROJECT_VERSION)
 
 MANDIR ?= $(PREFIX)/share/man
 RMQ_ROOTDIR ?= $(PREFIX)/lib/erlang
 RMQ_BINDIR ?= $(RMQ_ROOTDIR)/bin
 RMQ_LIBDIR ?= $(RMQ_ROOTDIR)/lib
-RMQ_ERLAPP_DIR ?= $(RMQ_LIBDIR)/rabbitmq_server-$(VERSION)
+RMQ_ERLAPP_DIR ?= $(RMQ_LIBDIR)/rabbitmq_server-$(PROJECT_VERSION)
 
 SCRIPTS = rabbitmq-defaults \
 	  rabbitmq-env \
@@ -371,6 +367,3 @@ install-windows-docs: install-windows-erlapp
 		*) mv "$$file" "$$file.txt" ;; \
 		esac; \
 	done
-
-test-upgrade:
-	$(MAKE) -C upgrade

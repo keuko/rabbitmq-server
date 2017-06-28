@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit).
@@ -22,7 +22,7 @@
          stop_and_halt/0, await_startup/0, status/0, is_running/0,
          is_running/1, environment/0, rotate_logs/1, force_event_refresh/1,
          start_fhc/0]).
--export([start/2, stop/1, prep_stop/1]).
+-export([start/2, stop/1]).
 -export([start_apps/1, stop_apps/1]).
 -export([log_location/1, config_files/0, decrypt_config/2]). %% for testing and mgmt-agent
 
@@ -84,6 +84,13 @@
                                    [rabbit_registry]}},
                     {requires,    external_infrastructure},
                     {enables,     kernel_ready}]}).
+
+-rabbit_boot_step({rabbit_core_metrics,
+                   [{description, "core metrics storage"},
+                    {mfa,         {rabbit_sup, start_child,
+                                   [rabbit_metrics]}},
+                    {requires,    pre_boot},
+                    {enables,     external_infrastructure}]}).
 
 -rabbit_boot_step({rabbit_event,
                    [{description, "statistics event manager"},
@@ -185,6 +192,12 @@
                    [{description, "background garbage collection"},
                     {mfa,         {rabbit_sup, start_restartable_child,
                                    [background_gc]}},
+                    {enables,     networking}]}).
+
+-rabbit_boot_step({rabbit_core_metrics_gc,
+                   [{description, "background core metrics garbage collection"},
+                    {mfa,         {rabbit_sup, start_restartable_child,
+                                   [rabbit_core_metrics_gc]}},
                     {enables,     networking}]}).
 
 %%---------------------------------------------------------------------------
@@ -348,15 +361,16 @@ sd_open_port() ->
        use_stdio, out]).
 
 sd_notify_socat(Unit) ->
-    case sd_open_port() of
-        {'EXIT', Exit} ->
-            io:format(standard_error, "Failed to start socat ~p~n", [Exit]),
-            false;
+    try sd_open_port() of
         Port ->
             Port ! {self(), {command, sd_notify_data()}},
             Result = sd_wait_activation(Port, Unit),
             port_close(Port),
             Result
+    catch
+        Class:Reason ->
+            io:format(standard_error, "Failed to start socat ~p:~p~n", [Class, Reason]),
+            false
     end.
 
 sd_current_unit() ->
@@ -420,23 +434,37 @@ start_it(StartFun) ->
 stop() ->
     case whereis(rabbit_boot) of
         undefined -> ok;
-        _         -> await_startup(true)
+        _         ->
+            rabbit_log:info("RabbitMQ hasn't finished starting yet. Waiting for startup to finish before stopping..."),
+            wait_for_boot_to_finish()
     end,
-    rabbit_log:info("Stopping RabbitMQ~n", []),
+    rabbit_log:info("RabbitMQ is asked to stop...~n", []),
     Apps = ?APPS ++ rabbit_plugins:active(),
     stop_apps(app_utils:app_dependency_order(Apps, true)),
-    rabbit_log:info("Stopped RabbitMQ application~n", []).
+    rabbit_log:info("Successfully stopped RabbitMQ and its dependencies~n", []).
 
 stop_and_halt() ->
     try
         stop()
+    catch Type:Reason ->
+        rabbit_log:error("Error trying to stop RabbitMQ: ~p:~p", [Type, Reason]),
+        error({Type, Reason})
     after
-        rabbit_log:info("Halting Erlang VM~n", []),
-        %% Also duplicate this information to stderr, so console where
-        %% foreground broker was running (or systemd journal) will
-        %% contain information about graceful termination.
-        io:format(standard_error, "Gracefully halting Erlang VM~n", []),
-        init:stop()
+        %% Enclose all the logging in the try block.
+        %% init:stop() will be called regardless of any errors.
+        try
+            AppsLeft = [ A || {A, _, _} <- application:which_applications() ],
+            rabbit_log:info(
+                lists:flatten(["Halting Erlang VM with the following applications:~n",
+                               ["    ~p~n" || _ <- AppsLeft]]),
+                AppsLeft),
+            %% Also duplicate this information to stderr, so console where
+            %% foreground broker was running (or systemd journal) will
+            %% contain information about graceful termination.
+            io:format(standard_error, "Gracefully halting Erlang VM~n", [])
+        after
+            init:stop()
+        end
     end,
     ok.
 
@@ -453,7 +481,7 @@ start_apps(Apps) ->
         prompt ->
             IoDevice = get_input_iodevice(),
             io:setopts(IoDevice, [{echo, false}]),
-            PP = lists:droplast(io:get_line(IoDevice,
+            PP = rabbit_misc:lists_droplast(io:get_line(IoDevice,
                 "\nPlease enter the passphrase to unlock encrypted "
                 "configuration entries.\n\nPassphrase: ")),
             io:setopts(IoDevice, [{echo, true}]),
@@ -555,6 +583,10 @@ decrypt_list([Value|Tail], Algo, Acc) ->
     decrypt_list(Tail, Algo, [decrypt(Value, Algo)|Acc]).
 
 stop_apps(Apps) ->
+    rabbit_log:info(
+        lists:flatten(["Stopping RabbitMQ applications and their dependencies in the following order: ~n",
+                       ["    ~p~n" || _ <- Apps]]),
+        lists:reverse(Apps)),
     ok = app_utils:stop_applications(
            Apps, handle_app_error(error_during_shutdown)),
     case lists:member(rabbit, Apps) of
@@ -572,19 +604,32 @@ handle_app_error(Term) ->
     end.
 
 await_startup() ->
-    await_startup(false).
+    case is_booting() of
+        true -> wait_for_boot_to_finish();
+        false ->
+            case is_running() of
+                true -> ok;
+                false -> wait_for_boot_to_start(),
+                         wait_for_boot_to_finish()
+            end
+    end.
 
-await_startup(HaveSeenRabbitBoot) ->
-    %% We don't take absence of rabbit_boot as evidence we've started,
-    %% since there's a small window before it is registered.
+is_booting() ->
+    whereis(rabbit_boot) /= undefined.
+
+wait_for_boot_to_start() ->
     case whereis(rabbit_boot) of
-        undefined -> case HaveSeenRabbitBoot orelse is_running() of
-                         true  -> ok;
-                         false -> timer:sleep(100),
-                                  await_startup(false)
-                     end;
+        undefined -> timer:sleep(100),
+                     wait_for_boot_to_start();
+        _         -> ok
+    end.
+
+wait_for_boot_to_finish() ->
+    case whereis(rabbit_boot) of
+        undefined -> true = is_running(),
+                     ok;
         _         -> timer:sleep(100),
-                     await_startup(true)
+                     wait_for_boot_to_finish()
     end.
 
 status() ->
@@ -690,15 +735,13 @@ start(normal, []) ->
             Error
     end.
 
-prep_stop(_State) ->
+stop(_State) ->
     ok = rabbit_alarm:stop(),
     ok = case rabbit_mnesia:is_clustered() of
              true  -> ok;
              false -> rabbit_table:clear_ram_only_tables()
          end,
     ok.
-
-stop(_) -> ok.
 
 -spec boot_error(term(), not_available | [tuple()]) -> no_return().
 
@@ -771,14 +814,25 @@ insert_default_data() ->
     {ok, DefaultVHost} = application:get_env(default_vhost),
     {ok, [DefaultConfigurePerm, DefaultWritePerm, DefaultReadPerm]} =
         application:get_env(default_permissions),
-    ok = rabbit_vhost:add(DefaultVHost),
-    ok = rabbit_auth_backend_internal:add_user(DefaultUser, DefaultPass),
-    ok = rabbit_auth_backend_internal:set_tags(DefaultUser, DefaultTags),
-    ok = rabbit_auth_backend_internal:set_permissions(DefaultUser,
-                                                      DefaultVHost,
-                                                      DefaultConfigurePerm,
-                                                      DefaultWritePerm,
-                                                      DefaultReadPerm),
+
+    DefaultUserBin = rabbit_data_coercion:to_binary(DefaultUser),
+    DefaultPassBin = rabbit_data_coercion:to_binary(DefaultPass),
+    DefaultVHostBin = rabbit_data_coercion:to_binary(DefaultVHost),
+    DefaultConfigurePermBin = rabbit_data_coercion:to_binary(DefaultConfigurePerm),
+    DefaultWritePermBin = rabbit_data_coercion:to_binary(DefaultWritePerm),
+    DefaultReadPermBin = rabbit_data_coercion:to_binary(DefaultReadPerm),
+
+    ok = rabbit_vhost:add(DefaultVHostBin),
+    ok = rabbit_auth_backend_internal:add_user(
+        DefaultUserBin,
+        DefaultPassBin
+    ),
+    ok = rabbit_auth_backend_internal:set_tags(DefaultUserBin,DefaultTags),
+    ok = rabbit_auth_backend_internal:set_permissions(DefaultUserBin,
+                                                      DefaultVHostBin,
+                                                      DefaultConfigurePermBin,
+                                                      DefaultWritePermBin,
+                                                      DefaultReadPermBin),
     ok.
 
 %%---------------------------------------------------------------------------
@@ -895,7 +949,7 @@ erts_version_check() ->
     end.
 
 print_banner() ->
-    {ok, Product} = application:get_key(id),
+    {ok, Product} = application:get_key(description),
     {ok, Version} = application:get_key(vsn),
     io:format("~n              ~s ~s. ~s"
               "~n  ##  ##      ~s"
@@ -1110,9 +1164,9 @@ ensure_working_fhc() ->
     end,
     TestPid = spawn_link(TestFun),
     %% Because we are waiting for the test fun, abuse the
-    %% 'mnesia_table_loading_timeout' parameter to find a sane timeout
+    %% 'mnesia_table_loading_retry_timeout' parameter to find a sane timeout
     %% value.
-    Timeout = rabbit_table:wait_timeout(),
+    Timeout = rabbit_table:retry_timeout(),
     receive
         fhc_ok                       -> ok;
         {'EXIT', TestPid, Exception} -> throw({ensure_working_fhc, Exception})

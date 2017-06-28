@@ -1,8 +1,19 @@
 PROJECT = rabbitmq_amqp1_0
+PROJECT_DESCRIPTION = AMQP 1.0 support for RabbitMQ
 
+define PROJECT_ENV
+[
+	    {default_user, "guest"},
+	    {default_vhost, <<"/">>},
+	    {protocol_strict_mode, false}
+	  ]
+endef
+
+BUILD_DEPS = rabbitmq_codegen
 DEPS = rabbit_common rabbit amqp_client
-TEST_DEPS = rabbitmq_ct_helpers
+TEST_DEPS = rabbitmq_ct_helpers rabbitmq_ct_client_helpers
 
+DEP_EARLY_PLUGINS = rabbit_common/mk/rabbitmq-early-plugin.mk
 DEP_PLUGINS = rabbit_common/mk/rabbitmq-plugin.mk
 
 EXTRA_SOURCES += include/rabbit_amqp1_0_framing.hrl \
@@ -28,8 +39,10 @@ PYTHON       ?= python
 CODEGEN       = $(CURDIR)/codegen.py
 CODEGEN_DIR  ?= $(DEPS_DIR)/rabbitmq_codegen
 CODEGEN_AMQP  = $(CODEGEN_DIR)/amqp_codegen.py
-CODEGEN_SPECS = spec/messaging.xml spec/security.xml spec/transport.xml \
-		spec/transactions.xml
+CODEGEN_SPECS = $(CODEGEN_DIR)/amqp-1.0/messaging.xml			\
+		$(CODEGEN_DIR)/amqp-1.0/security.xml			\
+		$(CODEGEN_DIR)/amqp-1.0/transport.xml			\
+		$(CODEGEN_DIR)/amqp-1.0/transactions.xml
 
 include/rabbit_amqp1_0_framing.hrl:: $(CODEGEN) $(CODEGEN_AMQP) \
     $(CODEGEN_SPECS)

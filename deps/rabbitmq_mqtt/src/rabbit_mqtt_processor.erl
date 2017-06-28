@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_mqtt_processor).
@@ -21,7 +21,7 @@
          close_connection/1]).
 
 %% for testing purposes
--export([get_vhost_username/1]).
+-export([get_vhost_username/1, get_vhost/3, get_vhost_from_user_mapping/2]).
 
 -include_lib("amqp_client/include/amqp_client.hrl").
 -include("rabbit_mqtt_frame.hrl").
@@ -455,39 +455,110 @@ make_will_msg(#mqtt_frame_connect{ will_retain = Retain,
 process_login(UserBin, PassBin, ProtoVersion,
               #proc_state{ channels     = {undefined, undefined},
                            socket       = Sock,
-                           adapter_info = AdapterInfo }) ->
-    {VHost, UsernameBin} = get_vhost_username(UserBin),
-    case amqp_connection:start(#amqp_params_direct{
-                                  username     = UsernameBin,
-                                  password     = PassBin,
-                                  virtual_host = VHost,
-                                  adapter_info = set_proto_version(AdapterInfo, ProtoVersion)}) of
-        {ok, Connection} ->
-            case rabbit_access_control:check_user_loopback(UsernameBin, Sock) of
-                ok          ->
-                    [{internal_user, InternalUser}] = amqp_connection:info(
-                        Connection, [internal_user]),
-                    {?CONNACK_ACCEPT, Connection, VHost,
-                                      #auth_state{user = InternalUser,
-                                                  username = UsernameBin,
-                                                  vhost = VHost}};
-                not_allowed ->
-                    amqp_connection:close(Connection),
-                    rabbit_log:warning(
-                      "MQTT login failed for ~p access_refused "
-                      "(access must be from localhost)~n",
-                      [binary_to_list(UsernameBin)]),
+                           adapter_info = AdapterInfo,
+                           ssl_login_name = SslLoginName}) ->
+    {ok, {_, _, _, ToPort}} = rabbit_net:socket_ends(Sock, inbound),
+    {VHostPickedUsing, {VHost, UsernameBin}} = get_vhost(UserBin, SslLoginName, ToPort),
+    rabbit_log:info(
+        "MQTT vhost picked using ~s~n",
+        [human_readable_vhost_lookup_strategy(VHostPickedUsing)]),
+    case rabbit_vhost:exists(VHost) of
+        true  ->
+            case amqp_connection:start(#amqp_params_direct{
+                username     = UsernameBin,
+                password     = PassBin,
+                virtual_host = VHost,
+                adapter_info = set_proto_version(AdapterInfo, ProtoVersion)}) of
+                {ok, Connection} ->
+                    case rabbit_access_control:check_user_loopback(UsernameBin, Sock) of
+                        ok          ->
+                            [{internal_user, InternalUser}] = amqp_connection:info(
+                                Connection, [internal_user]),
+                            {?CONNACK_ACCEPT, Connection, VHost,
+                                #auth_state{user = InternalUser,
+                                    username = UsernameBin,
+                                    vhost = VHost}};
+                        not_allowed ->
+                            amqp_connection:close(Connection),
+                            rabbit_log:warning(
+                                "MQTT login failed for ~p access_refused "
+                                "(access must be from localhost)~n",
+                                [binary_to_list(UsernameBin)]),
+                            ?CONNACK_AUTH
+                    end;
+                {error, {auth_failure, Explanation}} ->
+                    rabbit_log:error("MQTT login failed for ~p auth_failure: ~s~n",
+                        [binary_to_list(UserBin), Explanation]),
+                    ?CONNACK_CREDENTIALS;
+                {error, access_refused} ->
+                    rabbit_log:warning("MQTT login failed for ~p access_refused "
+                    "(vhost access not allowed)~n",
+                        [binary_to_list(UserBin)]),
+                    ?CONNACK_AUTH;
+                {error, not_allowed} ->
+                    %% when vhost allowed for TLS connection
+                    rabbit_log:warning("MQTT login failed for ~p access_refused "
+                    "(vhost access not allowed)~n",
+                        [binary_to_list(UserBin)]),
                     ?CONNACK_AUTH
             end;
-        {error, {auth_failure, Explanation}} ->
-            rabbit_log:error("MQTT login failed for ~p auth_failure: ~s~n",
-                             [binary_to_list(UserBin), Explanation]),
-            ?CONNACK_CREDENTIALS;
-        {error, access_refused} ->
-            rabbit_log:warning("MQTT login failed for ~p access_refused "
-                               "(vhost access not allowed)~n",
-                               [binary_to_list(UserBin)]),
-            ?CONNACK_AUTH
+        false ->
+            rabbit_log:error("MQTT login failed for ~p auth_failure: vhost ~s does not exist~n",
+                [binary_to_list(UserBin), VHost]),
+            ?CONNACK_CREDENTIALS
+    end.
+
+get_vhost(UserBin, none, Port) ->
+    get_vhost_no_ssl(UserBin, Port);
+get_vhost(UserBin, undefined, Port) ->
+    get_vhost_no_ssl(UserBin, Port);
+get_vhost(UserBin, SslLogin, Port) ->
+    get_vhost_ssl(UserBin, SslLogin, Port).
+
+get_vhost_no_ssl(UserBin, Port) ->
+    case vhost_in_username(UserBin) of
+        true  ->
+            {vhost_in_username_or_default, get_vhost_username(UserBin)};
+        false ->
+            PortVirtualHostMapping = rabbit_runtime_parameters:value_global(
+                mqtt_port_to_vhost_mapping
+            ),
+            case get_vhost_from_port_mapping(Port, PortVirtualHostMapping) of
+                undefined ->
+                    {default_vhost, {rabbit_mqtt_util:env(vhost), UserBin}};
+                VHost ->
+                    {port_to_vhost_mapping, {VHost, UserBin}}
+            end
+    end.
+
+get_vhost_ssl(UserBin, SslLoginName, Port) ->
+    UserVirtualHostMapping = rabbit_runtime_parameters:value_global(
+        mqtt_default_vhosts
+    ),
+    case get_vhost_from_user_mapping(SslLoginName, UserVirtualHostMapping) of
+        undefined ->
+            PortVirtualHostMapping = rabbit_runtime_parameters:value_global(
+                mqtt_port_to_vhost_mapping
+            ),
+            case get_vhost_from_port_mapping(Port, PortVirtualHostMapping) of
+                undefined ->
+                    {vhost_in_username_or_default, get_vhost_username(UserBin)};
+                VHostFromPortMapping ->
+                    {port_to_vhost_mapping, {VHostFromPortMapping, UserBin}}
+            end;
+        VHostFromCertMapping ->
+            {cert_to_vhost_mapping, {VHostFromCertMapping, UserBin}}
+    end.
+
+vhost_in_username(UserBin) ->
+    case application:get_env(?APP, ignore_colons_in_username) of
+        {ok, true} -> false;
+        _ ->
+            %% split at the last colon, disallowing colons in username
+            case re:split(UserBin, ":(?!.*?:)") of
+                [_, _]      -> true;
+                [UserBin]   -> false
+            end
     end.
 
 get_vhost_username(UserBin) ->
@@ -501,6 +572,38 @@ get_vhost_username(UserBin) ->
                 [UserBin]         -> Default
             end
     end.
+
+get_vhost_from_user_mapping(_User, not_found) ->
+    undefined;
+get_vhost_from_user_mapping(User, Mapping) ->
+    case rabbit_misc:pget(User, Mapping) of
+        undefined ->
+            undefined;
+        VHost ->
+            VHost
+    end.
+
+get_vhost_from_port_mapping(_Port, not_found) ->
+    undefined;
+get_vhost_from_port_mapping(Port, Mapping) ->
+    Res = case rabbit_misc:pget(rabbit_data_coercion:to_binary(Port), Mapping) of
+        undefined ->
+            undefined;
+        VHost ->
+            VHost
+    end,
+    Res.
+
+human_readable_vhost_lookup_strategy(vhost_in_username_or_default) ->
+    "vhost in username or default";
+human_readable_vhost_lookup_strategy(port_to_vhost_mapping) ->
+    "MQTT port to vhost mapping";
+human_readable_vhost_lookup_strategy(cert_to_vhost_mapping) ->
+    "client certificate to vhost mapping";
+human_readable_vhost_lookup_strategy(default_vhost) ->
+    "plugin configuration or default";
+human_readable_vhost_lookup_strategy(Val) ->
+     atom_to_list(Val).
 
 creds(User, Pass, SSLLoginName) ->
     DefaultUser   = rabbit_mqtt_util:env(default_user),
@@ -594,8 +697,16 @@ ensure_queue(Qos, #proc_state{ channels      = {Channel, _},
             {Q, PState}
     end.
 
-send_will(PState = #proc_state{ will_msg = WillMsg }) ->
-    amqp_pub(WillMsg, PState).
+send_will(PState = #proc_state{will_msg = undefined}) ->
+    PState;
+
+send_will(PState = #proc_state{will_msg = WillMsg = #mqtt_msg{retain = Retain, topic = Topic}, retainer_pid = RPid}) ->
+    amqp_pub(WillMsg, PState),
+    case Retain of
+        false -> ok;
+        true  -> hand_off_to_retainer(RPid, Topic, WillMsg)
+    end,
+    PState.
 
 amqp_pub(undefined, PState) ->
     PState;

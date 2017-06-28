@@ -17,8 +17,14 @@ function dispatcher() {
 }
 
 function set_auth_pref(userinfo) {
+    // clear a local storage value used by earlier versions
+    clear_local_pref('auth');
+
     var b64 = b64_encode_utf8(userinfo);
-    store_pref('auth', encodeURIComponent(b64));
+    var date  = new Date();
+    // 8 hours from now
+    date.setHours(date.getHours() + 8);
+    store_cookie_value_with_expiration('auth', encodeURIComponent(b64), date);
 }
 
 function login_route () {
@@ -58,7 +64,7 @@ function start_app_login() {
         this.get(/\#\/login\/(.*)/, login_route_with_path);
     });
     app.run();
-    if (get_pref('auth') != null) {
+    if (get_cookie_value('auth') != null) {
         check_login();
     }
 }
@@ -66,7 +72,9 @@ function start_app_login() {
 function check_login() {
     user = JSON.parse(sync_get('/whoami'));
     if (user == false) {
+        // clear a local storage value used by earlier versions
         clear_pref('auth');
+        clear_cookie_value('auth');
         replace_content('login-status', '<p>Login failed</p>');
     }
     else {
@@ -260,7 +268,8 @@ function partial_update() {
                 var befores = $('#main .updatable');
                 var afters = $('#scratch .updatable');
                 if (befores.length != afters.length) {
-                    throw("before/after mismatch");
+                    console.log("before/after mismatch! Doing a full reload...");
+                    full_refresh();
                 }
                 for (var i = 0; i < befores.length; i++) {
                     $(befores[i]).empty().append($(afters[i]).contents());
@@ -395,11 +404,15 @@ function y_position() {
 }
 
 function with_update(fun) {
+    if(outstanding_reqs.length > 0){
+        return false;
+    }
     with_reqs(apply_state(current_reqs), [], function(json) {
             var html = format(current_template, json);
             fun(html);
             update_status('ok');
         });
+    return true;
 }
 
 function apply_state(reqs) {
@@ -508,15 +521,32 @@ function show_popup(type, text, mode) {
 
 
 
-   function submit_import(form) {
-       var idx = $("select[name='vhost-upload'] option:selected").index()
-       var vhost = ((idx <=0 ) ? "" : "/" + esc($("select[name='vhost-upload'] option:selected").val()));
-       form.action ="api/definitions" + vhost + '?auth=' + get_pref('auth');
-       form.submit();
-     };
+function submit_import(form) {
+    if (form.file.value) {
+        var confirm_upload = confirm('Are you sure you want to import a definitions file? Some entities (vhosts, users, queues, etc) may be overwritten!');
+        if (confirm_upload === true) {
+            var idx = $("select[name='vhost-upload'] option:selected").index();
+            var vhost = ((idx <= 0) ? "" : "/" + esc($("select[name='vhost-upload'] option:selected").val()));
+            form.action ="api/definitions" + vhost + '?auth=' + get_cookie_value('auth');
+            form.submit();
+            window.location.replace("../../#/import-succeeded");
+        } else {
+            return false;
+        }
+    } else {
+        return false;
+    }
+};
 
 
 function postprocess() {
+    $('form.confirm-queue').submit(function() {
+        return confirm("Are you sure? The queue is going to be deleted. " +
+                       "Messages cannot be recovered after deletion.");
+        });
+    $('form.confirm-purge-queue').submit(function() {
+        return confirm("Are you sure? Messages cannot be recovered after purging.");
+        });
     $('form.confirm').submit(function() {
             return confirm("Are you sure? This object cannot be recovered " +
                            "after deletion.");
@@ -535,11 +565,11 @@ function postprocess() {
             }
         });
     $('#download-definitions').click(function() {
-            var idx = $("select[name='vhost-download'] option:selected").index()
+            var idx = $("select[name='vhost-download'] option:selected").index();
             var vhost = ((idx <=0 ) ? "" : "/" + esc($("select[name='vhost-download'] option:selected").val()));
             var path = 'api/definitions' + vhost + '?download=' +
                 esc($('#download-filename').val()) +
-                '&auth=' + get_pref('auth');
+                '&auth=' + get_cookie_value('auth');
             window.location = path;
             setTimeout('app.run()');
             return false;
@@ -604,8 +634,10 @@ function postprocess() {
         var field = $(this).attr('field');
         var row = $('#' + field).find('.mf').last();
         var key = row.find('input').first();
+        var value = row.find('input').last();
         var type = row.find('select').last();
         key.val($(this).attr('key'));
+        value.val($(this).attr('value'));
         type.val($(this).attr('type'));
         update_multifields();
     });
@@ -633,8 +665,8 @@ function url_pagination_template(template, defaultPage, defaultPageSize){
 
 
 function stored_page_info(template, page_start){
-    var pageSize = $('#' + template+'-pagesize').val();
-    var filterName = $('#' + template+'-name').val();
+    var pageSize = fmt_strip_tags($('#' + template+'-pagesize').val());
+    var filterName = fmt_strip_tags($('#' + template+'-name').val());
 
     store_pref(template + '_current_page_number', page_start);
     if (filterName != null && filterName != undefined) {
@@ -690,7 +722,10 @@ function renderChannels() {
 
 
 function update_pages_from_ui(sender) {
-    update_pages(current_template, !!$(sender).attr('data-page-start') ? $(sender).attr('data-page-start') : $(sender).val());
+    var val = $(sender).val();
+    var raw = !!$(sender).attr('data-page-start') ? $(sender).attr('data-page-start') : val;
+    var s   = fmt_strip_tags(raw);
+    update_pages(current_template, s);
 }
 
 function postprocess_partial() {
@@ -821,7 +856,7 @@ function update_filter_regex(jElem) {
             current_filter_regex = new RegExp(current_filter,'i');
         } catch (e) {
             jElem.parents('.filter').append('<p class="status-error">' +
-                                            e.message + '</p>');
+                                            fmt_escape_html(e.message) + '</p>');
         }
     }
 }
@@ -904,7 +939,16 @@ function toggle_visibility(item) {
 }
 
 function publish_msg(params0) {
-    var params = params_magic(params0);
+    try {
+        var params = params_magic(params0);
+        publish_msg0(params);
+    } catch (e) {
+        show_popup('warn', fmt_escape_html(e));
+        return false;
+    }
+}
+
+function publish_msg0(params) {
     var path = fill_path_template('/exchanges/:vhost/:name/publish', params);
     params['payload_encoding'] = 'string';
     params['properties'] = {};
@@ -990,7 +1034,9 @@ function format(template, json) {
         return tmpl.render(json);
     } catch (err) {
         clearInterval(timer);
-        debug(err['name'] + ": " + err['message']);
+        console.log("Uncaught error: " + err);
+        console.log("Stack: " + err['stack']);
+        debug(err['name'] + ": " + err['message'] + "\n" + err['stack'] + "\n");
     }
 }
 
@@ -1011,11 +1057,25 @@ function update_status(status) {
     replace_content('status', html);
 }
 
+function has_auth_cookie_value() {
+    return get_cookie_value('auth') != null;
+}
+
 function auth_header() {
-    return "Basic " + decodeURIComponent(get_pref('auth'));
+    if(has_auth_cookie_value()) {
+        return "Basic " + decodeURIComponent(get_cookie_value('auth'));    
+    } else {
+        return null;
+    }
 }
 
 function with_req(method, path, body, fun) {
+    if(!has_auth_cookie_value()) {
+        // navigate to the login form
+        location.reload();
+        return;
+    }
+
     var json;
     var req = xmlHttpRequest();
     req.open(method, 'api' + path, true );
@@ -1060,7 +1120,7 @@ function sync_req(type, params0, path_template, options) {
         params = params_magic(params0);
         path = fill_path_template(path_template, params);
     } catch (e) {
-        show_popup('warn', e);
+        show_popup('warn', fmt_escape_html(e));
         return false;
     }
     var req = xmlHttpRequest();
@@ -1118,8 +1178,8 @@ function check_bad_response(req, full_page_404) {
         var error = JSON.parse(req.responseText).error;
         if (typeof(error) != 'string') error = JSON.stringify(error);
 
-        if (error == 'bad_request' || error == 'not_found') {
-            show_popup('warn', reason);
+        if (error == 'bad_request' || error == 'not_found' || error == 'not_authorised') {
+            show_popup('warn', fmt_escape_html(reason));
         } else if (error == 'page_out_of_range') {
             var seconds = 60;
             if (last_page_out_of_range_error > 0)

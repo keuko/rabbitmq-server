@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_direct).
@@ -109,6 +109,7 @@ authz_socket_info_direct(Infos) ->
 connect1(User, VHost, Protocol, Pid, Infos) ->
     try rabbit_access_control:check_vhost_access(User, VHost, authz_socket_info_direct(Infos)) of
         ok -> ok = pg_local:join(rabbit_direct, Pid),
+	      rabbit_core_metrics:connection_created(Pid, Infos),
               rabbit_event:notify(connection_created, Infos),
               {ok, {User, rabbit_reader:server_properties(Protocol)}}
     catch
@@ -127,4 +128,5 @@ start_channel(Number, ClientChannelPid, ConnPid, ConnName, Protocol, User,
 
 disconnect(Pid, Infos) ->
     pg_local:leave(rabbit_direct, Pid),
+    rabbit_core_metrics:connection_closed(Pid),
     rabbit_event:notify(connection_closed, Infos).

@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_cli).
@@ -154,7 +154,7 @@ start_distribution_anon(TriesLeft, _) ->
             start_distribution_anon(TriesLeft - 1, Reason)
     end.
 
-%% Tries to start distribution with random name choosen from limited list of candidates - to
+%% Tries to start distribution with random name chosen from limited list of candidates - to
 %% prevent atom table pollution on target nodes.
 start_distribution() ->
     rabbit_nodes:ensure_epmd(),
@@ -277,7 +277,7 @@ mutually_exclusive_flags(CurrentOptionValues, Default, FlagsAndValues) ->
             {ok, Value};
         _ ->
             Names = [ [$', N, $']  || {N, _} <- PresentFlags ],
-            CommaSeparated = string:join(lists:droplast(Names), ", "),
+            CommaSeparated = string:join(rabbit_misc:lists_droplast(Names), ", "),
             AndOneMore = lists:last(Names),
             Msg = io_lib:format("Options ~s and ~s are mutually exclusive", [CommaSeparated, AndOneMore]),
             {error, lists:flatten(Msg)}

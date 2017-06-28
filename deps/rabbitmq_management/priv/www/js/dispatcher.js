@@ -67,7 +67,7 @@ dispatcher_add(function(sammy) {
 
     
     sammy.get('#/exchanges', function() {
-            renderExchanges()
+            renderExchanges();
         });
 
 
@@ -226,7 +226,9 @@ dispatcher_add(function(sammy) {
         });
 
     sammy.put('#/logout', function() {
+            // clear a local storage value used by earlier versions
             clear_pref('auth');
+            clear_cookie_value('auth');
             location.reload();
         });
 
@@ -238,5 +240,15 @@ dispatcher_add(function(sammy) {
         });
     sammy.put('#/column-options', function() {
             update_column_options(this);
+        });
+    sammy.del("#/reset", function(){
+            if(sync_delete(this, '/reset')){
+                update();
+            }
+        });
+    sammy.del("#/reset_node", function(){
+            if(sync_delete(this, '/reset/:node')){
+                update();
+            }
         });
 });

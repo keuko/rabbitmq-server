@@ -1,7 +1,10 @@
 PROJECT = rabbitmq_management_visualiser
+PROJECT_DESCRIPTION = RabbitMQ Visualiser
 
-DEPS = rabbit_common rabbit rabbitmq_management webmachine
+DEPS = rabbit_common rabbit rabbitmq_management
+TEST_DEPS = rabbitmq_ct_helpers
 
+DEP_EARLY_PLUGINS = rabbit_common/mk/rabbitmq-early-plugin.mk
 DEP_PLUGINS = rabbit_common/mk/rabbitmq-plugin.mk
 
 # FIXME: Use erlang.mk patched for RabbitMQ, while waiting for PRs to be

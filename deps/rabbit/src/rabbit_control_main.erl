@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_control_main).
@@ -31,6 +31,7 @@
 
 -define(COMMANDS,
         [stop,
+         shutdown,
          stop_app,
          start_app,
          wait,
@@ -69,6 +70,10 @@
          {set_parameter, [?VHOST_DEF]},
          {clear_parameter, [?VHOST_DEF]},
          {list_parameters, [?VHOST_DEF]},
+
+         set_global_parameter,
+         clear_global_parameter,
+         list_global_parameters,
 
          {set_policy, [?VHOST_DEF, ?PRIORITY_DEF, ?APPLY_TO_DEF]},
          {clear_policy, [?VHOST_DEF]},
@@ -112,7 +117,7 @@
          {"Parameters", rabbit_runtime_parameters, list_formatted, info_keys}]).
 
 -define(COMMANDS_NOT_REQUIRING_APP,
-        [stop, stop_app, start_app, wait, reset, force_reset, rotate_logs,
+        [stop, shutdown, stop_app, start_app, wait, reset, force_reset, rotate_logs,
          join_cluster, change_cluster_node_type, update_cluster_nodes,
          forget_cluster_node, rename_cluster_node, cluster_status, status,
          environment, eval, force_boot, help, hipe_compile, encode]).
@@ -121,7 +126,7 @@
 -define(COMMANDS_WITH_TIMEOUT,
         [list_user_permissions, list_policies, list_queues, list_exchanges,
          list_bindings, list_connections, list_channels, list_consumers,
-         list_vhosts, list_parameters,
+         list_vhosts, list_parameters, list_global_parameters,
          purge_queue,
          {node_health_check, 70000}]).
 
@@ -151,7 +156,7 @@ start() ->
               Inform = case Quiet of
                            true  -> fun (_Format, _Args1) -> ok end;
                            false -> fun (Format, Args1) ->
-                                            io:format(Format ++ " ...~n", Args1)
+                                            io:format(Format ++ "~n", Args1)
                                     end
                        end,
               try
@@ -265,6 +270,27 @@ do_action(Command, Node, Args, Opts, Inform, Timeout) ->
             action(Command, Node, Args, Opts, Inform)
     end.
 
+shutdown_node_and_wait_pid_to_stop(Node, Pid, Inform) ->
+    Inform("Shutting down RabbitMQ node ~p running at PID ~s", [Node, Pid]),
+    Res = call(Node, {rabbit, stop_and_halt, []}),
+    case Res of
+        ok ->
+            Inform("Waiting for PID ~s to terminate", [Pid]),
+            wait_for_process_death(Pid),
+            Inform(
+              "RabbitMQ node ~p running at PID ~s successfully shut down",
+              [Node, Pid]);
+        _  -> ok
+    end,
+    Res.
+
+action(shutdown, Node, [], _Opts, Inform) ->
+    case rpc:call(Node, os, getpid, []) of
+        Pid when is_list(Pid) ->
+            shutdown_node_and_wait_pid_to_stop(Node, Pid, Inform);
+        Error -> Error
+    end;
+
 action(stop, Node, Args, _Opts, Inform) ->
     Inform("Stopping and halting node ~p", [Node]),
     Res = call(Node, {rabbit, stop_and_halt, []}),
@@ -277,7 +303,7 @@ action(stop, Node, Args, _Opts, Inform) ->
     Res;
 
 action(stop_app, Node, [], _Opts, Inform) ->
-    Inform("Stopping node ~p", [Node]),
+    Inform("Stopping rabbit application on node ~p", [Node]),
     call(Node, {rabbit, stop, []});
 
 action(start_app, Node, [], _Opts, Inform) ->
@@ -286,14 +312,14 @@ action(start_app, Node, [], _Opts, Inform) ->
 
 action(reset, Node, [], _Opts, Inform) ->
     Inform("Resetting node ~p", [Node]),
-    require_mnesia_stopped(Node, 
+    require_mnesia_stopped(Node,
                            fun() ->
                                    call(Node, {rabbit_mnesia, reset, []})
                            end);
 
 action(force_reset, Node, [], _Opts, Inform) ->
     Inform("Forcefully resetting node ~p", [Node]),
-    require_mnesia_stopped(Node, 
+    require_mnesia_stopped(Node,
                            fun() ->
                                    call(Node, {rabbit_mnesia, force_reset, []})
                            end);
@@ -305,21 +331,21 @@ action(join_cluster, Node, [ClusterNodeS], Opts, Inform) ->
                    false -> disc
                end,
     Inform("Clustering node ~p with ~p", [Node, ClusterNode]),
-    require_mnesia_stopped(Node, 
+    require_mnesia_stopped(Node,
                            fun() ->
                                    rpc_call(Node, rabbit_mnesia, join_cluster, [ClusterNode, NodeType])
                            end);
 
 action(change_cluster_node_type, Node, ["ram"], _Opts, Inform) ->
     Inform("Turning ~p into a ram node", [Node]),
-    require_mnesia_stopped(Node, 
+    require_mnesia_stopped(Node,
                            fun() ->
                                    rpc_call(Node, rabbit_mnesia, change_cluster_node_type, [ram])
                            end);
 action(change_cluster_node_type, Node, [Type], _Opts, Inform)
   when Type =:= "disc" orelse Type =:= "disk" ->
     Inform("Turning ~p into a disc node", [Node]),
-    require_mnesia_stopped(Node, 
+    require_mnesia_stopped(Node,
                            fun() ->
                                    rpc_call(Node, rabbit_mnesia, change_cluster_node_type, [disc])
                            end);
@@ -327,7 +353,7 @@ action(change_cluster_node_type, Node, [Type], _Opts, Inform)
 action(update_cluster_nodes, Node, [ClusterNodeS], _Opts, Inform) ->
     ClusterNode = list_to_atom(ClusterNodeS),
     Inform("Updating cluster nodes for ~p from ~p", [Node, ClusterNode]),
-    require_mnesia_stopped(Node, 
+    require_mnesia_stopped(Node,
                           fun() ->
                                   rpc_call(Node, rabbit_mnesia, update_cluster_nodes, [ClusterNode])
                           end);
@@ -492,9 +518,9 @@ action(set_disk_free_limit, Node, ["mem_relative", Arg], _Opts, Inform) ->
                              _ -> Arg
                          end),
     Inform("Setting disk free limit on ~p to ~p of total RAM", [Node, Frac]),
-    rpc_call(Node, 
-             rabbit_disk_monitor, 
-             set_disk_free_limit, 
+    rpc_call(Node,
+             rabbit_disk_monitor,
+             set_disk_free_limit,
              [{mem_relative, Frac}]);
 
 
@@ -526,6 +552,20 @@ action(clear_parameter, Node, [Component, Key], Opts, Inform) ->
     rpc_call(Node, rabbit_runtime_parameters, clear, [VHostArg,
                                                       list_to_binary(Component),
                                                       list_to_binary(Key)]);
+
+action(set_global_parameter, Node, [Key, Value], _Opts, Inform) ->
+    Inform("Setting global runtime parameter ~p to ~p", [Key, Value]),
+    rpc_call(
+        Node, rabbit_runtime_parameters, parse_set_global,
+        [rabbit_data_coercion:to_atom(Key), rabbit_data_coercion:to_binary(Value)]
+    );
+
+action(clear_global_parameter, Node, [Key], _Opts, Inform) ->
+    Inform("Clearing global runtime parameter ~p", [Key]),
+    rpc_call(
+        Node, rabbit_runtime_parameters, clear_global,
+        [rabbit_data_coercion:to_atom(Key)]
+    );
 
 action(set_policy, Node, [Key, Pattern, Defn], Opts, Inform) ->
     Msg = "Setting policy ~p for pattern ~p to ~p with priority ~p",
@@ -622,6 +662,11 @@ action(list_parameters, Node, [], Opts, Inform, Timeout) ->
     Inform("Listing runtime parameters", []),
     call(Node, {rabbit_runtime_parameters, list_formatted, [VHostArg]},
          rabbit_runtime_parameters:info_keys(), Timeout);
+
+action(list_global_parameters, Node, [], _Opts, Inform, Timeout) ->
+    Inform("Listing global runtime parameters", []),
+    call(Node, {rabbit_runtime_parameters, list_global_formatted, []},
+         rabbit_runtime_parameters:global_info_keys(), Timeout);
 
 action(list_policies, Node, [], Opts, Inform, Timeout) ->
     VHostArg = list_to_binary(proplists:get_value(?VHOST_OPT, Opts)),
@@ -939,7 +984,7 @@ escape(Bin, IsEscaped)  when is_binary(Bin) ->
 escape(L, false) when is_list(L) ->
     escape_char(lists:reverse(L), []);
 escape(L, true) when is_list(L) ->
-    L. 
+    L.
 
 escape_char([$\\ | T], Acc) ->
     escape_char(T, [$\\, $\\ | Acc]);
