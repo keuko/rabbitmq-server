@@ -3,7 +3,7 @@ rabbitmq-server (3.6.10-2) UNRELEASED; urgency=medium
   * Updating vcs fields.
   * Updating copyright format url.
 
- -- Daniel Baumann <daniel@daniel>  Fri, 04 Aug 2017 22:30:14 +0200
+ -- Daniel Baumann <daniel.baumann@progress-linux.org>  Fri, 04 Aug 2017 22:30:14 +0200
 
 rabbitmq-server (3.6.10-1) unstable; urgency=medium
 
