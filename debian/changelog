@@ -9,6 +9,7 @@ rabbitmq-server (3.6.10-1) unstable; urgency=medium
 
   [ Daniel Baumann ]
   * Updating vcs fields.
+  * Updating copyright format url.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 28 Jun 2017 15:00:41 +0200
 
