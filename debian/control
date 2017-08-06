@@ -21,7 +21,7 @@ Build-Depends:
  zip,
 Build-Depends-Indep:
  rsync,
-Standards-Version: 4.0.0
+Standards-Version: 4.0.1
 Vcs-Browser: https://anonscm.debian.org/cgit/openstack/third-party/rabbitmq-server.git
 Vcs-Git: https://anonscm.debian.org/git/openstack/third-party/rabbitmq-server.git
 Homepage: http://www.rabbitmq.com/
