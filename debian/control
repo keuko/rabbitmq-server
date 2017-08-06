@@ -1,6 +1,6 @@
 Source: rabbitmq-server
 Section: net
-Priority: extra
+Priority: optional
 Maintainer: Debian OpenStack <openstack-devel@lists.alioth.debian.org>
 Uploaders:
  James Page <james.page@ubuntu.com>,
