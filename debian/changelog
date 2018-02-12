@@ -1,5 +1,6 @@
 rabbitmq-server (3.6.10-2) UNRELEASED; urgency=medium
 
+  [ Daniel Baumann ]
   * Updating vcs fields.
   * Updating copyright format url.
   * Updating maintainer field.
@@ -11,6 +12,9 @@ rabbitmq-server (3.6.10-2) UNRELEASED; urgency=medium
   * Updating standards version to 4.0.1.
   * Deprecating priority extra as per policy 4.0.1.
   * Updating standards version to 4.1.0.
+
+  [ Ondřej Nový ]
+  * d/control: Set Vcs-* to salsa.debian.org
 
  -- Daniel Baumann <daniel.baumann@progress-linux.org>  Fri, 04 Aug 2017 22:30:14 +0200
 

@@ -22,8 +22,8 @@ Build-Depends:
 Build-Depends-Indep:
  rsync,
 Standards-Version: 4.1.0
-Vcs-Browser: https://anonscm.debian.org/cgit/openstack/third-party/rabbitmq-server.git
-Vcs-Git: https://anonscm.debian.org/git/openstack/third-party/rabbitmq-server.git
+Vcs-Browser: https://salsa.debian.org/openstack-team/third-party/rabbitmq-server
+Vcs-Git: https://salsa.debian.org/openstack-team/third-party/rabbitmq-server.git
 Homepage: http://www.rabbitmq.com/
 
 Package: rabbitmq-server
