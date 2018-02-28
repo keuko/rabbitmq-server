@@ -15,6 +15,7 @@ rabbitmq-server (3.6.10-2) UNRELEASED; urgency=medium
 
   [ Ondřej Nový ]
   * d/control: Set Vcs-* to salsa.debian.org
+  * d/changelog: Remove trailing whitespaces
 
  -- Daniel Baumann <daniel.baumann@progress-linux.org>  Fri, 04 Aug 2017 22:30:14 +0200
 
@@ -187,7 +188,7 @@ rabbitmq-server (3.3.5-1) unstable; urgency=low
   * New upstream release:
     - Provides unminimized versions of all bundled Javascript
       libraries (Closes: #736781).
-  * d/control: Added Blair Hester to Uploaders, dropped Emile Joubert 
+  * d/control: Added Blair Hester to Uploaders, dropped Emile Joubert
     (thanks for all your work Emile!).
 
  -- Blair Hester <bhester@gopivotal.com>  Tue, 12 Aug 2014 11:47:14 +0100
@@ -393,7 +394,7 @@ rabbitmq-server (2.6.1-1) unstable; urgency=low
 
 rabbitmq-server (2.5.0-1) unstable; urgency=low
 
-  * New upstream release 
+  * New upstream release
 
  -- John Leuner <jewel@debian.org>  Thu, 16 Jun 2011 09:55:40 +0200
 
@@ -487,7 +488,7 @@ rabbitmq-server (1.5.5-3) unstable; urgency=low
 rabbitmq-server (1.5.5-2) unstable; urgency=low
 
   * Include updates to debian package by rabbit team:
-    - quiet log rotate 
+    - quiet log rotate
     - update build-depends and depends for new erlang packages
     - debian/watch file
     - add rabbitmq-script-wrapper
@@ -537,10 +538,10 @@ rabbitmq-server (1.5.0-4) unstable; urgency=low
 
   * Clarify and explicitly list the license and copyright for
     codegen/amqp-0.8.json
-	
+
   * Explicitly list the authors and copyright for the rest of the codebase
     at the top of debian/copyright
-	
+
   * Clarify the copyright of the files in src/tcp_* . The rabbitmq authors have
     confirmed that they are the original authors of this code and that the
     files at http://code.google.com/p/cacherl/ were taken without their
