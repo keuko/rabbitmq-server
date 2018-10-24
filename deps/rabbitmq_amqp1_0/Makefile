@@ -9,15 +9,23 @@ define PROJECT_ENV
 	  ]
 endef
 
+define PROJECT_APP_EXTRA_KEYS
+	{broker_version_requirements, []}
+endef
+
 BUILD_DEPS = rabbitmq_codegen
-DEPS = rabbit_common rabbit amqp_client
+DEPS = rabbit_common rabbit amqp_client amqp10_common
 TEST_DEPS = rabbitmq_ct_helpers rabbitmq_ct_client_helpers
 
 DEP_EARLY_PLUGINS = rabbit_common/mk/rabbitmq-early-plugin.mk
 DEP_PLUGINS = rabbit_common/mk/rabbitmq-plugin.mk
 
-EXTRA_SOURCES += include/rabbit_amqp1_0_framing.hrl \
-		 src/rabbit_amqp1_0_framing0.erl
+ELIXIR_LIB_DIR = $(shell elixir -e 'IO.puts(:code.lib_dir(:elixir))')
+ ifeq ($(ERL_LIBS),)
+     ERL_LIBS = $(ELIXIR_LIB_DIR)
+ else
+     ERL_LIBS := $(ERL_LIBS):$(ELIXIR_LIB_DIR)
+ endif
 
 .DEFAULT_GOAL = all
 $(PROJECT).d:: $(EXTRA_SOURCES)
@@ -34,25 +42,6 @@ include erlang.mk
 # --------------------------------------------------------------------
 # Framing sources generation.
 # --------------------------------------------------------------------
-
-PYTHON       ?= python
-CODEGEN       = $(CURDIR)/codegen.py
-CODEGEN_DIR  ?= $(DEPS_DIR)/rabbitmq_codegen
-CODEGEN_AMQP  = $(CODEGEN_DIR)/amqp_codegen.py
-CODEGEN_SPECS = $(CODEGEN_DIR)/amqp-1.0/messaging.xml			\
-		$(CODEGEN_DIR)/amqp-1.0/security.xml			\
-		$(CODEGEN_DIR)/amqp-1.0/transport.xml			\
-		$(CODEGEN_DIR)/amqp-1.0/transactions.xml
-
-include/rabbit_amqp1_0_framing.hrl:: $(CODEGEN) $(CODEGEN_AMQP) \
-    $(CODEGEN_SPECS)
-	$(gen_verbose) env PYTHONPATH=$(CODEGEN_DIR) \
-	  $(PYTHON) $(CODEGEN) hrl $(CODEGEN_SPECS) > $@
-
-src/rabbit_amqp1_0_framing0.erl:: $(CODEGEN) $(CODEGEN_AMQP) \
-    $(CODEGEN_SPECS)
-	$(gen_verbose) env PYTHONPATH=$(CODEGEN_DIR) \
-	  $(PYTHON) $(CODEGEN) erl $(CODEGEN_SPECS) > $@
 
 clean:: clean-extra-sources
 

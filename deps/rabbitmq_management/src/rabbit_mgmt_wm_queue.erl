@@ -16,7 +16,7 @@
 
 -module(rabbit_mgmt_wm_queue).
 
--export([init/3, rest_init/2, resource_exists/2, to_json/2,
+-export([init/2, resource_exists/2, to_json/2,
          content_types_provided/2, content_types_accepted/2,
          is_authorized/2, allowed_methods/2, accept_content/2,
          delete_resource/2, queue/1, queue/2]).
@@ -27,10 +27,8 @@
 
 %%--------------------------------------------------------------------
 
-init(_, _, _) -> {upgrade, protocol, cowboy_rest}.
-
-rest_init(Req, _Config) ->
-    {ok, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
+init(Req, _State) ->
+    {cowboy_rest, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
 
 variances(Req, Context) ->
     {[<<"accept-encoding">>, <<"origin">>], Req, Context}.
@@ -53,32 +51,55 @@ resource_exists(ReqData, Context) ->
 to_json(ReqData, Context) ->
     try
         [Q] = rabbit_mgmt_db:augment_queues(
-                        [queue(ReqData)], rabbit_mgmt_util:range_ceil(ReqData), full),
-        Payload = rabbit_mgmt_format:clean_consumer_details(rabbit_mgmt_format:strip_pids(Q)),
-        rabbit_mgmt_util:reply(Payload, ReqData, Context)
+                [queue(ReqData)], rabbit_mgmt_util:range_ceil(ReqData),
+                full),
+        Payload = rabbit_mgmt_format:clean_consumer_details(
+                    rabbit_mgmt_format:strip_pids(Q)),
+        rabbit_mgmt_util:reply(ensure_defaults(Payload), ReqData, Context)
     catch
         {error, invalid_range_parameters, Reason} ->
             rabbit_mgmt_util:bad_request(iolist_to_binary(Reason), ReqData, Context)
     end.
 
 accept_content(ReqData, Context) ->
-    rabbit_mgmt_util:http_to_amqp(
-      'queue.declare', ReqData, Context,
+    Name = rabbit_mgmt_util:id(queue, ReqData),
+    rabbit_mgmt_util:direct_request(
+      'queue.declare',
       fun rabbit_mgmt_format:format_accept_content/1,
-      [{queue, rabbit_mgmt_util:id(queue, ReqData)}]).
+      [{queue, Name}], "Declare queue error: ~s", ReqData, Context).
 
 delete_resource(ReqData, Context) ->
-    rabbit_mgmt_util:amqp_request(
-      rabbit_mgmt_util:vhost(ReqData),
-      ReqData, Context,
-      #'queue.delete'{ queue     = rabbit_mgmt_util:id(queue, ReqData),
-                       if_empty  = qs_true("if-empty", ReqData),
-                       if_unused = qs_true("if-unused", ReqData) }).
+    %% We need to retrieve manually if-unused and if-empty, as the HTTP API uses '-'
+    %% while the record uses '_'
+    IfUnused = <<"true">> =:= rabbit_mgmt_util:qs_val(<<"if-unused">>, ReqData),
+    IfEmpty = <<"true">> =:= rabbit_mgmt_util:qs_val(<<"if-empty">>, ReqData),
+    Name = rabbit_mgmt_util:id(queue, ReqData),
+    rabbit_mgmt_util:direct_request(
+      'queue.delete',
+      fun rabbit_mgmt_format:format_accept_content/1,
+      [{queue, Name},
+       {if_unused, IfUnused},
+       {if_empty, IfEmpty}], "Delete queue error: ~s", ReqData, Context).
 
 is_authorized(ReqData, Context) ->
     rabbit_mgmt_util:is_authorized_vhost(ReqData, Context).
 
 %%--------------------------------------------------------------------
+
+%% this is here to ensure certain data points are always there. When a queue
+%% is moved there can be transient periods where certain advanced metrics aren't
+%% yet available on the new node.
+ensure_defaults(Payload0) ->
+    case lists:keyfind(garbage_collection, 1, Payload0) of
+        {_K, _V} -> Payload0;
+        false ->
+            [{garbage_collection,
+              [{max_heap_size,-1},
+               {min_bin_vheap_size,-1},
+               {min_heap_size,-1},
+               {fullsweep_after,-1},
+               {minor_gcs,-1}]} | Payload0]
+    end.
 
 queue(ReqData) ->
     case rabbit_mgmt_util:vhost(ReqData) of
@@ -93,6 +114,3 @@ queue(VHost, QName) ->
         {ok, Q}            -> rabbit_mgmt_format:queue(Q);
         {error, not_found} -> not_found
     end.
-
-qs_true(Key, ReqData) ->
-    <<"true">> =:= element(1, cowboy_req:qs_val(list_to_binary(Key), ReqData)).

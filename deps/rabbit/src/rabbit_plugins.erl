@@ -16,10 +16,16 @@
 
 -module(rabbit_plugins).
 -include_lib("rabbit_common/include/rabbit.hrl").
+-include_lib("stdlib/include/zip.hrl").
 
--export([setup/0, active/0, read_enabled/1, list/1, list/2, dependencies/3]).
+-export([setup/0, active/0, read_enabled/1, list/1, list/2, dependencies/3, running_plugins/0]).
 -export([ensure/1]).
+-export([extract_schemas/1]).
+-export([validate_plugins/1, format_invalid_plugins/1]).
+-export([is_strictly_plugin/1, strictly_plugins/2, strictly_plugins/1]).
 
+% Export for testing purpose.
+-export([is_version_supported/2, validate_plugins/2]).
 %%----------------------------------------------------------------------------
 
 -type plugin_name() :: atom().
@@ -32,10 +38,19 @@
 -spec dependencies(boolean(), [plugin_name()], [#plugin{}]) ->
                              [plugin_name()].
 -spec ensure(string()) -> {'ok', [atom()], [atom()]} | {error, any()}.
+-spec strictly_plugins([plugin_name()], [#plugin{}]) -> [plugin_name()].
+-spec strictly_plugins([plugin_name()]) -> [plugin_name()].
+-spec is_strictly_plugin(#plugin{}) -> boolean().
 
 %%----------------------------------------------------------------------------
 
-ensure(FileJustChanged0) ->
+ensure(FileJustChanged) ->
+    case rabbit:is_running() of
+        true  -> ensure1(FileJustChanged);
+        false -> {error, rabbit_not_running}
+    end.
+
+ensure1(FileJustChanged0) ->
     {ok, OurFile0} = application:get_env(rabbit, enabled_plugins_file),
     FileJustChanged = filename:nativename(FileJustChanged0),
     OurFile = filename:nativename(OurFile0),
@@ -43,6 +58,7 @@ ensure(FileJustChanged0) ->
         FileJustChanged ->
             Enabled = read_enabled(OurFile),
             Wanted = prepare_plugins(Enabled),
+            rabbit_config:prepare_and_use_config(),
             Current = active(),
             Start = Wanted -- Current,
             Stop = Current -- Wanted,
@@ -54,8 +70,19 @@ ensure(FileJustChanged0) ->
                                                             {disabled, Stop}]),
             rabbit:stop_apps(Stop),
             clean_plugins(Stop),
-            rabbit_log:info("Plugins changed; enabled ~p, disabled ~p~n",
-                            [Start, Stop]),
+            case {Start, Stop} of
+                {[], []} ->
+                    ok;
+                {[], _} ->
+                    rabbit_log:info("Plugins changed; disabled ~p~n",
+                                    [Stop]);
+                {_, []} ->
+                    rabbit_log:info("Plugins changed; enabled ~p~n",
+                                    [Start]);
+                {_, _} ->
+                    rabbit_log:info("Plugins changed; enabled ~p, disabled ~p~n",
+                                    [Start, Stop])
+            end,
             {ok, Start, Stop};
         _ ->
             {error, {enabled_plugins_mismatch, FileJustChanged, OurFile}}
@@ -101,9 +128,53 @@ setup() ->
     Enabled = enabled_plugins(),
     prepare_plugins(Enabled).
 
+extract_schemas(SchemaDir) ->
+    application:load(rabbit),
+    {ok, EnabledFile} = application:get_env(rabbit, enabled_plugins_file),
+    Enabled = read_enabled(EnabledFile),
+
+    {ok, PluginsDistDir} = application:get_env(rabbit, plugins_dir),
+
+    AllPlugins = list(PluginsDistDir),
+    Wanted = dependencies(false, Enabled, AllPlugins),
+    WantedPlugins = lookup_plugins(Wanted, AllPlugins),
+    [ extract_schema(Plugin, SchemaDir) || Plugin <- WantedPlugins ],
+    application:unload(rabbit),
+    ok.
+
+extract_schema(#plugin{type = ez, location = Location}, SchemaDir) ->
+    {ok, Files} = zip:extract(Location,
+                              [memory, {file_filter,
+                                        fun(#zip_file{name = Name}) ->
+                                            string:str(Name, "priv/schema") > 0
+                                        end}]),
+    lists:foreach(
+        fun({FileName, Content}) ->
+            ok = file:write_file(filename:join([SchemaDir,
+                                                filename:basename(FileName)]),
+                                 Content)
+        end,
+        Files),
+    ok;
+extract_schema(#plugin{type = dir, location = Location}, SchemaDir) ->
+    PluginSchema = filename:join([Location,
+                                  "priv",
+                                  "schema"]),
+    case rabbit_file:is_dir(PluginSchema) of
+        false -> ok;
+        true  ->
+            PluginSchemaFiles =
+                [ filename:join(PluginSchema, FileName)
+                  || FileName <- rabbit_file:wildcard(".*\\.schema",
+                                                      PluginSchema) ],
+            [ file:copy(SchemaFile, SchemaDir)
+              || SchemaFile <- PluginSchemaFiles ]
+    end.
+
+
 %% @doc Lists the plugins which are currently running.
 active() ->
-    InstalledPlugins = plugin_names(list(plugins_expand_dir())),
+    InstalledPlugins = plugin_names(list(plugins_dist_dir())),
     [App || {App, _, _} <- rabbit_misc:which_applications(),
             lists:member(App, InstalledPlugins)].
 
@@ -144,8 +215,26 @@ dependencies(Reverse, Sources, AllPlugins) ->
                 false -> digraph_utils:reachable(Sources, G);
                 true  -> digraph_utils:reaching(Sources, G)
             end,
+    OrderedDests = digraph_utils:postorder(digraph_utils:subgraph(G, Dests)),
     true = digraph:delete(G),
-    Dests.
+    OrderedDests.
+
+%% Filter real plugins from application dependencies
+is_strictly_plugin(#plugin{extra_dependencies = ExtraDeps}) ->
+    lists:member(rabbit, ExtraDeps).
+
+strictly_plugins(Plugins, AllPlugins) ->
+    lists:filter(
+      fun(Name) ->
+              is_strictly_plugin(lists:keyfind(Name, #plugin.name, AllPlugins))
+      end, Plugins).
+
+strictly_plugins(Plugins) ->
+    AllPlugins = list(plugins_dist_dir()),
+    lists:filter(
+      fun(Name) ->
+              is_strictly_plugin(lists:keyfind(Name, #plugin.name, AllPlugins))
+      end, Plugins).
 
 %% For a few known cases, an externally provided plugin can be trusted.
 %% In this special case, it overrides the plugin.
@@ -173,7 +262,8 @@ ensure_dependencies(Plugins) ->
                                          end, Deps)],
               throw({error, {missing_dependencies, Missing, Blame}})
     end,
-    [P#plugin{dependencies = Deps -- OTP}
+    [P#plugin{dependencies = Deps -- OTP,
+              extra_dependencies = Deps -- (Deps -- OTP)}
      || P = #plugin{dependencies = Deps} <- Plugins].
 
 is_loadable(App) ->
@@ -184,6 +274,13 @@ is_loadable(App) ->
         _                            -> false
     end.
 
+
+%% List running plugins along with their version.
+-spec running_plugins() -> [{atom(), Vsn :: string()}].
+running_plugins() ->
+    ActivePlugins = active(),
+    {ok, [{App, Vsn} || {App, _ , Vsn} <- rabbit_misc:which_applications(), lists:member(App, ActivePlugins)]}.
+
 %%----------------------------------------------------------------------------
 
 prepare_plugins(Enabled) ->
@@ -192,18 +289,145 @@ prepare_plugins(Enabled) ->
     AllPlugins = list(plugins_dist_dir()),
     Wanted = dependencies(false, Enabled, AllPlugins),
     WantedPlugins = lookup_plugins(Wanted, AllPlugins),
-
+    {ValidPlugins, Problems} = validate_plugins(WantedPlugins),
+    maybe_warn_about_invalid_plugins(Problems),
     case filelib:ensure_dir(ExpandDir ++ "/") of
         ok          -> ok;
         {error, E2} -> throw({error, {cannot_create_plugins_expand_dir,
                                       [ExpandDir, E2]}})
     end,
 
-    [prepare_plugin(Plugin, ExpandDir) || Plugin <- WantedPlugins],
-
-    [prepare_dir_plugin(PluginAppDescPath) ||
-        PluginAppDescPath <- filelib:wildcard(ExpandDir ++ "/*/ebin/*.app")],
+    [prepare_plugin(Plugin, ExpandDir) || Plugin <- ValidPlugins],
     Wanted.
+
+maybe_warn_about_invalid_plugins([]) ->
+    ok;
+maybe_warn_about_invalid_plugins(InvalidPlugins) ->
+    %% TODO: error message formatting
+    rabbit_log:warning(format_invalid_plugins(InvalidPlugins)).
+
+
+format_invalid_plugins(InvalidPlugins) ->
+    lists:flatten(["Failed to enable some plugins: \r\n"
+                   | [format_invalid_plugin(Plugin)
+                      || Plugin <- InvalidPlugins]]).
+
+format_invalid_plugin({Name, Errors}) ->
+    [io_lib:format("    ~p:~n", [Name])
+     | [format_invalid_plugin_error(Err) || Err <- Errors]].
+
+format_invalid_plugin_error({missing_dependency, Dep}) ->
+    io_lib:format("        Dependency is missing or invalid: ~p~n", [Dep]);
+%% a plugin doesn't support the effective broker version
+format_invalid_plugin_error({broker_version_mismatch, Version, Required}) ->
+    io_lib:format("        Plugin doesn't support current server version."
+                  " Actual broker version: ~p, supported by the plugin: ~p~n",
+                  [Version, format_required_versions(Required)]);
+%% one of dependencies of a plugin doesn't match its version requirements
+format_invalid_plugin_error({{dependency_version_mismatch, Version, Required}, Name}) ->
+    io_lib:format("        Version '~p' of dependency '~p' is unsupported."
+                  " Version ranges supported by the plugin: ~p~n",
+                  [Version, Name, Required]);
+format_invalid_plugin_error(Err) ->
+    io_lib:format("        Unknown error ~p~n", [Err]).
+
+format_required_versions(Versions) ->
+    lists:map(fun(V) ->
+                      case re:run(V, "^[0-9]*\.[0-9]*\.", [{capture, all, list}]) of
+                          {match, [Sub]} ->
+                              lists:flatten(io_lib:format("~s-~sx", [V, Sub]));
+                          _ ->
+                              V
+                      end
+              end, Versions).
+
+validate_plugins(Plugins) ->
+    application:load(rabbit),
+    RabbitVersion = RabbitVersion = case application:get_key(rabbit, vsn) of
+                                        undefined -> "0.0.0";
+                                        {ok, Val} -> Val
+                                    end,
+    validate_plugins(Plugins, RabbitVersion).
+
+validate_plugins(Plugins, BrokerVersion) ->
+    lists:foldl(
+        fun(#plugin{name = Name,
+                    broker_version_requirements = BrokerVersionReqs,
+                    dependency_version_requirements = DepsVersions} = Plugin,
+            {Plugins0, Errors}) ->
+            case is_version_supported(BrokerVersion, BrokerVersionReqs) of
+                true  ->
+                    case BrokerVersion of
+                        "0.0.0" ->
+                            rabbit_log:warning(
+                                "Running development version of the broker."
+                                " Requirement ~p for plugin ~p is ignored.",
+                                [BrokerVersionReqs, Name]);
+                        _ -> ok
+                    end,
+                    case check_plugins_versions(Name, Plugins0, DepsVersions) of
+                        ok           -> {[Plugin | Plugins0], Errors};
+                        {error, Err} -> {Plugins0, [{Name, Err} | Errors]}
+                    end;
+                false ->
+                    Error = [{broker_version_mismatch, BrokerVersion, BrokerVersionReqs}],
+                    {Plugins0, [{Name, Error} | Errors]}
+            end
+        end,
+        {[],[]},
+        Plugins).
+
+check_plugins_versions(PluginName, AllPlugins, RequiredVersions) ->
+    ExistingVersions = [{Name, Vsn}
+                        || #plugin{name = Name, version = Vsn} <- AllPlugins],
+    Problems = lists:foldl(
+        fun({Name, Versions}, Acc) ->
+            case proplists:get_value(Name, ExistingVersions) of
+                undefined -> [{missing_dependency, Name} | Acc];
+                Version   ->
+                    case is_version_supported(Version, Versions) of
+                        true  ->
+                            case Version of
+                                "" ->
+                                    rabbit_log:warning(
+                                        "~p plugin version is not defined."
+                                        " Requirement ~p for plugin ~p is ignored",
+                                        [Versions, PluginName]);
+                                _  -> ok
+                            end,
+                            Acc;
+                        false ->
+                            [{{dependency_version_mismatch, Version, Versions}, Name} | Acc]
+                    end
+            end
+        end,
+        [],
+        RequiredVersions),
+    case Problems of
+        [] -> ok;
+        _  -> {error, Problems}
+    end.
+
+is_version_supported("", _)        -> true;
+is_version_supported("0.0.0", _)   -> true;
+is_version_supported(_Version, []) -> true;
+is_version_supported(VersionFull, ExpectedVersions) ->
+    %% Pre-release version should be supported in plugins,
+    %% therefore preview part should be removed
+    Version = remove_version_preview_part(VersionFull),
+    case lists:any(fun(ExpectedVersion) ->
+                       rabbit_misc:version_minor_equivalent(ExpectedVersion, Version)
+                       andalso
+                       rabbit_misc:version_compare(ExpectedVersion, Version, lte)
+                   end,
+                   ExpectedVersions) of
+        true  -> true;
+        false -> false
+    end.
+
+remove_version_preview_part(Version) ->
+    {Ver, _Preview} = rabbit_semver:parse(Version),
+    iolist_to_binary(rabbit_semver:format({Ver, {[], []}})).
 
 clean_plugins(Plugins) ->
     ExpandDir = plugins_expand_dir(),
@@ -250,11 +474,37 @@ delete_recursively(Fn) ->
         {error, {Path, E}} -> {error, {cannot_delete, Path, E}}
     end.
 
-prepare_plugin(#plugin{type = ez, location = Location}, ExpandDir) ->
-    zip:unzip(Location, [{cwd, ExpandDir}]);
-prepare_plugin(#plugin{type = dir, name = Name, location = Location},
-               ExpandDir) ->
-    rabbit_file:recursive_copy(Location, filename:join([ExpandDir, Name])).
+find_unzipped_app_file(ExpandDir, Files) ->
+    StripComponents = length(filename:split(ExpandDir)),
+    [ X || X <- Files,
+           [_AppName, "ebin", MaybeAppFile] <-
+               [lists:nthtail(StripComponents, filename:split(X))],
+           lists:suffix(".app", MaybeAppFile)
+    ].
+
+prepare_plugin(#plugin{type = ez, name = Name, location = Location}, ExpandDir) ->
+    case zip:unzip(Location, [{cwd, ExpandDir}]) of
+        {ok, Files} ->
+            case find_unzipped_app_file(ExpandDir, Files) of
+                [PluginAppDescPath|_] ->
+                    prepare_dir_plugin(PluginAppDescPath);
+                _ ->
+                    rabbit_log:error("Plugin archive '~s' doesn't contain an .app file~n", [Location]),
+                    throw({app_file_missing, Name, Location})
+            end;
+        {error, Reason} ->
+            rabbit_log:error("Could not unzip plugin archive '~s': ~p~n", [Location, Reason]),
+            throw({failed_to_unzip_plugin, Name, Location, Reason})
+    end;
+prepare_plugin(#plugin{type = dir, location = Location, name = Name},
+               _ExpandDir) ->
+    case filelib:wildcard(Location ++ "/ebin/*.app") of
+        [PluginAppDescPath|_] ->
+            prepare_dir_plugin(PluginAppDescPath);
+        _ ->
+            rabbit_log:error("Plugin directory '~s' doesn't contain an .app file~n", [Location]),
+            throw({app_file_missing, Name, Location})
+    end.
 
 plugin_info({ez, EZ}) ->
     case read_app_file(EZ) of
@@ -275,8 +525,12 @@ mkplugin(Name, Props, Type, Location) ->
     Version = proplists:get_value(vsn, Props, "0"),
     Description = proplists:get_value(description, Props, ""),
     Dependencies = proplists:get_value(applications, Props, []),
+    BrokerVersions = proplists:get_value(broker_version_requirements, Props, []),
+    DepsVersions = proplists:get_value(dependency_version_requirements, Props, []),
     #plugin{name = Name, version = Version, description = Description,
-            dependencies = Dependencies, location = Location, type = Type}.
+            dependencies = Dependencies, location = Location, type = Type,
+            broker_version_requirements = BrokerVersions,
+            dependency_version_requirements = DepsVersions}.
 
 read_app_file(EZ) ->
     case zip:list_dir(EZ) of
@@ -311,7 +565,12 @@ plugin_names(Plugins) ->
     [Name || #plugin{name = Name} <- Plugins].
 
 lookup_plugins(Names, AllPlugins) ->
-    [P || P = #plugin{name = Name} <- AllPlugins, lists:member(Name, Names)].
+    %% Preserve order of Names
+    lists:map(
+        fun(Name) ->
+            lists:keyfind(Name, #plugin.name, AllPlugins)
+        end,
+        Names).
 
 %% Split PATH-like value into its components.
 split_path(PathString) ->
@@ -341,7 +600,7 @@ list_free_apps([Dir|Rest]) ->
 
 compare_by_name_and_version(#plugin{name = Name, version = VersionA},
                             #plugin{name = Name, version = VersionB}) ->
-    ec_semver:lte(VersionA, VersionB);
+    rabbit_semver:lte(VersionA, VersionB);
 compare_by_name_and_version(#plugin{name = NameA},
                             #plugin{name = NameB}) ->
     NameA =< NameB.
@@ -384,15 +643,33 @@ remove_duplicate_plugins([Plugin|Rest], {Plugins0, Problems0}) ->
 maybe_keep_required_deps(true, Plugins) ->
     Plugins;
 maybe_keep_required_deps(false, Plugins) ->
-    %% We load the "rabbit" application to be sure we can get the
-    %% "applications" key. This is required for rabbitmq-plugins for
-    %% instance.
-    application:load(rabbit),
-    {ok, RabbitDeps} = application:get_key(rabbit, applications),
-    lists:filter(fun(#plugin{name = Name}) ->
+    RabbitDeps = list_all_deps([rabbit]),
+    lists:filter(fun
+                     (#plugin{name = Name}) ->
+                         not lists:member(Name, RabbitDeps);
+                     (Name) when is_atom(Name) ->
                          not lists:member(Name, RabbitDeps)
                  end,
                  Plugins).
+
+list_all_deps(Applications) ->
+    list_all_deps(Applications, []).
+
+list_all_deps([Application | Applications], Deps) ->
+    %% We load the application to be sure we can get the "applications" key.
+    %% This is required for rabbitmq-plugins for instance.
+    application:load(Application),
+    NewDeps = [Application | Deps],
+    case application:get_key(Application, applications) of
+        {ok, ApplicationDeps} ->
+            RemainingApplications0 = ApplicationDeps ++ Applications,
+            RemainingApplications = RemainingApplications0 -- NewDeps,
+            list_all_deps(RemainingApplications, NewDeps);
+        undefined ->
+            list_all_deps(Applications, NewDeps)
+    end;
+list_all_deps([], Deps) ->
+    Deps.
 
 remove_otp_overrideable_plugins(Plugins) ->
     lists:filter(fun(P) -> not plugin_provided_by_otp(P) end,

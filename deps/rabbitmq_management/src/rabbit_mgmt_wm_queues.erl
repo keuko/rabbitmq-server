@@ -16,19 +16,23 @@
 
 -module(rabbit_mgmt_wm_queues).
 
--export([init/3, rest_init/2, to_json/2, content_types_provided/2, is_authorized/2,
-         resource_exists/2, basic/1, augmented/2]).
--export([variances/2]).
+-export([init/2, to_json/2, content_types_provided/2, is_authorized/2,
+         resource_exists/2, basic/1]).
+-export([variances/2,
+         augmented/2]).
 
 -include_lib("rabbitmq_management_agent/include/rabbit_mgmt_records.hrl").
 -include_lib("rabbit_common/include/rabbit.hrl").
 
+-define(BASIC_COLUMNS, ["vhost", "name", "durable", "auto_delete", "exclusive",
+                       "owner_pid", "arguments", "pid", "state"]).
+
+-define(DEFAULT_SORT, ["vhost", "name"]).
+
 %%--------------------------------------------------------------------
 
-init(_, _, _) -> {upgrade, protocol, cowboy_rest}.
-
-rest_init(Req, _Config) ->
-    {ok, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
+init(Req, _State) ->
+    {cowboy_rest, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
 
 variances(Req, Context) ->
     {[<<"accept-encoding">>, <<"origin">>], Req, Context}.
@@ -42,31 +46,42 @@ resource_exists(ReqData, Context) ->
          _               -> true
      end, ReqData, Context}.
 
-
 to_json(ReqData, Context) ->
     try
-        rabbit_mgmt_util:reply_list_or_paginate(
-          rabbit_mgmt_format:strip_pids(
-              augmented(ReqData, Context)), ReqData, Context)
+        Basic = basic_vhost_filtered(ReqData, Context),
+        Data = rabbit_mgmt_util:augment_resources(Basic, ?DEFAULT_SORT,
+                                                  ?BASIC_COLUMNS, ReqData,
+                                                  Context, fun augment/2),
+        rabbit_mgmt_util:reply(Data, ReqData, Context)
     catch
         {error, invalid_range_parameters, Reason} ->
-            rabbit_mgmt_util:bad_request(iolist_to_binary(Reason), ReqData, Context)
+            rabbit_mgmt_util:bad_request(iolist_to_binary(Reason), ReqData,
+                                         Context)
     end.
 
 is_authorized(ReqData, Context) ->
     rabbit_mgmt_util:is_authorized_vhost(ReqData, Context).
 
 %%--------------------------------------------------------------------
-
-augmented(ReqData, Context) ->
-    rabbit_mgmt_db:augment_queues(
-      rabbit_mgmt_util:filter_vhost(basic(ReqData), ReqData, Context),
-      rabbit_mgmt_util:range_ceil(ReqData), basic).
+%% Exported functions
 
 basic(ReqData) ->
     [rabbit_mgmt_format:queue(Q) || Q <- queues0(ReqData)] ++
         [rabbit_mgmt_format:queue(Q#amqqueue{state = down}) ||
             Q <- down_queues(ReqData)].
+
+augmented(ReqData, Context) ->
+    augment(rabbit_mgmt_util:filter_vhost(basic(ReqData), ReqData, Context), ReqData).
+
+%%--------------------------------------------------------------------
+%% Private helpers
+
+augment(Basic, ReqData) ->
+    rabbit_mgmt_db:augment_queues(Basic, rabbit_mgmt_util:range_ceil(ReqData),
+                                  basic).
+
+basic_vhost_filtered(ReqData, Context) ->
+    rabbit_mgmt_util:filter_vhost(basic(ReqData), ReqData, Context).
 
 queues0(ReqData) ->
     rabbit_mgmt_util:all_or_one_vhost(ReqData, fun rabbit_amqqueue:list/1).

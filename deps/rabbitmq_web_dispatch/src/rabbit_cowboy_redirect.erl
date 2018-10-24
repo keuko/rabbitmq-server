@@ -24,10 +24,8 @@ init(_, Req, RedirectPort) ->
     {ok, Req, RedirectPort}.
 
 handle(Req0, RedirectPort) ->
-    %% Use a small trick to get a URL with the updated port.
-    RedReq = cowboy_req:set([{port, RedirectPort}], Req0),
-    {URL, _} = cowboy_req:url(RedReq),
-    {ok, Req} = cowboy_req:reply(301, [{<<"location">>, URL}], Req0),
+    URI = cowboy_req:uri(Req0, #{port => RedirectPort}),
+    Req = cowboy_req:reply(301, #{<<"location">> => URI}, Req0),
     {ok, Req, RedirectPort}.
 
 terminate(_, _, _) ->

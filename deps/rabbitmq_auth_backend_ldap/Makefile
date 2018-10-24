@@ -14,6 +14,7 @@ define PROJECT_ENV
 	    {anon_auth,             false},
 	    {vhost_access_query,    {constant, true}},
 	    {resource_access_query, {constant, true}},
+	    {topic_access_query,    {constant, true}},
 	    {tag_queries,           [{administrator, {constant, false}}]},
 	    {use_ssl,               false},
 	    {use_starttls,          false},
@@ -22,8 +23,12 @@ define PROJECT_ENV
 	    {timeout,               infinity},
 	    {log,                   false},
 	    {pool_size,             64},
-	    {idle_timeout,          infinity}
+	    {idle_timeout,          300000}
 	  ]
+endef
+
+define PROJECT_APP_EXTRA_KEYS
+	{broker_version_requirements, []}
 endef
 
 LOCAL_DEPS = eldap

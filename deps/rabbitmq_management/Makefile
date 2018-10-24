@@ -15,10 +15,13 @@ define PROJECT_ENV
 	  ]
 endef
 
+define PROJECT_APP_EXTRA_KEYS
+	{broker_version_requirements, []}
+endef
+
 DEPS = rabbit_common rabbit amqp_client cowboy cowlib rabbitmq_web_dispatch rabbitmq_management_agent
 TEST_DEPS = rabbitmq_ct_helpers rabbitmq_ct_client_helpers proper
-dep_cowboy_commit = 1.0.3
-LOCAL_DEPS += xmerl mnesia ranch ssl crypto public_key
+LOCAL_DEPS += mnesia ranch ssl crypto public_key
 
 # FIXME: Add Ranch as a BUILD_DEPS to be sure the correct version is picked.
 # See rabbitmq-components.mk.

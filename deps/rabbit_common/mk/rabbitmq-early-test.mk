@@ -1,6 +1,36 @@
 # --------------------------------------------------------------------
+# xref
+# --------------------------------------------------------------------
+
+ifeq ($(filter distclean distclean-xref,$(MAKECMDGOALS)),)
+ifneq ($(PROJECT),rabbit_common)
+XREFR := $(DEPS_DIR)/rabbit_common/mk/xrefr
+else
+XREFR := mk/xrefr
+endif
+endif
+
+# --------------------------------------------------------------------
+# %-on-concourse dependencies.
+# --------------------------------------------------------------------
+
+ifneq ($(words $(filter %-on-concourse,$(MAKECMDGOALS))),0)
+TEST_DEPS += ci $(RMQ_CI_CT_HOOKS)
+dep_ci = git git@github.com:rabbitmq/rabbitmq-ci master
+endif
+
+# --------------------------------------------------------------------
 # Common Test flags.
 # --------------------------------------------------------------------
+
+# We start the common_test node as a hidden Erlang node. The benefit
+# is that other Erlang nodes won't try to connect to each other after
+# discovering the common_test node if they are not meant to.
+#
+# This helps when several unrelated RabbitMQ clusters are started in
+# parallel.
+
+CT_OPTS += -hidden
 
 # Enable the following common_test hooks on Travis and Concourse:
 #
@@ -17,8 +47,10 @@
 # from its UI. Furthermore, it displays a graph showing evolution of the
 # results over time.
 
+ifndef TRAVIS
 CT_HOOKS ?= cth_styledout
 TEST_DEPS += cth_styledout
+endif
 
 RMQ_CI_CT_HOOKS = cth_fail_fast
 ifdef TRAVIS
@@ -67,3 +99,29 @@ endif
 ifdef JENKINS_HOME
 export RABBITMQ_CT_SKIP_AS_ERROR = true
 endif
+
+# --------------------------------------------------------------------
+# Looking Glass rules.
+# --------------------------------------------------------------------
+
+ifneq ("$(RABBITMQ_TRACER)","")
+BUILD_DEPS += looking_glass
+dep_looking_glass = git https://github.com/rabbitmq/looking-glass master
+ERL_LIBS := "$(ERL_LIBS):../looking_glass:../lz4"
+export RABBITMQ_TRACER
+endif
+
+define lg_callgrind.erl
+lg_callgrind:profile_many("traces.lz4.*", "callgrind.out", #{running => true}),
+halt().
+endef
+
+.PHONY: profile clean-profile
+
+profile:
+	$(gen_verbose) $(call erlang,$(call lg_callgrind.erl))
+
+clean:: clean-profile
+
+clean-profile:
+	$(gen_verbose) rm -f traces.lz4.* callgrind.out.*

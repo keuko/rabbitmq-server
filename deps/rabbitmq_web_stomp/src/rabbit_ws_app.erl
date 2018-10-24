@@ -23,7 +23,7 @@
 
 -spec start(_, _) -> {ok, pid()}.
 start(_Type, _StartArgs) ->
-    ok = rabbit_ws_sockjs:init(),
+    ok = rabbit_ws_listener:init(),
     rabbit_ws_sup:start_link().
 
 -spec stop(_) -> ok.

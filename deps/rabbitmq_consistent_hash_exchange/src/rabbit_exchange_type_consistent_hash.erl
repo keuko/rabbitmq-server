@@ -25,6 +25,7 @@
          create/2, delete/3, policy_changed/2,
          add_binding/3, remove_bindings/3, assert_args_equivalence/2]).
 -export([init/0]).
+-export([info/1, info/2]).
 
 -record(bucket, {source_number, destination, binding}).
 
@@ -48,6 +49,9 @@
 -define(TABLE, ?MODULE).
 -define(PHASH2_RANGE, 134217728). %% 2^27
 -define(PROPERTIES, [<<"correlation_id">>, <<"message_id">>, <<"timestamp">>]).
+
+info(_X) -> [].
+info(_X, _) -> [].
 
 description() ->
     [{description, <<"Consistent Hashing Exchange">>}].
@@ -144,7 +148,7 @@ add_binding(transaction, _X,
                                #bucket { source_number = {S, N},
                                          destination   = D,
                                          binding       = B },
-                               write) || N <- find_numbers(S, BucketCount, [])],
+                               write) || N <- find_numbers(S, D, BucketCount, [])],
             ok;
         _ ->
             ok
@@ -176,14 +180,12 @@ init() ->
     mnesia:wait_for_tables([?TABLE], 30000),
     ok.
 
-find_numbers(_Source, 0, Acc) ->
+find_numbers(_Source, _Destination, 0, Acc) ->
     Acc;
-find_numbers(Source, N, Acc) ->
-    Number = rand_compat:uniform(?PHASH2_RANGE) - 1,
-    case mnesia:read(?TABLE, {Source, Number}, write) of
-        []  -> find_numbers(Source, N-1, [Number | Acc]);
-        [_] -> find_numbers(Source, N, Acc)
-    end.
+find_numbers(Source, Destination, N, Acc) ->
+    Term = {Source, Destination, N},
+    Number = erlang:phash2(Term, ?PHASH2_RANGE),
+    find_numbers(Source, Destination, N-1, [Number | Acc]).
 
 hash(undefined, #basic_message { routing_keys = Routes }) ->
     Routes;

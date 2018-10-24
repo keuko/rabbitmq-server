@@ -16,19 +16,22 @@
 
 -module(rabbit_mgmt_wm_exchanges).
 
--export([init/3, rest_init/2, to_json/2, content_types_provided/2, is_authorized/2,
+-export([init/2, to_json/2, content_types_provided/2, is_authorized/2,
          resource_exists/2, basic/1, augmented/2]).
 -export([variances/2]).
 
 -include_lib("rabbitmq_management_agent/include/rabbit_mgmt_records.hrl").
 -include_lib("rabbit_common/include/rabbit.hrl").
 
+-define(DEFAULT_SORT, ["vhost", "name"]).
+
+-define(BASIC_COLUMNS, ["vhost", "name", "type", "durable", "auto_delete",
+                       "internal", "arguments", "pid"]).
+
 %%--------------------------------------------------------------------
 
-init(_, _, _) -> {upgrade, protocol, cowboy_rest}.
-
-rest_init(Req, _Config) ->
-    {ok, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
+init(Req, _State) ->
+    {cowboy_rest, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
 
 variances(Req, Context) ->
     {[<<"accept-encoding">>, <<"origin">>], Req, Context}.
@@ -44,8 +47,12 @@ resource_exists(ReqData, Context) ->
 
 to_json(ReqData, Context) ->
     try
-        rabbit_mgmt_util:reply_list_or_paginate(augmented(ReqData, Context),
-            ReqData, Context)
+        Basic = rabbit_mgmt_util:filter_vhost(basic(ReqData), ReqData,
+                                              Context),
+        Data = rabbit_mgmt_util:augment_resources(Basic, ?DEFAULT_SORT,
+                                                  ?BASIC_COLUMNS, ReqData,
+                                                  Context, fun augment/2),
+        rabbit_mgmt_util:reply(Data, ReqData, Context)
     catch
         {error, invalid_range_parameters, Reason} ->
             rabbit_mgmt_util:bad_request(iolist_to_binary(Reason), ReqData, Context)
@@ -55,6 +62,10 @@ is_authorized(ReqData, Context) ->
     rabbit_mgmt_util:is_authorized_vhost(ReqData, Context).
 
 %%--------------------------------------------------------------------
+
+augment(Basic, ReqData) ->
+    rabbit_mgmt_db:augment_exchanges(Basic, rabbit_mgmt_util:range(ReqData),
+                                     basic).
 
 augmented(ReqData, Context) ->
     rabbit_mgmt_db:augment_exchanges(

@@ -16,17 +16,16 @@
 
 -module(rabbit_top_wm_ets_tables).
 
--export([init/3]).
--export([rest_init/2, to_json/2, content_types_provided/2, is_authorized/2]).
+-export([init/2, to_json/2, content_types_provided/2, is_authorized/2]).
 
 -include_lib("rabbitmq_management_agent/include/rabbit_mgmt_records.hrl").
 -include_lib("amqp_client/include/amqp_client.hrl").
 
 %%--------------------------------------------------------------------
 
-init(_, _, _) -> {upgrade, protocol, cowboy_rest}.
+init(Req, _State) ->
+    {cowboy_rest, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
 
-rest_init(ReqData, _) -> {ok, ReqData, #context{}}.
 
 content_types_provided(ReqData, Context) ->
    {[{<<"application/json">>, to_json}], ReqData, Context}.
@@ -48,7 +47,12 @@ is_authorized(ReqData, Context) ->
 %%--------------------------------------------------------------------
 
 ets_tables(Node, Sort, Order, RowCount) ->
-    [fmt(P) || P <- rabbit_top_worker:ets_tables(Node, Sort, Order, RowCount)].
+    try
+        [fmt(P) || P <- rabbit_top_worker:ets_tables(Node, Sort, Order, RowCount)]
+    catch
+        exit:{noproc, _} ->
+            []
+    end.
 
 fmt(Info) ->
     {owner, Pid} = lists:keyfind(owner, 1, Info),

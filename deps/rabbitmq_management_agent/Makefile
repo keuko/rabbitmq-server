@@ -13,6 +13,10 @@ define PROJECT_ENV
 	  ]
 endef
 
+define PROJECT_APP_EXTRA_KEYS
+	{broker_version_requirements, []}
+endef
+
 DEPS = rabbit_common rabbit
 TEST_DEPS = rabbitmq_ct_helpers rabbitmq_ct_client_helpers
 LOCAL_DEPS += xmerl mnesia ranch ssl crypto public_key
@@ -26,4 +30,5 @@ ERLANG_MK_REPO = https://github.com/rabbitmq/erlang.mk.git
 ERLANG_MK_COMMIT = rabbitmq-tmp
 
 include rabbitmq-components.mk
+TEST_DEPS := $(filter-out rabbitmq_test,$(TEST_DEPS))
 include erlang.mk

@@ -870,8 +870,8 @@ is_clustered_with()
     rc=$?
     if [ "$rc" -ne 0 ]; then
         ocf_log err "${LH} Failed to check whether '$node_name' is considered running by us"
-        # XXX Or should we give remote node benefit of a doubt?
-        return 1
+        # We had a transient local error; that doesn't mean the remote node is
+        # not part of the cluster, so ignore this
     elif [ "$seen_as_running" != true ]; then
         ocf_log info "${LH} Node $node_name is not running, considering it not clustered with us"
         return 1
@@ -882,8 +882,8 @@ is_clustered_with()
     rc=$?
     if [ "$rc" -ne 0 ]; then
         ocf_log err "${LH} Failed to check whether '$node_name' is partitioned with us"
-        # XXX Or should we give remote node benefit of a doubt?
-        return 1
+        # We had a transient local error; that doesn't mean the remote node is
+        # not partitioned with us, so ignore this
     elif [ "$seen_as_partitioned" != false ]; then
         ocf_log info "${LH} Node $node_name is partitioned from us"
         return 1
@@ -1608,6 +1608,11 @@ get_monitor() {
             ocf_log info "${LH} comparing us (start time: $our_start_time, score: $new_score) with $node (start time: $node_start_time, score: $node_score)"
             if [ $node_start_time -ne 0 -a $node_score -ne 0 -a $node_start_time -lt $our_start_time ]; then
                 new_score=$((node_score - 10 < new_score ? node_score - 10 : new_score ))
+            elif [ $node_start_time -ne 0 -a $node_score -ne 0 -a $node_start_time -eq $our_start_time ]; then
+                # Do not get promoted if the other node is already master and we have the same start time
+                if is_master $node; then
+                    new_score=$((node_score - 10 < new_score ? node_score - 10 : new_score ))
+                fi
             fi
         done
     fi
@@ -2182,16 +2187,15 @@ action_notify() {
                 ;;
             start)
                 ocf_log info "${LH} post-start begin."
-                local nodes_list="${OCF_RESKEY_CRM_meta_notify_start_uname} ${OCF_RESKEY_CRM_meta_notify_active_uname}"
                 # Do nothing, if the list of nodes being started or running reported empty
                 # Delegate recovery, if needed, to the "running out of the cluster" monitor's logic
-                if [ -z "${nodes_list}" ] ; then
+                if [ -z "${OCF_RESKEY_CRM_meta_notify_start_uname}" -a -z "${OCF_RESKEY_CRM_meta_notify_active_uname}" ] ; then
                   ocf_log warn "${LH} I'm a last man standing and I must survive!"
                   ocf_log info "${LH} post-start end."
                   return $OCF_SUCCESS
                 fi
                 # check did this event from this host
-                my_host "${nodes_list}"
+                my_host "${OCF_RESKEY_CRM_meta_notify_start_uname}"
                 rc=$?
                 # Do nothing, if there is no master reported
                 # Delegate recovery, if needed, to the "running out of the cluster" monitor's logic
@@ -2218,7 +2222,6 @@ action_notify() {
                       rc2=$?
                       update_rabbit_start_time_if_rc $rc2
                     fi
-                    ocf_log info "${LH} post-start end."
                     if [ -s "${OCF_RESKEY_definitions_dump_file}" ] ; then
                         ocf_log info "File ${OCF_RESKEY_definitions_dump_file} exists"
                         ocf_run curl --silent --show-error --request POST --user $OCF_RESKEY_admin_user:$OCF_RESKEY_admin_password $OCF_RESKEY_host_ip:15672/api/definitions --header "Content-Type:application/json" --data @$OCF_RESKEY_definitions_dump_file
@@ -2235,6 +2238,7 @@ action_notify() {
                         return $OCF_ERR_GENERIC
                     fi
                 fi
+                ocf_log info "${LH} post-start end."
                 ;;
             stop)
                 # if rabbitmq-server stops on any another node, we should remove it from cluster (as ordinary operation)
