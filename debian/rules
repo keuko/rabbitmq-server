@@ -2,13 +2,14 @@
 # -*- makefile -*-
 
 DEB_DESTDIR=debian/rabbitmq-server
-VERSION = $(shell dpkg-parsechangelog | awk '/^Version:/ {version=$$0; sub(/Version: /, "", version); sub(/-.*/, "", version); print version;}')
+VERSION = $(shell dpkg-parsechangelog -SVersion | sed -e 's/^[[:digit:]]*://' -e 's/[-].*//' -e 's/~/.0/' -e 's/+dfsg1//' | head -n 1)
 
 %:
 	dh $@ --parallel --with python2,systemd
 
 override_dh_auto_clean:
 	$(MAKE) clean distclean-manpages
+	rm -rf .erlang.mk
 
 override_dh_auto_build:
 	$(MAKE) dist manpages

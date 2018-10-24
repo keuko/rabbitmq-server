@@ -1,4 +1,4 @@
-rabbitmq-server (3.6.10-2) UNRELEASED; urgency=medium
+rabbitmq-server (3.7.6-1) unstable; urgency=medium
 
   [ Daniel Baumann ]
   * Updating vcs fields.
@@ -18,7 +18,16 @@ rabbitmq-server (3.6.10-2) UNRELEASED; urgency=medium
   * d/changelog: Remove trailing whitespaces
   * d/control: Use team+openstack@tracker.debian.org as maintainer
 
- -- Daniel Baumann <daniel.baumann@progress-linux.org>  Fri, 04 Aug 2017 22:30:14 +0200
+  [ Thomas Goirand ]
+  * New upstream release:
+    - Fix FTBFS with newer Erlang (Closes: #910623).
+  * Fix the way to calculate upstream VERSION in debian/rules.
+  * Switched rabbitmq-server.service to type notify, and other minor changes
+    in this file (Closes: #812342), do not wait for timeout on shutdown either
+    (Closes: #902136).
+  * Updated debian/control for this release.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 24 Oct 2018 18:39:10 +0200
 
 rabbitmq-server (3.6.10-1) unstable; urgency=medium
 
