@@ -16,7 +16,7 @@
 
 -module(rabbit_mgmt_wm_policy).
 
--export([init/3, rest_init/2, resource_exists/2, to_json/2,
+-export([init/2, resource_exists/2, to_json/2,
          content_types_provided/2, content_types_accepted/2,
          is_authorized/2, allowed_methods/2, accept_content/2,
          delete_resource/2]).
@@ -27,10 +27,8 @@
 
 %%--------------------------------------------------------------------
 
-init(_, _, _) -> {upgrade, protocol, cowboy_rest}.
-
-rest_init(Req, _Config) ->
-    {ok, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
+init(Req, _State) ->
+    {cowboy_rest, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
 
 variances(Req, Context) ->
     {[<<"accept-encoding">>, <<"origin">>], Req, Context}.
@@ -53,7 +51,7 @@ resource_exists(ReqData, Context) ->
 to_json(ReqData, Context) ->
     rabbit_mgmt_util:reply(policy(ReqData), ReqData, Context).
 
-accept_content(ReqData0, Context) ->
+accept_content(ReqData0, Context = #context{user = #user{username = Username}}) ->
     case rabbit_mgmt_util:vhost(ReqData0) of
         not_found ->
             rabbit_mgmt_util:not_found(vhost_not_found, ReqData0, Context);
@@ -63,9 +61,10 @@ accept_content(ReqData0, Context) ->
               fun([Pattern, Definition], Body, ReqData) ->
                       case rabbit_policy:set(
                              VHost, name(ReqData), Pattern,
-                             rabbit_misc:json_to_term(Definition),
-                             proplists:get_value(priority, Body),
-                             proplists:get_value('apply-to', Body)) of
+                             maps:to_list(Definition),
+                             maps:get(priority, Body, undefined),
+                             maps:get('apply-to', Body, undefined),
+                             Username) of
                           ok ->
                               {true, ReqData, Context};
                           {error_string, Reason} ->
@@ -75,9 +74,9 @@ accept_content(ReqData0, Context) ->
               end)
     end.
 
-delete_resource(ReqData, Context) ->
+delete_resource(ReqData, Context = #context{user = #user{username = Username}}) ->
     ok = rabbit_policy:delete(
-           rabbit_mgmt_util:vhost(ReqData), name(ReqData)),
+           rabbit_mgmt_util:vhost(ReqData), name(ReqData), Username),
     {true, ReqData, Context}.
 
 is_authorized(ReqData, Context) ->

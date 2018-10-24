@@ -56,8 +56,6 @@ start_link(SupHelperPid, Ref, Sock, Configuration) ->
 
     {ok, Pid}.
 
-log(Level, Fmt, Args) -> rabbit_log:log(connection, Level, Fmt, Args).
-
 info(Pid, InfoItems) ->
     case InfoItems -- ?INFO_ITEMS of
         [] ->
@@ -67,7 +65,8 @@ info(Pid, InfoItems) ->
 
 init([SupHelperPid, Ref, Sock, Configuration]) ->
     process_flag(trap_exit, true),
-    rabbit_net:accept_ack(Ref, Sock),
+    RealSocket = rabbit_net:unwrap_socket(Sock),
+    rabbit_networking:accept_ack(Ref, RealSocket),
 
     case rabbit_net:connection_string(Sock, inbound) of
         {ok, ConnStr} ->
@@ -75,7 +74,7 @@ init([SupHelperPid, Ref, Sock, Configuration]) ->
             ProcState = rabbit_stomp_processor:initial_state(Configuration,
                                                              ProcInitArgs),
 
-            log(info, "accepting STOMP connection ~p (~s)~n",
+            rabbit_log_connection:info("accepting STOMP connection ~p (~s)~n",
                 [self(), ConnStr]),
 
             ParseState = rabbit_stomp_frame:initial_state(),
@@ -83,7 +82,7 @@ init([SupHelperPid, Ref, Sock, Configuration]) ->
             gen_server2:enter_loop(?MODULE, [],
               rabbit_event:init_stats_timer(
                 run_socket(control_throttle(
-                  #reader_state{socket             = Sock,
+                  #reader_state{socket             = RealSocket,
                                 conn_name          = ConnStr,
                                 parse_state        = ParseState,
                                 processor_state    = ProcState,
@@ -93,11 +92,14 @@ init([SupHelperPid, Ref, Sock, Configuration]) ->
                                 conserve_resources = false,
                                 recv_outstanding   = false})), #reader_state.stats_timer),
               {backoff, 1000, 1000, 10000});
+        {network_error, Reason} ->
+            rabbit_net:fast_close(RealSocket),
+            terminate({shutdown, Reason}, undefined);
         {error, enotconn} ->
-            rabbit_net:fast_close(Sock),
+            rabbit_net:fast_close(RealSocket),
             terminate(shutdown, undefined);
         {error, Reason} ->
-            rabbit_net:fast_close(Sock),
+            rabbit_net:fast_close(RealSocket),
             terminate({network_error, Reason}, undefined)
     end.
 
@@ -181,7 +183,7 @@ handle_info(#'basic.cancel'{consumer_tag = Ctag}, State) ->
         {stop, Reason, processor_state(NewProcState, State)}
     end;
 
-handle_info({start_heartbeats, {0, 0}}, State) -> 
+handle_info({start_heartbeats, {0, 0}}, State) ->
     {noreply, State#reader_state{timeout_sec = {0, 0}}};
 
 handle_info({start_heartbeats, {SendTimeout, ReceiveTimeout}},
@@ -259,7 +261,7 @@ control_throttle(State = #reader_state{state              = CS,
         {_,            _} -> State
     end.
 
-maybe_block(State = #reader_state{state = blocking, heartbeat = Heartbeat}, 
+maybe_block(State = #reader_state{state = blocking, heartbeat = Heartbeat},
             #stomp_frame{command = "SEND"}) ->
     rabbit_heartbeat:pause_monitor(Heartbeat),
     State#reader_state{state = blocked};
@@ -289,37 +291,37 @@ code_change(_OldVsn, State, _Extra) ->
 
 
 log_reason({network_error, {ssl_upgrade_error, closed}, ConnStr}, _State) ->
-    log(error, "STOMP detected TLS upgrade error on ~s: connection closed~n",
+    rabbit_log_connection:error("STOMP detected TLS upgrade error on ~s: connection closed~n",
         [ConnStr]);
 
 log_reason({network_error,
            {ssl_upgrade_error,
             {tls_alert, "handshake failure"}}, ConnStr}, _State) ->
-    log(error, "STOMP detected TLS upgrade error on ~s: handshake failure~n",
+    rabbit_log_connection:error("STOMP detected TLS upgrade error on ~s: handshake failure~n",
         [ConnStr]);
 
 log_reason({network_error,
            {ssl_upgrade_error,
             {tls_alert, "unknown ca"}}, ConnStr}, _State) ->
-    log(error, "STOMP detected TLS certificate verification error on ~s: alert 'unknown CA'~n",
+    rabbit_log_connection:error("STOMP detected TLS certificate verification error on ~s: alert 'unknown CA'~n",
         [ConnStr]);
 
 log_reason({network_error,
            {ssl_upgrade_error,
             {tls_alert, Alert}}, ConnStr}, _State) ->
-    log(error, "STOMP detected TLS upgrade error on ~s: alert ~s~n",
+    rabbit_log_connection:error("STOMP detected TLS upgrade error on ~s: alert ~s~n",
         [ConnStr, Alert]);
 
 log_reason({network_error, {ssl_upgrade_error, Reason}, ConnStr}, _State) ->
-    log(error, "STOMP detected TLS upgrade error on ~s: ~p~n",
+    rabbit_log_connection:error("STOMP detected TLS upgrade error on ~s: ~p~n",
         [ConnStr, Reason]);
 
 log_reason({network_error, Reason, ConnStr}, _State) ->
-    log(error, "STOMP detected network error on ~s: ~p~n",
+    rabbit_log_connection:error("STOMP detected network error on ~s: ~p~n",
         [ConnStr, Reason]);
 
 log_reason({network_error, Reason}, _State) ->
-    log(error, "STOMP detected network error: ~p~n", [Reason]);
+    rabbit_log_connection:error("STOMP detected network error: ~p~n", [Reason]);
 
 log_reason({shutdown, client_heartbeat_timeout},
            #reader_state{ processor_state = ProcState }) ->
@@ -328,10 +330,10 @@ log_reason({shutdown, client_heartbeat_timeout},
                        "on connection ~s, closing it~n", [AdapterName]);
 
 log_reason(normal, #reader_state{ conn_name  = ConnName}) ->
-    log(info, "closing STOMP connection ~p (~s)~n", [self(), ConnName]);
+    rabbit_log_connection:info("closing STOMP connection ~p (~s)~n", [self(), ConnName]);
 
 log_reason(shutdown, undefined) ->
-    log(error, "closing STOMP connection that never completed connection handshake (negotiation)~n", []);
+    rabbit_log_connection:error("closing STOMP connection that never completed connection handshake (negotiation)~n", []);
 
 log_reason(Reason, #reader_state{ processor_state = ProcState }) ->
     AdapterName = rabbit_stomp_processor:adapter_name(ProcState),
@@ -341,20 +343,21 @@ log_reason(Reason, #reader_state{ processor_state = ProcState }) ->
 %%----------------------------------------------------------------------------
 
 processor_args(Configuration, Sock) ->
+    RealSocket = rabbit_net:unwrap_socket(Sock),
     SendFun = fun (sync, IoData) ->
                       %% no messages emitted
-                      catch rabbit_net:send(Sock, IoData);
+                      catch rabbit_net:send(RealSocket, IoData);
                   (async, IoData) ->
                       %% {inet_reply, _, _} will appear soon
                       %% We ignore certain errors here, as we will be
                       %% receiving an asynchronous notification of the
                       %% same (or a related) fault shortly anyway. See
                       %% bug 21365.
-                      catch rabbit_net:port_command(Sock, IoData)
+                      catch rabbit_net:port_command(RealSocket, IoData)
               end,
-    {ok, {PeerAddr, _PeerPort}} = rabbit_net:sockname(Sock),
-    {SendFun, adapter_info(Sock), 
-     ssl_login_name(Sock, Configuration), PeerAddr}.
+    {ok, {PeerAddr, _PeerPort}} = rabbit_net:sockname(RealSocket),
+    {SendFun, adapter_info(Sock),
+     ssl_login_name(RealSocket, Configuration), PeerAddr}.
 
 adapter_info(Sock) ->
     amqp_connection:socket_adapter_info(Sock, {'STOMP', 0}).

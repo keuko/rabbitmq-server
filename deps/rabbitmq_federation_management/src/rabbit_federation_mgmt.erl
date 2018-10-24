@@ -19,7 +19,7 @@
 -behaviour(rabbit_mgmt_extension).
 
 -export([dispatcher/0, web_ui/0]).
--export([init/3, rest_init/2, to_json/2, resource_exists/2, content_types_provided/2,
+-export([init/2, to_json/2, resource_exists/2, content_types_provided/2,
          is_authorized/2, allowed_methods/2, delete_resource/2]).
 
 -import(rabbit_misc, [pget/2]).
@@ -30,19 +30,16 @@ dispatcher() -> [{"/federation-links", ?MODULE, [all]},
                  {"/federation-links/:vhost", ?MODULE, [all]},
                  {"/federation-links/state/down/", ?MODULE, [down]},
                  {"/federation-links/:vhost/state/down", ?MODULE, [down]},
-                 {"/federation-links/vhost/:vhost/:id/restart", ?MODULE, []}].
+                 {"/federation-links/vhost/:vhost/:id/:node/restart", ?MODULE, []}].
 
 web_ui()     -> [{javascript, <<"federation.js">>}].
 
 %%--------------------------------------------------------------------
 
-init(_, _, _) ->
-    {upgrade, protocol, cowboy_rest}.
-
-rest_init(Req, [Filter]) ->
-    {ok, Req, {Filter, #context{}}};
-rest_init(Req, []) ->
-    {ok, Req, #context{}}.
+init(Req, [Filter]) ->
+    {cowboy_rest, rabbit_mgmt_cors:set_headers(Req, ?MODULE), {Filter, #context{}}};
+init(Req, []) ->
+    {cowboy_rest, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
 
 content_types_provided(ReqData, Context) ->
    {[{<<"application/json">>, to_json}], ReqData, Context}.
@@ -57,10 +54,8 @@ resource_exists(ReqData, Context) ->
                           %% Listing links
                           none -> true;
                           %% Restarting a link
-                          Id -> case rabbit_federation_status:lookup(Id) of
-                                    not_found -> false;
-                                    _ -> true
-                                end
+                          Id ->
+                              lookup(Id, ReqData)
                       end
      end, ReqData, Context}.
 
@@ -81,15 +76,7 @@ is_authorized(ReqData, Context) ->
 delete_resource(ReqData, Context) ->
     Reply = case rabbit_mgmt_util:id(id, ReqData) of
                 none -> false;
-                Id ->
-                    case rabbit_federation_status:lookup(Id) of
-                        not_found -> false;
-                        Obj ->
-                            Upstream = proplists:get_value(upstream, Obj),
-                            Supervisor = proplists:get_value(supervisor, Obj),
-                            rabbit_federation_link_sup:restart(Supervisor, Upstream),
-                            true
-                    end
+                Id -> restart(Id, ReqData)
             end,
     {Reply, ReqData, Context}.
 
@@ -141,3 +128,25 @@ format_item(I) ->
 
 print(Fmt, Val) ->
     list_to_binary(io_lib:format(Fmt, Val)).
+
+lookup(Id, ReqData) ->
+    Node = get_node(ReqData),
+    case rpc:call(Node, rabbit_federation_status, lookup, [Id], infinity) of
+        {badrpc, _}  -> false;
+        not_found -> false;
+        _ -> true
+    end.
+
+restart(Id, ReqData) ->
+    Node = get_node(ReqData),
+    case rpc:call(Node, rabbit_federation_status, lookup, [Id], infinity) of
+        not_found -> false;
+        Obj ->
+            Upstream = proplists:get_value(upstream, Obj),
+            Supervisor = proplists:get_value(supervisor, Obj),
+            rpc:call(Node, rabbit_federation_link_sup, restart, [Supervisor, Upstream], infinity),
+            true
+    end.
+
+get_node(ReqData) ->
+    list_to_atom(binary_to_list(rabbit_mgmt_util:id(node, ReqData))).

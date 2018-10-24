@@ -21,7 +21,10 @@
 -behaviour(application).
 -export([start/2, stop/1]).
 -export([parse_default_user/2]).
--export([list/0]).
+-export([connection_info_local/1,
+         emit_connection_info_local/3,
+         emit_connection_info_all/4,
+         list/0]).
 
 -define(DEFAULT_CONFIGURATION,
         #stomp_configuration{
@@ -37,6 +40,24 @@ start(normal, []) ->
 
 stop(_State) ->
     ok.
+
+emit_connection_info_all(Nodes, Items, Ref, AggregatorPid) ->
+    Pids = [spawn_link(Node, rabbit_stomp, emit_connection_info_local,
+                       [Items, Ref, AggregatorPid])
+            || Node <- Nodes],
+    rabbit_control_misc:await_emitters_termination(Pids),
+    ok.
+
+emit_connection_info_local(Items, Ref, AggregatorPid) ->
+    rabbit_control_misc:emitting_map_with_exit_handler(
+      AggregatorPid, Ref, fun(Pid) ->
+                                  rabbit_stomp_reader:info(Pid, Items)
+                          end,
+      list()).
+
+connection_info_local(Items) ->
+    Connections = list(),
+    [rabbit_stomp_reader:info(Pid, Items) || Pid <- Connections].
 
 parse_listener_configuration() ->
     {ok, Listeners} = application:get_env(tcp_listeners),

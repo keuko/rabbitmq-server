@@ -20,6 +20,7 @@
 -include("rabbit_mgmt_metrics.hrl").
 
 -behaviour(gen_server).
+-compile({no_auto_import, [ceil/1]}).
 
 -spec start_link(atom()) -> rabbit_types:ok_pid_or_error().
 
@@ -76,7 +77,7 @@ init([Table]) ->
                             proplists:get_value(detailed, Policies),
                             proplists:get_value(global, Policies)},
                 rates_mode = RatesMode,
-                old_aggr_stats = dict:new(),
+                old_aggr_stats = #{},
                 lookup_queue = fun queue_exists/1,
                 lookup_exchange = fun exchange_exists/1}}.
 
@@ -92,7 +93,7 @@ handle_call(_Request, _From, State) ->
     {noreply, State}.
 
 handle_cast(reset, State) ->
-    {noreply, State#state{old_aggr_stats = dict:new()}};
+    {noreply, State#state{old_aggr_stats = #{}}};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -103,7 +104,7 @@ handle_info(collect_metrics, #state{interval = Interval} = State0) ->
     erlang:send_after(Interval, self(), collect_metrics),
     {noreply, State};
 handle_info(purge_old_stats, State) ->
-    {noreply, State#state{old_aggr_stats = dict:new()}};
+    {noreply, State#state{old_aggr_stats = #{}}};
 handle_info(_Msg, State) ->
     {noreply, State}.
 
@@ -138,36 +139,44 @@ take_smaller(Policies) ->
     end.
 
 insert_old_aggr_stats(NextStats, Id, Stat) ->
-    dict:store(Id, Stat, NextStats).
+    NextStats#{Id => Stat}.
 
-handle_deleted_queues(queue_coarse_metrics, Remainders, GPolicies) ->
+handle_deleted_queues(queue_coarse_metrics, Remainders,
+                      #state{policies = {BPolicies, _, GPolicies}}) ->
     TS = exometer_slide:timestamp(),
     lists:foreach(fun ({Queue, {R, U, M}}) ->
                             NegStats = ?vhost_msg_stats(-R, -U, -M),
                             [insert_entry(vhost_msg_stats, vhost(Queue), TS,
                                           NegStats, Size, Interval, true)
-                             || {Size, Interval} <- GPolicies]
-                  end,
-                  dict:to_list(Remainders));
+                             || {Size, Interval} <- GPolicies],
+                            % zero out msg stats to avoid duplicating msg
+                            % stats when a master queue is migrated
+                            QNegStats = ?queue_msg_stats(0, 0, 0),
+                            [insert_entry(queue_msg_stats, Queue, TS,
+                                          QNegStats, Size, Interval, false)
+                             || {Size, Interval} <- BPolicies],
+                            ets:delete(queue_stats, Queue),
+                            ets:delete(queue_process_stats, Queue)
+                  end, maps:to_list(Remainders));
 handle_deleted_queues(_T, _R, _P) -> ok.
 
 aggregate_metrics(Timestamp, #state{table = Table,
-                                    policies = {_, _, GPolicies}} = State0) ->
+                                    policies = {_, _, _GPolicies}} = State0) ->
     Table = State0#state.table,
     {Next, Ops, #state{old_aggr_stats = Remainders}} =
         ets:foldl(fun(R, {NextStats, O, State}) ->
                           aggregate_entry(R, NextStats, O, State)
-                  end, {dict:new(), dict:new(), State0}, Table),
-    dict:fold(fun(Tbl, TblOps, Acc) ->
+                  end, {#{}, #{}, State0}, Table),
+    maps:fold(fun(Tbl, TblOps, Acc) ->
                       _ = exec_table_ops(Tbl, Timestamp, TblOps),
                       Acc
               end, no_acc, Ops),
 
-    handle_deleted_queues(Table, Remainders, GPolicies),
+    handle_deleted_queues(Table, Remainders, State0),
     State0#state{old_aggr_stats = Next}.
 
 exec_table_ops(Table, Timestamp, TableOps) ->
-    dict:fold(fun(_Id, {insert, Entry}, A) ->
+    maps:fold(fun(_Id, {insert, Entry}, A) ->
                       ets:insert(Table, Entry),
                       A;
                  (Id, {insert_with_index, Entry}, A) ->
@@ -183,12 +192,17 @@ exec_table_ops(Table, Timestamp, TableOps) ->
 
 aggregate_entry({Id, Metrics}, NextStats, Ops0,
                 #state{table = connection_created} = State) ->
-    Ftd = rabbit_mgmt_format:format(
-        Metrics,
-        {fun rabbit_mgmt_format:format_connection_created/1, true}),
-    Entry = ?connection_created_stats(Id, pget(name, Ftd, unknown), Ftd),
-    Ops = insert_op(connection_created_stats, Id, Entry, Ops0),
-    {NextStats, Ops, State};
+    case ets:lookup(connection_created_stats, Id) of
+        [] ->
+            Ftd = rabbit_mgmt_format:format(
+                    Metrics,
+                    {fun rabbit_mgmt_format:format_connection_created/1, true}),
+            Entry = ?connection_created_stats(Id, pget(name, Ftd, unknown), Ftd),
+            Ops = insert_op(connection_created_stats, Id, Entry, Ops0),
+            {NextStats, Ops, State};
+        _ ->
+            {NextStats, Ops0, State}
+    end;
 aggregate_entry({Id, Metrics}, NextStats, Ops0,
                 #state{table = connection_metrics} = State) ->
     Entry = ?connection_stats(Id, Metrics),
@@ -220,15 +234,22 @@ aggregate_entry({Id, RecvOct, SendOct, _Reductions, 1}, NextStats, Ops0,
     {NextStats, Ops1, State};
 aggregate_entry({Id, Metrics}, NextStats, Ops0,
                 #state{table = channel_created} = State) ->
-    Ftd = rabbit_mgmt_format:format(Metrics, {[], false}),
-    Entry = ?channel_created_stats(Id, pget(name, Ftd, unknown), Ftd),
-    Ops = insert_op(channel_created_stats, Id, Entry, Ops0),
-    {NextStats, Ops, State};
+    case ets:lookup(channel_created_stats, Id) of
+        [] ->
+            Ftd = rabbit_mgmt_format:format(Metrics, {[], false}),
+            Entry = ?channel_created_stats(Id, pget(name, Ftd, unknown), Ftd),
+            Ops = insert_op(channel_created_stats, Id, Entry, Ops0),
+            {NextStats, Ops, State};
+        _ ->
+            {NextStats, Ops0, State}
+    end;
 aggregate_entry({Id, Metrics}, NextStats, Ops0,
                 #state{table = channel_metrics} = State) ->
-    Ftd = rabbit_mgmt_format:format(Metrics,
-                    {fun rabbit_mgmt_format:format_channel_stats/1, true}),
-
+    %% First metric must be `idle_since` (if available), as expected by
+    %% `rabbit_mgmt_format:format_channel_stats`. This is a performance
+    %% optimisation that avoids traversing the whole list when only
+    %% one element has to be formatted.
+    Ftd = rabbit_mgmt_format:format_channel_stats(Metrics),
     Entry = ?channel_stats(Id, Ftd),
     Ops = insert_op(channel_stats, Id, Entry, Ops0),
     {NextStats, Ops, State};
@@ -382,13 +403,18 @@ aggregate_entry({Id, Reductions}, NextStats, Ops0,
 aggregate_entry({Id, Exclusive, AckRequired, PrefetchCount, Args},
                 NextStats, Ops0,
                 #state{table = consumer_created} = State) ->
-    Fmt = rabbit_mgmt_format:format([{exclusive, Exclusive},
-                                     {ack_required, AckRequired},
-                                     {prefetch_count, PrefetchCount},
-                                     {arguments, Args}], {[], false}),
-    Entry = ?consumer_stats(Id, Fmt),
-    Ops = insert_with_index_op(consumer_stats, Id, Entry, Ops0),
-    {NextStats, Ops ,State};
+    case ets:lookup(consumer_stats, Id) of
+        [] ->
+            Fmt = rabbit_mgmt_format:format([{exclusive, Exclusive},
+                                             {ack_required, AckRequired},
+                                             {prefetch_count, PrefetchCount},
+                                             {arguments, Args}], {[], false}),
+            Entry = ?consumer_stats(Id, Fmt),
+            Ops = insert_with_index_op(consumer_stats, Id, Entry, Ops0),
+            {NextStats, Ops ,State};
+        _ ->
+            {NextStats, Ops0, State}
+    end;
 aggregate_entry({Id, Metrics, 0}, NextStats, Ops0,
                 #state{table = queue_metrics,
                        policies = {BPolicies, _, GPolicies},
@@ -440,7 +466,7 @@ aggregate_entry({Name, Ready, Unack, Msgs, Red}, NextStats, Ops0,
                _ ->
                    Ops1
            end,
-    State1 = State#state{old_aggr_stats = dict:erase(Name, Old)},
+    State1 = State#state{old_aggr_stats = maps:remove(Name, Old)},
     {insert_old_aggr_stats(NextStats, Name, Stats), Ops2, State1};
 aggregate_entry({Id, Metrics}, NextStats, Ops0,
                 #state{table = node_metrics} = State) ->
@@ -508,14 +534,14 @@ insert_entry(Table, Id, TS, Entry, Size, Interval0, Incremental) ->
                                                                    Slide)}).
 
 update_op(Table, Key, Op, Ops) ->
-    TableOps = case dict:find(Table, Ops) of
+    TableOps = case maps:find(Table, Ops) of
                    {ok, Inner} ->
-                       dict:store(Key, Op, Inner);
+                       maps:put(Key, Op, Inner);
                    error ->
-                       Inner = dict:new(),
-                       dict:store(Key, Op, Inner)
+                       Inner = #{},
+                       maps:put(Key, Op, Inner)
                end,
-    dict:store(Table, TableOps, Ops).
+    maps:put(Table, TableOps, Ops).
 
 insert_with_index_op(Table, Key, Entry, Ops) ->
     update_op(Table, Key, {insert_with_index, Entry}, Ops).
@@ -524,14 +550,14 @@ insert_op(Table, Key, Entry, Ops) ->
     update_op(Table, Key, {insert, Entry}, Ops).
 
 insert_entry_op(Table, Key, Entry, Ops) ->
-    TableOps0 = case dict:find(Table, Ops) of
+    TableOps0 = case maps:find(Table, Ops) of
                     {ok, Inner} -> Inner;
-                    error -> dict:new()
+                    error -> #{}
                 end,
-    TableOps = dict:update(Key, fun({insert_entry, Entry0}) ->
-                                        {insert_entry, sum_entry(Entry0, Entry)}
-                                end, {insert_entry, Entry}, TableOps0),
-    dict:store(Table, TableOps, Ops).
+    TableOps = maps:update_with(Key, fun({insert_entry, Entry0}) ->
+                                             {insert_entry, sum_entry(Entry0, Entry)}
+                                     end, {insert_entry, Entry}, TableOps0),
+    maps:put(Table, TableOps, Ops).
 
 insert_entry_ops(Table, Id, Incr, Entry, Ops, Policies) ->
     lists:foldl(fun({Size, Interval}, Acc) ->
@@ -540,7 +566,7 @@ insert_entry_ops(Table, Id, Incr, Entry, Ops, Policies) ->
                 end, Ops, Policies).
 
 get_difference(Id, Stats, #state{old_aggr_stats = OldStats}) ->
-    case dict:find(Id, OldStats) of
+    case maps:find(Id, OldStats) of
         error ->
             Stats;
         {ok, OldStat} ->

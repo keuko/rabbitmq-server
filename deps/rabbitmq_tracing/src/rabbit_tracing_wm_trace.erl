@@ -15,8 +15,7 @@
 
 -module(rabbit_tracing_wm_trace).
 
--export([init/3]).
--export([rest_init/2, resource_exists/2, to_json/2,
+-export([init/2, resource_exists/2, to_json/2,
          content_types_provided/2, content_types_accepted/2,
          is_authorized/2, allowed_methods/2, accept_content/2,
          delete_resource/2]).
@@ -29,9 +28,9 @@
 -include_lib("rabbitmq_management_agent/include/rabbit_mgmt_records.hrl").
 
 %%--------------------------------------------------------------------
-init(_, _, _) -> {upgrade, protocol, cowboy_rest}.
+init(Req, _State) ->
+    {cowboy_rest, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
 
-rest_init(ReqData, _) -> {ok, ReqData, #context{}}.
 
 content_types_provided(ReqData, Context) ->
    {[{<<"application/json">>, to_json}], ReqData, Context}.
@@ -92,19 +91,19 @@ trace(ReqData) ->
     end.
 
 val_payload_bytes(_VHost, _Name, Trace) ->
-    case is_integer(pget(max_payload_bytes, Trace, 0)) of
+    case is_integer(maps:get(max_payload_bytes, Trace, 0)) of
         false -> <<"max_payload_bytes not integer">>;
         true  -> ok
     end.
 
 val_format(_VHost, _Name, Trace) ->
-    case lists:member(pget(format, Trace), [<<"json">>, <<"text">>]) of
+    case lists:member(maps:get(format, Trace), [<<"json">>, <<"text">>]) of
         false -> <<"format not json or text">>;
         true  -> ok
     end.
 
 val_create(VHost, Name, Trace) ->
-    case rabbit_tracing_traces:create(VHost, Name, Trace) of
+    case rabbit_tracing_traces:create(VHost, Name, maps:to_list(Trace)) of
         {ok, _} -> ok;
         _       -> ?ERR
     end.

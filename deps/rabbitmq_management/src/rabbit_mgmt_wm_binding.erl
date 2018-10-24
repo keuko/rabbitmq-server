@@ -16,7 +16,7 @@
 
 -module(rabbit_mgmt_wm_binding).
 
--export([init/3, rest_init/2, resource_exists/2, to_json/2,
+-export([init/2, resource_exists/2, to_json/2,
          content_types_provided/2, content_types_accepted/2,
          is_authorized/2, allowed_methods/2, delete_resource/2]).
 -export([variances/2]).
@@ -25,10 +25,8 @@
 -include_lib("amqp_client/include/amqp_client.hrl").
 
 %%--------------------------------------------------------------------
-init(_, _, _) -> {upgrade, protocol, cowboy_rest}.
-
-rest_init(Req, _Config) ->
-    {ok, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
+init(Req, _State) ->
+    {cowboy_rest, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
 
 variances(Req, Context) ->
     {[<<"accept-encoding">>, <<"origin">>], Req, Context}.
@@ -66,7 +64,23 @@ delete_resource(ReqData, Context) ->
                      exchange -> 'exchange.unbind';
                      queue    -> 'queue.unbind'
                  end,
-    sync_resource(MethodName, ReqData, Context).
+    with_binding(
+      ReqData, Context,
+      fun(#binding{ source = #resource{name = S},
+                    destination = #resource{name = D},
+                    key = Key,
+                    args = Args }) ->
+              rabbit_mgmt_util:direct_request(
+                MethodName,
+                fun rabbit_mgmt_format:format_accept_content/1,
+                [{queue, D},
+                 {exchange, S},
+                 {destination, D},
+                 {source, S},
+                 {routing_key, Key},
+                 {arguments, Args}],
+                "Unbinding error: ~s", ReqData, Context)
+      end).
 
 is_authorized(ReqData, Context) ->
     rabbit_mgmt_util:is_authorized_vhost(ReqData, Context).
@@ -115,10 +129,10 @@ lookup(RoutingKey, Hash, [#binding{args = Args} | Rest]) ->
     end.
 
 args_hash(Args) ->
-    list_to_binary(rabbit_misc:base64url(erlang:md5(term_to_binary(Args)))).
+    rabbit_mgmt_format:args_hash(Args).
 
 unquote(Name) ->
-    list_to_binary(mochiweb_util:unquote(Name)).
+    list_to_binary(rabbit_http_util:unquote(Name)).
 
 with_binding(ReqData, Context, Fun) ->
     case binding(ReqData) of
@@ -127,31 +141,3 @@ with_binding(ReqData, Context, Fun) ->
         Binding ->
             Fun(Binding)
     end.
-
-method(MethodName, #binding{source = #resource{name = S},
-                            destination = #resource{name = D},
-                            key = K,
-                            args = A}) ->
-    case MethodName of
-        'exchange.unbind' ->
-            #'exchange.unbind'{
-                source = S,
-                destination = D,
-                routing_key = K,
-                arguments = A};
-        'queue.unbind' ->
-            #'queue.unbind'{
-                queue = D,
-                exchange = S,
-                routing_key = K,
-                arguments = A}
-    end.
-
-sync_resource(MethodName, ReqData, Context) ->
-    with_binding(
-      ReqData, Context,
-      fun(Binding) ->
-            rabbit_mgmt_util:amqp_request(
-                rabbit_mgmt_util:vhost(ReqData), ReqData, Context,
-                method(MethodName, Binding))
-      end).

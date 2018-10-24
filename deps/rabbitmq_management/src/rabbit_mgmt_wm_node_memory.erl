@@ -16,7 +16,7 @@
 
 -module(rabbit_mgmt_wm_node_memory).
 
--export([init/3, rest_init/2, to_json/2, content_types_provided/2, is_authorized/2]).
+-export([init/2, to_json/2, content_types_provided/2, is_authorized/2]).
 -export([resource_exists/2]).
 -export([variances/2]).
 
@@ -25,9 +25,8 @@
 
 %%--------------------------------------------------------------------
 
-init(_, _, _) -> {upgrade, protocol, cowboy_rest}.
-
-rest_init(Req, [Mode]) -> {ok, Req, {Mode, #context{}}}.
+init(Req, [Mode]) ->
+    {cowboy_rest, rabbit_mgmt_cors:set_headers(Req, ?MODULE), {Mode, #context{}}}.
 
 variances(Req, Context) ->
     {[<<"accept-encoding">>, <<"origin">>], Req, Context}.
@@ -71,10 +70,10 @@ augment(Mode, ReqData) ->
 format(absolute, Result) ->
     Result;
 format(relative, Result) ->
-    {[{total, Total}], Rest} = lists:splitwith(fun({Key, _}) ->
-                                                       Key == total
-                                               end, Result),
-    [{total, 100} | [{K, percentage(V, Total)} || {K, V} <- Rest]].
+    {value, {total, Totals}, Rest} = lists:keytake(total, 1, Result),
+    Total = proplists:get_value(rss, Totals),
+    [{total, 100} | [{K, percentage(V, Total)} || {K, V} <- Rest,
+                                                  K =/= strategy]].
 
 percentage(Part, Total) ->
     case round((Part/Total) * 100) of

@@ -28,12 +28,15 @@
 -export([print/2, print/1]).
 
 -export([format_queue_stats/1, format_channel_stats/1,
-         format_arguments/1, format_connection_created/1,
+         format_consumer_arguments/1,
+         format_connection_created/1,
          format_accept_content/1, format_args/1]).
 
 -export([strip_queue_pids/1]).
 
 -export([clean_consumer_details/1, clean_channel_details/1]).
+
+-export([args_hash/1]).
 
 -import(rabbit_misc, [pget/2, pget/3, pset/3]).
 
@@ -75,18 +78,17 @@ format_queue_stats({disk_writes, _}) ->
 format_queue_stats(Stat) ->
     [Stat].
 
-format_channel_stats({idle_since, Value}) ->
-    {idle_since, now_to_str(Value)};
-format_channel_stats(Stat) ->
-    Stat.
+format_channel_stats([{idle_since, Value} | Rest]) ->
+    [{idle_since, now_to_str(Value)} | Rest];
+format_channel_stats(Stats) ->
+    Stats.
 
-format_arguments({arguments, Value}) ->
-    {arguments, amqp_table(Value)};
-format_arguments(Stat) ->
-    Stat.
-
+%% Conerts an HTTP API request payload value
+%% to AMQP 0-9-1 arguments table
+format_args({arguments, []}) ->
+    {arguments, []};
 format_args({arguments, Value}) ->
-    {arguments, args(Value)};
+    {arguments, to_amqp_table(Value)};
 format_args(Stat) ->
     Stat.
 
@@ -160,13 +162,15 @@ port(Port) when is_number(Port) -> Port;
 port(Port)                      -> print("~w", Port).
 
 properties(unknown) -> unknown;
-properties(Table)   -> {struct, [{Name, tuple(Value)} ||
-                                    {Name, Value} <- Table]}.
+properties(Table)   -> maps:from_list([{Name, tuple(Value)} ||
+                                          {Name, Value} <- Table]).
 
 amqp_table(unknown)   -> unknown;
 amqp_table(undefined) -> amqp_table([]);
-amqp_table(Table)     -> {struct, [{Name, amqp_value(Type, Value)} ||
-                                      {Name, Type, Value} <- Table]}.
+amqp_table([])        -> #{};
+amqp_table(#{})       -> #{};
+amqp_table(Table)     -> maps:from_list([{Name, amqp_value(Type, Value)} ||
+                                            {Name, Type, Value} <- Table]).
 
 amqp_value(array, Vs)                  -> [amqp_value(T, V) || {T, V} <- Vs];
 amqp_value(table, V)                   -> amqp_table(V);
@@ -188,7 +192,7 @@ split_lines(<<Text:76/binary, Rest/binary>>) ->
 split_lines(Text) ->
     Text.
 
-parameter(P) -> pset(value, rabbit_misc:term_to_json(pget(value, P)), P).
+parameter(P) -> pset(value, pget(value, P), P).
 
 tuple(unknown)                    -> unknown;
 tuple(Tuple) when is_tuple(Tuple) -> [tuple(E) || E <- tuple_to_list(Tuple)];
@@ -282,6 +286,11 @@ format_socket_opts([{user_lookup_fun, _Value} | Tail], Acc) ->
     format_socket_opts(Tail, Acc);
 format_socket_opts([{sni_fun, _Value} | Tail], Acc) ->
     format_socket_opts(Tail, Acc);
+%% we do not report SNI host details in the UI,
+%% so skip this option and avoid some recursive formatting
+%% complexity
+format_socket_opts([{sni_hosts, _Value} | Tail], Acc) ->
+    format_socket_opts(Tail, Acc);
 format_socket_opts([{reuse_session, _Value} | Tail], Acc) ->
     format_socket_opts(Tail, Acc);
 %% we do not want to report configured cipher suites, even
@@ -316,7 +325,7 @@ pack_binding_props(Key, Args) ->
     list_to_binary(quote_binding(Key) ++ "~" ++ quote_binding(ArgsEnc)).
 
 quote_binding(Name) ->
-    re:replace(mochiweb_util:quote_plus(Name), "~", "%7E", [global]).
+    re:replace(rabbit_http_util:quote_plus(Name), "~", "%7E", [global]).
 
 %% Unfortunately string:tokens("foo~~bar", "~"). -> ["foo","bar"], we lose
 %% the fact that there's a double ~.
@@ -330,10 +339,11 @@ tokenise(Str) ->
                   tokenise(string:sub_string(Str, Count + 2))]
     end.
 
-to_amqp_table({struct, T}) ->
-    to_amqp_table(T);
-to_amqp_table(T) ->
-    [to_amqp_table_row(K, V) || {K, V} <- T].
+to_amqp_table(M) when is_map(M) ->
+    lists:reverse(maps:fold(fun(K, V, Acc) -> [to_amqp_table_row(K, V)|Acc] end,
+                            [], M));
+to_amqp_table(L) when is_list(L) ->
+    L.
 
 to_amqp_table_row(K, V) ->
     {T, V2} = type_val(V),
@@ -342,7 +352,7 @@ to_amqp_table_row(K, V) ->
 to_amqp_array(L) ->
     [type_val(I) || I <- L].
 
-type_val({struct, M})          -> {table,   to_amqp_table(M)};
+type_val(M) when is_map(M)     -> {table,   to_amqp_table(M)};
 type_val(L) when is_list(L)    -> {array,   to_amqp_array(L)};
 type_val(X) when is_binary(X)  -> {longstr, X};
 type_val(X) when is_integer(X) -> {long,    X};
@@ -353,7 +363,7 @@ type_val(null)                 -> throw({error, null_not_allowed});
 type_val(X)                    -> throw({error, {unhandled_type, X}}).
 
 url(Fmt, Vals) ->
-    print(Fmt, [mochiweb_util:quote_plus(V) || V <- Vals]).
+    print(Fmt, [rabbit_http_util:quote_plus(V) || V <- Vals]).
 
 exchange(X) ->
     format(X, {fun format_exchange_and_queue/1, false}).
@@ -412,10 +422,7 @@ record(Record, Fields) ->
                              end, {[], 2}, Fields),
     Res.
 
-to_basic_properties({struct, P}) ->
-    to_basic_properties(P);
-
-to_basic_properties(Props) ->
+to_basic_properties(Props) when is_map(Props) ->
     E = fun err/2,
     Fmt = fun (headers,       H)                    -> to_amqp_table(H);
               (delivery_mode, V) when is_integer(V) -> V;
@@ -429,7 +436,7 @@ to_basic_properties(Props) ->
           end,
     {Res, _Ix} = lists:foldl(
                    fun (K, {P, Ix}) ->
-                           {case proplists:get_value(a2b(K), Props) of
+                           {case maps:get(a2b(K), Props, undefined) of
                                 undefined -> P;
                                 V         -> setelement(Ix, P, Fmt(K, V))
                             end, Ix + 1}
@@ -510,10 +517,6 @@ format_null_item({Key, ''}) ->
     {Key, null};
 format_null_item({Key, Value}) when is_list(Value) ->
     {Key, format_nulls(Value)};
-format_null_item({Key, {struct, Struct}}) ->
-    {Key, {struct, format_nulls(Struct)}};
-format_null_item({Key, {array, Struct}}) ->
-    {Key, {array, format_nulls(Struct)}};
 format_null_item({Key, Value}) ->
     {Key, Value};
 format_null_item([{_K, _V} | _T] = L) ->
@@ -566,14 +569,11 @@ clean_channel_details(Obj) ->
 format_consumer_arguments(Obj) ->
     case pget(arguments, Obj) of
          undefined -> Obj;
-         []        -> Obj;
+         #{}       -> Obj;
+         []        -> pset(arguments, #{}, Obj);
          Args      -> pset(arguments, amqp_table(Args), Obj)
      end.
 
-%% Converts a proplist into an AMQP 0-9-1 table.
-%% For JSON serialisation formatting see amqp_table/1.
-args({struct, L}) -> args(L);
-args(L)           -> to_amqp_table(L).
 
 parse_bool(<<"true">>)  -> true;
 parse_bool(<<"false">>) -> false;
@@ -583,4 +583,4 @@ parse_bool(undefined)   -> undefined;
 parse_bool(V)           -> throw({error, {not_boolean, V}}).
 
 args_hash(Args) ->
-    list_to_binary(rabbit_misc:base64url(erlang:md5(term_to_binary(Args)))).
+    list_to_binary(rabbit_misc:base64url(<<(erlang:phash2(Args, 1 bsl 32)):32>>)).

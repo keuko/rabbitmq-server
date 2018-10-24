@@ -16,20 +16,21 @@
 
 -module(rabbit_mgmt_wm_global_parameter).
 
--export([init/3, rest_init/2, resource_exists/2, to_json/2,
+-export([init/2, resource_exists/2, to_json/2,
          content_types_provided/2, content_types_accepted/2,
          is_authorized/2, allowed_methods/2, accept_content/2,
          delete_resource/2]).
 -export([variances/2]).
 
+-import(rabbit_misc, [pget/2]).
+
+-include_lib("rabbit_common/include/rabbit.hrl").
 -include_lib("rabbitmq_management_agent/include/rabbit_mgmt_records.hrl").
 
 %%--------------------------------------------------------------------
 
-init(_, _, _) -> {upgrade, protocol, cowboy_rest}.
-
-rest_init(Req, _Config) ->
-    {ok, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
+init(Req, _State) ->
+    {cowboy_rest, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
 
 variances(Req, Context) ->
     {[<<"accept-encoding">>, <<"origin">>], Req, Context}.
@@ -53,12 +54,17 @@ to_json(ReqData, Context) ->
     rabbit_mgmt_util:reply(rabbit_mgmt_format:parameter(parameter(ReqData)),
                            ReqData, Context).
 
-accept_content(ReqData0, Context) ->
+accept_content(ReqData0, Context = #context{user = #user{username = Username}}) ->
     rabbit_mgmt_util:with_decode(
       [value], ReqData0, Context,
       fun([Value], _, ReqData) ->
               case rabbit_runtime_parameters:set_global(
-                     name(ReqData),rabbit_misc:json_to_term(Value)) of
+                     name(ReqData),
+                     if
+                         is_map(Value) -> maps:to_list(Value);
+                         true -> Value
+                     end,
+                     Username) of
                   ok ->
                       {true, ReqData, Context};
                   {error_string, Reason} ->
@@ -67,8 +73,8 @@ accept_content(ReqData0, Context) ->
               end
       end).
 
-delete_resource(ReqData, Context) ->
-    ok = rabbit_runtime_parameters:clear_global(name(ReqData)),
+delete_resource(ReqData, Context = #context{user = #user{username = Username}}) ->
+    ok = rabbit_runtime_parameters:clear_global(name(ReqData), Username),
     {true, ReqData, Context}.
 
 is_authorized(ReqData, Context) ->

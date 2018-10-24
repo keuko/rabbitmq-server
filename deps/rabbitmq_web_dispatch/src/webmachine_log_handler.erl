@@ -91,21 +91,21 @@ format_req({Status0, Body, Req}) ->
     Time = webmachine_log:fmtnow(),
     Status = integer_to_list(Status0),
     Length = integer_to_list(iolist_size(Body)),
-    {Method, _} = cowboy_req:method(Req),
-    {Path, _} = cowboy_req:path(Req),
-    {{Peer, _}, _} = cowboy_req:peer(Req),
-    Version = case cowboy_req:version(Req) of
-        {'HTTP/1.1', _} -> {1, 1};
-        {'HTTP/1.0', _} -> {1, 0}
-    end,
-    {Referer, _} = cowboy_req:header(<<"referer">>, Req, <<>>),
-    {UserAgent, _} = cowboy_req:header(<<"user-agent">>, Req, <<>>),
+    Method = cowboy_req:method(Req),
+    Path = cowboy_req:path(Req),
+    Peer = case cowboy_req:peer(Req) of
+                       {Peer0, _Port} -> Peer0;
+                       Other -> Other
+                   end,
+    Version = cowboy_req:version(Req),
+    Referer = cowboy_req:header(<<"referer">>, Req, <<>>),
+    UserAgent = cowboy_req:header(<<"user-agent">>, Req, <<>>),
     fmt_alog(Time, Peer, User, Method, Path, Version,
              Status, Length, Referer, UserAgent).
 
-fmt_alog(Time, Ip, User, Method, Path, {VM,Vm},
+fmt_alog(Time, Ip, User, Method, Path, Version,
          Status,  Length, Referrer, UserAgent) ->
     [webmachine_log:fmt_ip(Ip), " - ", User, [$\s], Time, [$\s, $"], Method, " ", Path,
-     " HTTP/", integer_to_list(VM), ".", integer_to_list(Vm), [$",$\s],
+     " ", atom_to_list(Version), [$",$\s],
      Status, [$\s], Length, [$\s,$"], Referrer,
      [$",$\s,$"], UserAgent, [$",$\n]].
