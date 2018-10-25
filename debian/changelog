@@ -1,4 +1,4 @@
-rabbitmq-server (3.7.6-1) unstable; urgency=medium
+rabbitmq-server (3.7.8-1) unstable; urgency=medium
 
   [ Daniel Baumann ]
   * Updating vcs fields.
@@ -28,6 +28,8 @@ rabbitmq-server (3.7.6-1) unstable; urgency=medium
   * Updated debian/control for this release.
   * Bumped debhelper to 10.
   * Standards-Version is now 4.2.1.
+  * Add patch to accept Elixir 1.6.5.
+  * Also package manpages.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 24 Oct 2018 18:39:10 +0200
 
