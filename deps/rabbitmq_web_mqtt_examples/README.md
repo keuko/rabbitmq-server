@@ -1,13 +1,15 @@
 # RabbitMQ Web MQTT Examples
 
-This project contains few basic examples of [RabbitMQ Web MQTT plugin](https://github.com/rabbitmq/rabbitmq-web-mqtt)
+This RabbitMQ plugin contains few basic examples of [RabbitMQ Web MQTT plugin](https://github.com/rabbitmq/rabbitmq-web-mqtt)
 usage.
 
-Once installed the server will bind to port 15670 and serve few static
+It starts a server that binds to port 15670 and serves a few static
 HTML files on port 15670 (e.g. [http://127.0.0.1:15670](http://127.0.0.1:15670/)).
+Note that Web STOMP examples use the same port, so these plugins cannot be enabled
+at the same time unless they are configured to use different ports.
 
 ## Installation
 
- * [RabbitMQ plugin build instructions](http://www.rabbitmq.com/plugin-development.html).
+This plugin ships with RabbitMQ. Enabled it using [CLI tools](http://www.rabbitmq.com/cli.html):
 
- * [RabbitMQ plugin installation](http://www.rabbitmq.com/plugins.html#installing-plugins).
+    rabbitmq-plugins enable rabbitmq_web_mqtt_examples

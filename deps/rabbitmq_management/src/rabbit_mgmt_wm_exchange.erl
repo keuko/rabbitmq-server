@@ -16,7 +16,7 @@
 
 -module(rabbit_mgmt_wm_exchange).
 
--export([init/3, rest_init/2, resource_exists/2, to_json/2,
+-export([init/2, resource_exists/2, to_json/2,
          content_types_provided/2, content_types_accepted/2,
          is_authorized/2, allowed_methods/2, accept_content/2,
          delete_resource/2, exchange/1, exchange/2]).
@@ -27,10 +27,8 @@
 
 %%--------------------------------------------------------------------
 
-init(_, _, _) -> {upgrade, protocol, cowboy_rest}.
-
-rest_init(Req, _Config) ->
-    {ok, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
+init(Req, _State) ->
+    {cowboy_rest, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
 
 variances(Req, Context) ->
     {[<<"accept-encoding">>, <<"origin">>], Req, Context}.
@@ -61,17 +59,22 @@ to_json(ReqData, Context) ->
     end.
 
 accept_content(ReqData, Context) ->
-    rabbit_mgmt_util:http_to_amqp(
-      'exchange.declare', ReqData, Context,
+    Name = rabbit_mgmt_util:id(exchange, ReqData),
+    rabbit_mgmt_util:direct_request(
+      'exchange.declare',
       fun rabbit_mgmt_format:format_accept_content/1,
-      [{exchange, rabbit_mgmt_util:id(exchange, ReqData)}]).
+      [{exchange, Name}], "Declare exchange error: ~s", ReqData, Context).
 
 delete_resource(ReqData, Context) ->
-    IfUnused = <<"true">> =:= element(1, cowboy_req:qs_val(<<"if-unused">>, ReqData)),
-    rabbit_mgmt_util:amqp_request(
-      rabbit_mgmt_util:vhost(ReqData), ReqData, Context,
-      #'exchange.delete'{exchange  = id(ReqData),
-                         if_unused = IfUnused}).
+    %% We need to retrieve manually if-unused, as the HTTP API uses '-'
+    %% while the record uses '_'
+    Name = id(ReqData),
+    IfUnused = <<"true">> =:= rabbit_mgmt_util:qs_val(<<"if-unused">>, ReqData),
+    rabbit_mgmt_util:direct_request(
+      'exchange.delete',
+      fun rabbit_mgmt_format:format_accept_content/1,
+      [{exchange, Name},
+       {if_unused, IfUnused}], "Delete exchange error: ~s", ReqData, Context).
 
 is_authorized(ReqData, Context) ->
     rabbit_mgmt_util:is_authorized_vhost(ReqData, Context).

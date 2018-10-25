@@ -8,6 +8,10 @@ define PROJECT_ENV
 	  ]
 endef
 
+define PROJECT_APP_EXTRA_KEYS
+	{broker_version_requirements, []}
+endef
+
 DEPS = rabbit_common rabbit
 
 DEP_EARLY_PLUGINS = rabbit_common/mk/rabbitmq-early-plugin.mk

@@ -10,6 +10,10 @@ define PROJECT_ENV
 	  ]
 endef
 
+define PROJECT_APP_EXTRA_KEYS
+	{broker_version_requirements, []}
+endef
+
 DEPS = rabbit_common rabbit rabbitmq_management
 TEST_DEPS = rabbitmq_ct_helpers rabbitmq_ct_client_helpers
 

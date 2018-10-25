@@ -20,22 +20,30 @@ The exchange behaves similarly to 'amq.rabbitmq.log': everything gets
 published there; if you don't trust a user with the information that
 gets published, don't allow them access.
 
-The plugin requires no configuration, just activate it:
 
-    rabbitmq-plugins enable rabbitmq_event_exchange
-
-
-## Downloading & Installation
+## Installation
 
 ### With RabbitMQ 3.6.0 or Later
 
 Most recent RabbitMQ version ships with this plugin.
+As of RabbitMQ `3.6.0` this plugin is included into the RabbitMQ distribution.
+
+Enable it with the following command:
+
+```bash
+rabbitmq-plugins enable rabbitmq_event_exchange
+```
 
 ### With RabbitMQ 3.5.x
 
 You can download a pre-built binary of this plugin from
 the [RabbitMQ Community Plugins](http://www.rabbitmq.com/community-plugins.html) page.
 
+Then run the following command:
+
+```bash
+rabbitmq-plugins enable rabbitmq_event_exchange
+```
 
 ## Event format
 
@@ -81,6 +89,8 @@ Virtual host events:
 
  * `vhost.created`
  * `vhost.deleted`
+ * `vhost.limits.set`
+ * `vhost.limits.cleared`
 
 User related events:
 
@@ -96,6 +106,8 @@ Permission events:
 
  * `permission.created`
  * `permission.deleted`
+ * `topic.permission.created`
+ * `topic.permission.deleted`
 
 Alarm events:
 
@@ -120,6 +132,12 @@ Link events:
 
 There is a usage example using the Java client in `examples/java`.
 
+
+## Configuration
+
+ * `rabbitmq_event_exchange.vhost`: what vhost should the `amq.rabbitmq.event` exchange be declared in. Default: `rabbit.default_vhost` (`<<"/">>`).
+
+
 ## Uninstalling
 
 If you want to remove the exchange which this plugin creates, first
@@ -135,8 +153,8 @@ Building is no different from [building other RabbitMQ plugins](http://www.rabbi
 
 TL;DR:
 
-    git clone https://github.com.com/rabbitmq/rabbitmq-public-umbrella.git
-    cd rabbitmq-public-umbrella
+    git clone https://github.com.com/rabbitmq/rabbitmq-public-umbrella.git umbrella
+    cd umbrella
     make co
     make up BRANCH=stable
     cd deps

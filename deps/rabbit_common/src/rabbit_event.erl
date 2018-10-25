@@ -25,6 +25,8 @@
 -export([notify/2, notify/3, notify_if/3]).
 -export([sync_notify/2, sync_notify/3]).
 
+-ignore_xref([{gen_event, start_link, 2}]).
+
 %%----------------------------------------------------------------------------
 
 -record(state, {level, interval, timer}).
@@ -65,7 +67,17 @@
 %%----------------------------------------------------------------------------
 
 start_link() ->
-    gen_event:start_link({local, ?MODULE}).
+    %% gen_event:start_link/2 is not available before OTP 20
+    %% RabbitMQ 3.7 supports OTP >= 19.3
+    case erlang:function_exported(gen_event, start_link, 2) of
+        true ->
+            gen_event:start_link(
+              {local, ?MODULE},
+              [{spawn_opt, [{fullsweep_after, 0}]}]
+            );
+        false ->
+            gen_event:start_link({local, ?MODULE})
+    end.
 
 %% The idea is, for each stat-emitting object:
 %%
@@ -90,8 +102,9 @@ start_link() ->
 %%   notify(stats)
 
 init_stats_timer(C, P) ->
-    {ok, StatsLevel} = application:get_env(rabbit, collect_statistics),
-    {ok, Interval}   = application:get_env(rabbit, collect_statistics_interval),
+    %% If the rabbit app is not loaded - use default none:5000
+    StatsLevel = application:get_env(rabbit, collect_statistics, none),
+    Interval   = application:get_env(rabbit, collect_statistics_interval, 5000),
     setelement(P, C, #state{level = StatsLevel, interval = Interval,
                             timer = undefined}).
 
@@ -154,5 +167,5 @@ event_cons(Type, Props, Ref) ->
     #event{type      = Type,
            props     = Props,
            reference = Ref,
-           timestamp = time_compat:os_system_time(milli_seconds)}.
+           timestamp = os:system_time(milli_seconds)}.
 

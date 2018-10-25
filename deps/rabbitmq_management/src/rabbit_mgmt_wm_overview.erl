@@ -16,7 +16,8 @@
 
 -module(rabbit_mgmt_wm_overview).
 
--export([init/3, rest_init/2, to_json/2, content_types_provided/2, is_authorized/2]).
+-export([init/2]).
+-export([to_json/2, content_types_provided/2, is_authorized/2]).
 -export([variances/2]).
 
 -import(rabbit_misc, [pget/2, pget/3]).
@@ -26,10 +27,8 @@
 
 %%--------------------------------------------------------------------
 
-init(_, _, _) -> {upgrade, protocol, cowboy_rest}.
-
-rest_init(Req, _Config) ->
-    {ok, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
+init(Req, _State) ->
+    {cowboy_rest, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
 
 variances(Req, Context) ->
     {[<<"accept-encoding">>, <<"origin">>], Req, Context}.
@@ -55,14 +54,14 @@ to_json(ReqData, Context = #context{user = User = #user{tags = Tags}}) ->
             case rabbit_mgmt_util:is_monitor(Tags) of
                 true ->
                     Overview0 ++
-                        [{K, maybe_struct(V)} ||
+                        [{K, maybe_map(V)} ||
                             {K,V} <- rabbit_mgmt_db:get_overview(Range)] ++
                         [{node,               node()},
                          {listeners,          listeners()},
                          {contexts,           web_contexts(ReqData)}];
                 _ ->
                     Overview0 ++
-                        [{K, maybe_struct(V)} ||
+                        [{K, maybe_map(V)} ||
                             {K, V} <- rabbit_mgmt_db:get_overview(User, Range)]
             end,
         rabbit_mgmt_util:reply(Overview, ReqData, Context)
@@ -86,8 +85,8 @@ listeners() ->
        || L <- rabbit_networking:active_listeners()],
       ["protocol", "port", "node"] ).
 
-maybe_struct(L) when is_list(L) -> {struct, L};
-maybe_struct(V)                 -> V.
+maybe_map(L) when is_list(L) -> maps:from_list(L);
+maybe_map(V)                 -> V.
 
 %%--------------------------------------------------------------------
 
@@ -106,4 +105,4 @@ fmt_context(Node, C) ->
 erlang_version() -> list_to_binary(rabbit_misc:otp_release()).
 
 erlang_full_version() ->
-    list_to_binary(string:strip(erlang:system_info(system_version), both, $\n)).
+    list_to_binary(rabbit_misc:otp_system_version()).

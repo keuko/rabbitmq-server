@@ -16,7 +16,7 @@
 
 -module(rabbit_mgmt_wm_permission).
 
--export([init/3, rest_init/2, resource_exists/2, to_json/2,
+-export([init/2, resource_exists/2, to_json/2,
          content_types_provided/2, content_types_accepted/2,
          is_authorized/2, allowed_methods/2, accept_content/2,
          delete_resource/2]).
@@ -27,10 +27,8 @@
 
 %%--------------------------------------------------------------------
 
-init(_, _, _) -> {upgrade, protocol, cowboy_rest}.
-
-rest_init(Req, _Config) ->
-    {ok, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
+init(Req, _State) ->
+    {cowboy_rest, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
 
 variances(Req, Context) ->
     {[<<"accept-encoding">>, <<"origin">>], Req, Context}.
@@ -54,7 +52,7 @@ resource_exists(ReqData, Context) ->
 to_json(ReqData, Context) ->
     rabbit_mgmt_util:reply(perms(ReqData), ReqData, Context).
 
-accept_content(ReqData0, Context) ->
+accept_content(ReqData0, Context = #context{user = #user{username = Username}}) ->
     case perms(ReqData0) of
          not_found ->
             rabbit_mgmt_util:bad_request(vhost_or_user_not_found,
@@ -66,15 +64,15 @@ accept_content(ReqData0, Context) ->
               [configure, write, read], ReqData0, Context,
               fun([Conf, Write, Read], _, ReqData) ->
                       rabbit_auth_backend_internal:set_permissions(
-                        User, VHost, Conf, Write, Read),
+                        User, VHost, Conf, Write, Read, Username),
                       {true, ReqData, Context}
               end)
     end.
 
-delete_resource(ReqData, Context) ->
+delete_resource(ReqData, Context = #context{user = #user{username = Username}}) ->
     User = rabbit_mgmt_util:id(user, ReqData),
     VHost = rabbit_mgmt_util:id(vhost, ReqData),
-    rabbit_auth_backend_internal:clear_permissions(User, VHost),
+    rabbit_auth_backend_internal:clear_permissions(User, VHost, Username),
     {true, ReqData, Context}.
 
 is_authorized(ReqData, Context) ->

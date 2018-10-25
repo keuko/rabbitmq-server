@@ -16,7 +16,7 @@
 
 -module(rabbit_mgmt_wm_queue_purge).
 
--export([init/3, rest_init/2, resource_exists/2, is_authorized/2, allowed_methods/2,
+-export([init/2, resource_exists/2, is_authorized/2, allowed_methods/2,
          delete_resource/2]).
 -export([variances/2]).
 
@@ -25,10 +25,8 @@
 
 %%--------------------------------------------------------------------
 
-init(_, _, _) -> {upgrade, protocol, cowboy_rest}.
-
-rest_init(Req, _Config) ->
-    {ok, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
+init(Req, _State) ->
+    {cowboy_rest, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
 
 variances(Req, Context) ->
     {[<<"accept-encoding">>, <<"origin">>], Req, Context}.
@@ -43,10 +41,11 @@ resource_exists(ReqData, Context) ->
      end, ReqData, Context}.
 
 delete_resource(ReqData, Context) ->
-    rabbit_mgmt_util:amqp_request(
-      rabbit_mgmt_util:vhost(ReqData),
-      ReqData, Context,
-      #'queue.purge'{ queue = rabbit_mgmt_util:id(queue, ReqData) }).
+    Name = rabbit_mgmt_util:id(queue, ReqData),
+    rabbit_mgmt_util:direct_request(
+      'queue.purge',
+      fun rabbit_mgmt_format:format_accept_content/1,
+      [{queue, Name}], "Error purging queue: ~s", ReqData, Context).
 
 is_authorized(ReqData, Context) ->
     rabbit_mgmt_util:is_authorized_vhost(ReqData, Context).

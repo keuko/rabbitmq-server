@@ -21,11 +21,16 @@ define PROJECT_ENV
 	    {tcp_listeners, [1883]},
 	    {num_tcp_acceptors, 10},
 	    {tcp_listen_options, [{backlog,   128},
-	                          {nodelay,   true}]}
+	                          {nodelay,   true}]},
+	    {proxy_protocol, false}
 	  ]
 endef
 
-DEPS = ranch rabbit_common rabbit amqp_client
+define PROJECT_APP_EXTRA_KEYS
+	{broker_version_requirements, []}
+endef
+
+DEPS = ranch rabbit_common rabbit amqp_client ranch_proxy_protocol
 TEST_DEPS = emqttc ct_helper rabbitmq_ct_helpers rabbitmq_ct_client_helpers
 
 dep_ct_helper = git https://github.com/extend/ct_helper.git master
@@ -34,6 +39,12 @@ dep_emqttc = git https://github.com/emqtt/emqttc.git master
 DEP_EARLY_PLUGINS = rabbit_common/mk/rabbitmq-early-plugin.mk
 DEP_PLUGINS = rabbit_common/mk/rabbitmq-plugin.mk
 
+ELIXIR_LIB_DIR = $(shell elixir -e 'IO.puts(:code.lib_dir(:elixir))')
+ifeq ($(ERL_LIBS),)
+	ERL_LIBS = $(ELIXIR_LIB_DIR)
+else
+	ERL_LIBS := $(ERL_LIBS):$(ELIXIR_LIB_DIR)
+endif
 # FIXME: Use erlang.mk patched for RabbitMQ, while waiting for PRs to be
 # reviewed and merged.
 
@@ -45,4 +56,4 @@ include erlang.mk
 
 
 clean::
-	if test -d test/java_SUITE_data; then cd test/java_SUITE_data && make clean; fi
+	if test -d test/java_SUITE_data; then cd test/java_SUITE_data && $(MAKE) clean; fi

@@ -54,6 +54,7 @@ function login_route_with_path() {
 
 function start_app_login() {
     app = new Sammy.Application(function () {
+        this.get('#/', function() {});
         this.put('#/login', function() {
             username = this.params['username'];
             password = this.params['password'];
@@ -212,7 +213,7 @@ function set_timer_interval(interval) {
 function reset_timer() {
     clearInterval(timer);
     if (timer_interval != null) {
-        timer = setInterval('partial_update()', timer_interval);
+        timer = setInterval(partial_update, timer_interval);
     }
 }
 
@@ -223,6 +224,7 @@ function update_manual(div, query) {
         path = current_reqs['node']['path'] + '?' + query + '=true';
         template = query;
     }
+
     var data = JSON.parse(sync_get(path));
 
     replace_content(div, format(template, data));
@@ -279,7 +281,7 @@ function partial_update() {
                 render_charts();
             });
         }
-  }
+    }
 }
 
 function update_navigation() {
@@ -485,75 +487,66 @@ function apply_state(reqs) {
     return reqs2;
 }
 
-function show_popup(type, text, mode) {
+function show_popup(type, text, _mode) {
     var cssClass = '.form-popup-' + type;
     function hide() {
-        if (mode == 'fade') {
-            $(cssClass).fadeOut(200, function() {
-                $(this).remove();
-            });
-        }
-        else {
-            $(cssClass).slideUp(200, function() {
-                $(this).remove();
-            });
-        }
+        $(cssClass).fadeOut(100, function() {
+            $(this).remove();
+        });
     }
-
     hide();
-    if ($(cssClass).length && type === 'help' &&
-        $(cssClass).text().indexOf(text.replace(/<[^>]*>/g, '')) != -1 ) {
-        return;
-    }
-    $('h1').after(format('error-popup', {'type': type, 'text': text}));
-    if (mode == 'fade') {
-        $(cssClass).fadeIn(200);
-    }
-    else {
-        $(cssClass).center().slideDown(200);
-    }
+    $('#outer').after(format('popup', {'type': type, 'text': text}));
+    $(cssClass).fadeIn(100);
     $(cssClass + ' span').click(function () {
         $('.popup-owner').removeClass('popup-owner');
         hide();
     });
 }
 
-
-
-
 function submit_import(form) {
     if (form.file.value) {
         var confirm_upload = confirm('Are you sure you want to import a definitions file? Some entities (vhosts, users, queues, etc) may be overwritten!');
         if (confirm_upload === true) {
-            var idx = $("select[name='vhost-upload'] option:selected").index();
-            var vhost = ((idx <= 0) ? "" : "/" + esc($("select[name='vhost-upload'] option:selected").val()));
-            form.action ="api/definitions" + vhost + '?auth=' + get_cookie_value('auth');
-            form.submit();
-            window.location.replace("../../#/import-succeeded");
-        } else {
-            return false;
-        }
-    } else {
-        return false;
-    }
-};
+            var file = form.file.files[0]; // FUTURE: limit upload file size (?)
+            var vhost_upload = $("select[name='vhost-upload'] option:selected");
+            var vhost_selected = vhost_upload.index() > 0;
 
+            var vhost_name = null;
+            if (vhost_selected) {
+                vhost_name = vhost_upload.val();
+            }
+
+            var vhost_part = '';
+            if (vhost_name) {
+                vhost_part = '/' + esc(vhost_name);
+            }
+
+            var form_action = "/definitions" + vhost_part + '?auth=' + get_cookie_value('auth');
+            var fd = new FormData();
+            fd.append('file', file);
+            with_req('POST', form_action, fd, function(resp) {
+                show_popup('info', 'Your definitions were imported successfully.');
+            });
+        }
+    }
+    return false;
+};
 
 function postprocess() {
     $('form.confirm-queue').submit(function() {
         return confirm("Are you sure? The queue is going to be deleted. " +
                        "Messages cannot be recovered after deletion.");
         });
+
     $('form.confirm-purge-queue').submit(function() {
         return confirm("Are you sure? Messages cannot be recovered after purging.");
         });
+
     $('form.confirm').submit(function() {
             return confirm("Are you sure? This object cannot be recovered " +
                            "after deletion.");
         });
-    $('div.section h2, div.section-hidden h2').die().live('click', function() {
-            toggle_visibility($(this));
-        });
+
     $('label').map(function() {
             if ($(this).attr('for') == '') {
                 var id = 'auto-label-' + Math.floor(Math.random()*1000000000);
@@ -564,6 +557,7 @@ function postprocess() {
                 }
             }
         });
+
     $('#download-definitions').click(function() {
             var idx = $("select[name='vhost-download'] option:selected").index();
             var vhost = ((idx <=0 ) ? "" : "/" + esc($("select[name='vhost-download'] option:selected").val()));
@@ -575,17 +569,18 @@ function postprocess() {
             return false;
         });
 
-
     $('.update-manual').click(function() {
             update_manual($(this).attr('for'), $(this).attr('query'));
         });
-    $('input, select').die();
-    $('.multifield input').live('keyup', function() {
+
+    $(document).on('keyup', '.multifield input', function() {
             update_multifields();
         });
-    $('.multifield select').live('change', function() {
+
+    $(document).on('change', '.multifield select', function() {
             update_multifields();
         });
+
     $('.controls-appearance').change(function() {
         var params = $(this).get(0).options;
         var selected = $(this).val();
@@ -599,37 +594,33 @@ function postprocess() {
             }
         }
     });
-    $('.help').die().live('click', function() {
-        help($(this).attr('id'));
+
+    $(document).on('click', '.help', function() {
+      show_popup('help', HELP[$(this).attr('id')]);
     });
-    $('.popup-options-link').die().live('click', function() {
-        var remove = $('.popup-owner').length == 1 &&
-                     $('.popup-owner').get(0) == $(this).get(0);
+
+    $(document).on('click', '.popup-options-link', function() {
         $('.popup-owner').removeClass('popup-owner');
-        if (remove) {
-            $('.form-popup-options').fadeOut(200, function() {
-                $(this).remove();
-            });
-        }
-        else {
-            $(this).addClass('popup-owner');
-            var template = $(this).attr('type') + '-options';
-            show_popup('options', format(template, {span: $(this)}),
-                       'fade');
-        }
+        $(this).addClass('popup-owner');
+        var template = $(this).attr('type') + '-options';
+        show_popup('options', format(template, {span: $(this)}), 'fade');
     });
-    $('.rate-visibility-option').die().live('click', function() {
+
+    $(document).on('click', '.rate-visibility-option', function() {
         var k = $(this).attr('data-pref');
         var show = get_pref(k) !== 'true';
         store_pref(k, '' + show);
         partial_update();
     });
-    $('input, select').live('focus', function() {
+
+    $(document).on('focus', 'input, select', function() {
         update_counter = 0; // If there's interaction, reset the counter.
     });
+
     $('.tag-link').click(function() {
         $('#tags').val($(this).attr('tag'));
     });
+
     $('.argument-link').click(function() {
         var field = $(this).attr('field');
         var row = $('#' + field).find('.mf').last();
@@ -641,12 +632,17 @@ function postprocess() {
         type.val($(this).attr('type'));
         update_multifields();
     });
-    $('form.auto-submit select, form.auto-submit input').live('click', function(){
+
+    $(document).on('click', 'form.auto-submit select, form.auto-submit input', function(){
         $(this).parents('form').submit();
     });
-    $('#filter').die().live('keyup', debounce(update_filter, 500));
+
+    $('#filter').on('keyup', debounce(update_filter, 500));
+
     $('#filter-regex-mode').change(update_filter_regex_mode);
-    $('#truncate').die().live('keyup', debounce(update_truncate, 500));
+
+    $('#truncate').on('keyup', debounce(update_truncate, 500));
+
     if (! user_administrator) {
         $('.administrator-only').remove();
     }
@@ -654,15 +650,20 @@ function postprocess() {
     update_multifields();
 }
 
-
 function url_pagination_template(template, defaultPage, defaultPageSize){
-   return  '/' + template + '?page=' + fmt_page_number_request(template, defaultPage) +
-                       '&page_size=' +  fmt_page_size_request(template, defaultPageSize) +
-                       '&name=' + fmt_filter_name_request(template, "") +
-                       '&use_regex=' + ((fmt_regex_request(template,"") == "checked" ? 'true' : 'false'));
-
+    var page_number_request = fmt_page_number_request(template, defaultPage);
+    var page_size = fmt_page_size_request(template, defaultPageSize);
+    var name_request = fmt_filter_name_request(template, "");
+    var use_regex = fmt_regex_request(template, "") == "checked";
+    if (use_regex) {
+        name_request = esc(name_request);
+    }
+    return  '/' + template +
+        '?page=' +  page_number_request +
+        '&page_size=' + page_size +
+        '&name=' + name_request +
+        '&use_regex=' + use_regex;
 }
-
 
 function stored_page_info(template, page_start){
     var pageSize = fmt_strip_tags($('#' + template+'-pagesize').val());
@@ -678,11 +679,9 @@ function stored_page_info(template, page_start){
         store_pref(template + '_current_regex', regex_on ? "checked" : " " );
     }
 
-
     if (pageSize != null && pageSize != undefined) {
         store_pref(template + '_current_page_size', pageSize);
     }
-
 }
 
 function update_pages(template, page_start){
@@ -694,7 +693,6 @@ function update_pages(template, page_start){
          case 'channels' : renderChannels(); break;
      }
 }
-
 
 function renderQueues() {
     render({'queues':  {path: url_pagination_template('queues', 1, 100),
@@ -720,7 +718,6 @@ function renderChannels() {
                         'channels', '#/channels');
 }
 
-
 function update_pages_from_ui(sender) {
     var val = $(sender).val();
     var raw = !!$(sender).attr('data-page-start') ? $(sender).attr('data-page-start') : val;
@@ -744,6 +741,12 @@ function postprocess_partial() {
     });
 
     setup_visibility();
+
+    $('#main').off('click', 'div.section h2, div.section-hidden h2');
+    $('#main').on('click', 'div.section h2, div.section-hidden h2', function() {
+            toggle_visibility($(this));
+        });
+
     $('.sort').click(function() {
             var sort = $(this).attr('sort');
             if (current_sort == sort) {
@@ -755,6 +758,7 @@ function postprocess_partial() {
             }
             update();
         });
+
     // TODO remove this hack when we get rid of "updatable"
     if ($('#filter-warning-show').length > 0) {
         $('#filter-truncate').addClass('filter-warning');
@@ -929,10 +933,11 @@ function toggle_visibility(item) {
         all.addClass('section-invisible');
     }
     else {
-        if (all.hasClass('section-hidden'))
+        if (all.hasClass('section-hidden')) {
             store_pref(pref, 't');
-        else
+        } else {
             clear_pref(pref);
+        }
         all.removeClass('section-invisible');
         all.addClass('section-visible');
     }
@@ -1043,11 +1048,11 @@ function format(template, json) {
 function update_status(status) {
     var text;
     if (status == 'ok')
-        text = "Last update: " + fmt_date(new Date());
+        text = "Refreshed " + fmt_date(new Date());
     else if (status == 'error') {
         var next_try = new Date(new Date().getTime() + timer_interval);
         text = "Error: could not connect to server since " +
-            fmt_date(last_successful_connect) + ".<br/>Will retry at " +
+            fmt_date(last_successful_connect) + ". Will retry at " +
             fmt_date(next_try) + ".";
     }
     else
@@ -1063,7 +1068,7 @@ function has_auth_cookie_value() {
 
 function auth_header() {
     if(has_auth_cookie_value()) {
-        return "Basic " + decodeURIComponent(get_cookie_value('auth'));    
+        return "Basic " + decodeURIComponent(get_cookie_value('auth'));
     } else {
         return null;
     }
@@ -1129,11 +1134,11 @@ function sync_req(type, params0, path_template, options) {
     req.setRequestHeader('authorization', auth_header());
 
     if (options != undefined || options != null) {
-	if (options.headers != undefined || options.headers != null) {
-	    jQuery.each(options.headers, function (k, v) {
-		req.setRequestHeader(k, v);
-	    });
-	}
+        if (options.headers != undefined || options.headers != null) {
+            jQuery.each(options.headers, function (k, v) {
+            req.setRequestHeader(k, v);
+            });
+        }
     }
 
     try {
@@ -1211,8 +1216,7 @@ function check_bad_response(req, full_page_404) {
         update_status('error');
     }
     else {
-        debug("Got response code " + req.status + " with body " +
-              req.responseText);
+        debug("Management API returned status code " + req.status + " - <strong>" + fmt_escape_html_one_line(req.responseText) + "</strong>");
         clearInterval(timer);
     }
 
@@ -1366,7 +1370,7 @@ function put_parameter(sammy, mandatory_keys, num_keys, bool_keys,
     if (sync_put(sammy, '/parameters/:component/:vhost/:name')) update();
 }
 
-function put_policy(sammy, mandatory_keys, num_keys, bool_keys) {
+function put_cast_params(sammy, path, mandatory_keys, num_keys, bool_keys) {
     for (var i in sammy.params) {
         if (i === 'length' || !sammy.params.hasOwnProperty(i)) continue;
         if (sammy.params[i] == '' && jQuery.inArray(i, mandatory_keys) == -1) {
@@ -1379,7 +1383,7 @@ function put_policy(sammy, mandatory_keys, num_keys, bool_keys) {
             sammy.params[i] = sammy.params[i] == 'true';
         }
     }
-    if (sync_put(sammy, '/policies/:vhost/:name')) update();
+    if (sync_put(sammy, path)) update();
 }
 
 function update_column_options(sammy) {
@@ -1460,4 +1464,26 @@ function debounce(f, delay) {
         if (timeout) clearTimeout(timeout);
         timeout = setTimeout(delayed, delay);
     }
+}
+
+function rename_multifield(params, from, to) {
+    var new_params = {};
+    for(var key in params){
+        var match = key.match("^" + from + "_[0-9_]*_mftype$");
+        var match2 = key.match("^" + from +  "_[0-9_]*_mfkey$");
+        var match3 = key.match("^" + from + "_[0-9_]*_mfvalue$");
+        if (match != null) {
+            new_params[match[0].replace(from, to)] = params[match];
+        }
+        else if (match2 != null) {
+            new_params[match2[0].replace(from, to)] = params[match2];
+        }
+        else if (match3 != null) {
+            new_params[match3[0].replace(from, to)] = params[match3];
+        }
+        else {
+            new_params[key] = params[key]
+        }
+    }
+    return new_params;
 }

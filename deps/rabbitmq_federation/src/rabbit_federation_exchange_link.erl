@@ -42,11 +42,13 @@
                 internal_exchange,
                 waiting_cmds = gb_trees:empty(),
                 next_serial,
-                bindings = dict:new(),
+                bindings = #{},
                 downstream_connection,
                 downstream_channel,
                 downstream_exchange,
-                unacked}).
+                unacked,
+                internal_exchange_timer,
+                internal_exchange_interval}).
 
 %%----------------------------------------------------------------------------
 
@@ -85,7 +87,7 @@ init({Upstream, XName}) ->
     end.
 
 handle_call(list_routing_keys, _From, State = #state{bindings = Bindings}) ->
-    {reply, lists:sort([K || {K, _} <- dict:fetch_keys(Bindings)]), State};
+    {reply, lists:sort([K || {K, _} <- maps:keys(Bindings)]), State};
 
 handle_call(Msg, _From, State) ->
     {stop, {unexpected_call, Msg}, State}.
@@ -175,6 +177,16 @@ handle_info({'DOWN', _Ref, process, Pid, Reason},
     rabbit_federation_link_util:handle_down(
       Pid, Reason, Ch, DCh, {Upstream, UParams, XName}, State);
 
+handle_info(check_internal_exchange, State = #state{internal_exchange = IntXNameBin,
+                                                    internal_exchange_interval = Int}) ->
+    case check_internal_exchange(IntXNameBin, State) of
+        upstream_not_found ->
+            {stop, {shutdown, restart}, State};
+        _ ->
+            TRef = erlang:send_after(Int, self(), check_internal_exchange),
+            {noreply, State#state{internal_exchange_timer = TRef}}
+    end;
+
 handle_info(Msg, State) ->
     {stop, {unexpected_info, Msg}, State}.
 
@@ -185,7 +197,15 @@ terminate(Reason, #state{downstream_connection = DConn,
                          connection            = Conn,
                          upstream              = Upstream,
                          upstream_params       = UParams,
-                         downstream_exchange   = XName}) ->
+                         downstream_exchange   = XName,
+                         internal_exchange_timer = TRef,
+                         internal_exchange     = IntExchange,
+                         queue                 = Queue}) ->
+    timer:cancel(TRef),
+    %% Cleanup of internal queue and exchange
+    delete_upstream_queue(Conn, Queue),
+    delete_upstream_exchange(Conn, IntExchange),
+
     rabbit_federation_link_util:ensure_connection_closed(DConn),
     rabbit_federation_link_util:ensure_connection_closed(Conn),
     rabbit_federation_link_util:log_terminate(Reason, Upstream, UParams, XName),
@@ -252,19 +272,19 @@ remove_binding(B, State) ->
 
 record_binding(B = #binding{destination = Dest},
                State = #state{bindings = Bs}) ->
-    {DoIt, Set} = case dict:find(key(B), Bs) of
+    {DoIt, Set} = case maps:find(key(B), Bs) of
                       error       -> {true,  sets:from_list([Dest])};
                       {ok, Dests} -> {false, sets:add_element(
                                                Dest, Dests)}
                   end,
-    {DoIt, State#state{bindings = dict:store(key(B), Set, Bs)}}.
+    {DoIt, State#state{bindings = maps:put(key(B), Set, Bs)}}.
 
 forget_binding(B = #binding{destination = Dest},
                State = #state{bindings = Bs}) ->
-    Dests = sets:del_element(Dest, dict:fetch(key(B), Bs)),
+    Dests = sets:del_element(Dest, maps:get(key(B), Bs)),
     {DoIt, Bs1} = case sets:size(Dests) of
-                      0 -> {true,  dict:erase(key(B), Bs)};
-                      _ -> {false, dict:store(key(B), Dests, Bs)}
+                      0 -> {true,  maps:remove(key(B), Bs)};
+                      _ -> {false, maps:put(key(B), Dests, Bs)}
                   end,
     {DoIt, State#state{bindings = Bs1}}.
 
@@ -404,6 +424,8 @@ go(S0 = {not_started, {Upstream, UParams, DownXName}}) ->
               %% serial we will process. Since it compares larger than
               %% any number we never process any commands. And we will
               %% soon get told to stop anyway.
+              {ok, Interval} = application:get_env(rabbitmq_federation,
+                                                   internal_exchange_check_interval),
               State = ensure_upstream_bindings(
                         consume_from_upstream_queue(
                           #state{upstream              = Upstream,
@@ -415,9 +437,11 @@ go(S0 = {not_started, {Upstream, UParams, DownXName}}) ->
                                  downstream_connection = DConn,
                                  downstream_channel    = DCh,
                                  downstream_exchange   = DownXName,
-                                 unacked               = Unacked}),
+                                 unacked               = Unacked,
+                                 internal_exchange_interval = Interval}),
                         Bindings),
-              {noreply, State}
+              TRef = erlang:send_after(Interval, self(), check_internal_exchange),
+              {noreply, State#state{internal_exchange_timer = TRef}}
       end, Upstream, UParams, DownXName, S0).
 
 consume_from_upstream_queue(
@@ -523,6 +547,35 @@ ensure_internal_exchange(IntXNameBin,
                            amqp_channel:call(Ch, Fan)
                    end).
 
+check_internal_exchange(IntXNameBin,
+                         #state{upstream        = #upstream{max_hops = MaxHops},
+                                upstream_params = UParams,
+                                downstream_exchange = XName}) ->
+    #upstream_params{params = Params} = UParams,
+    Base = #'exchange.declare'{exchange    = IntXNameBin,
+                               passive     = true,
+                               durable     = true,
+                               internal    = true,
+                               auto_delete = true},
+    Purpose = [{<<"x-internal-purpose">>, longstr, <<"federation">>}],
+    XFUArgs = [{?MAX_HOPS_ARG,  long,    MaxHops},
+               {?NODE_NAME_ARG, longstr, rabbit_nodes:cluster_name()}
+               | Purpose],
+    XFU = Base#'exchange.declare'{type      = <<"x-federation-upstream">>,
+                                  arguments = XFUArgs},
+    rabbit_federation_link_util:disposable_connection_call(
+      Params, XFU, fun(404, Text) ->
+                           rabbit_federation_link_util:log_warning(
+                             XName, "detected internal upstream exchange changes,"
+                             " restarting link: ~p~n", [Text]),
+                           upstream_not_found;
+                      (Code, Text) ->
+                           rabbit_federation_link_util:log_warning(
+                             XName, "internal upstream exchange check failed: ~p ~p~n",
+                             [Code, Text]),
+                           error
+                   end).
+
 upstream_queue_name(XNameBin, VHost, #resource{name         = DownXNameBin,
                                                virtual_host = DownVHost}) ->
     Node = rabbit_nodes:cluster_name(),
@@ -543,6 +596,10 @@ upstream_exchange_name(XNameBin, VHost, DownXName, Suffix) ->
 delete_upstream_exchange(Conn, XNameBin) ->
     rabbit_federation_link_util:disposable_channel_call(
       Conn, #'exchange.delete'{exchange = XNameBin}).
+
+delete_upstream_queue(Conn, Queue) ->
+    rabbit_federation_link_util:disposable_channel_call(
+      Conn, #'queue.delete'{queue = Queue}).
 
 update_headers(#upstream_params{table = Table}, UName, Redelivered, Headers) ->
     rabbit_basic:prepend_table_header(

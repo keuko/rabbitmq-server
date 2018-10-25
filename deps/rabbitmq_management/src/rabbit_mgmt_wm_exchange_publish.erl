@@ -16,7 +16,7 @@
 
 -module(rabbit_mgmt_wm_exchange_publish).
 
--export([init/3, rest_init/2, resource_exists/2, is_authorized/2,
+-export([init/2, resource_exists/2, is_authorized/2,
          allowed_methods/2,  content_types_provided/2, accept_content/2,
          content_types_accepted/2]).
 -export([variances/2]).
@@ -26,10 +26,8 @@
 
 %%--------------------------------------------------------------------
 
-init(_, _, _) -> {upgrade, protocol, cowboy_rest}.
-
-rest_init(Req, _Config) ->
-    {ok, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
+init(Req, _State) ->
+    {cowboy_rest, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
 
 variances(Req, Context) ->
     {[<<"accept-encoding">>, <<"origin">>], Req, Context}.
@@ -81,6 +79,9 @@ do_it(ReqData0, Context) ->
                                 good(MRef, false, ReqData, Context);
                             #'basic.ack'{} ->
                                 good(MRef, true, ReqData, Context);
+                            #'basic.nack'{} ->
+                                erlang:demonitor(MRef),
+                                bad(rejected, ReqData, Context);
                             {'DOWN', _, _, _, Err} ->
                                 bad(Err, ReqData, Context)
                         end
@@ -98,7 +99,10 @@ bad({shutdown, {connection_closing,
     rabbit_mgmt_util:bad_request_exception(Code, Reason, ReqData, Context);
 
 bad({shutdown, {server_initiated_close, Code, Reason}}, ReqData, Context) ->
-    rabbit_mgmt_util:bad_request_exception(Code, Reason, ReqData, Context).
+    rabbit_mgmt_util:bad_request_exception(Code, Reason, ReqData, Context);
+bad(rejected, ReqData, Context) ->
+    Msg = "Unable to publish message. Check queue limits.",
+    rabbit_mgmt_util:bad_request_exception(rejected, Msg, ReqData, Context).
 
 is_authorized(ReqData, Context) ->
     rabbit_mgmt_util:is_authorized_vhost(ReqData, Context).

@@ -16,7 +16,7 @@
 
 -module(rabbit_mgmt_wm_bindings).
 
--export([init/3, rest_init/2, to_json/2, content_types_provided/2, is_authorized/2]).
+-export([init/2, to_json/2, content_types_provided/2, is_authorized/2]).
 -export([allowed_methods/2]).
 -export([content_types_accepted/2, accept_content/2, resource_exists/2]).
 -export([basic/1, augmented/2]).
@@ -27,10 +27,8 @@
 
 %%--------------------------------------------------------------------
 
-init(_, _, _) -> {upgrade, protocol, cowboy_rest}.
-
-rest_init(Req, [Mode]) ->
-    {ok, rabbit_mgmt_cors:set_headers(Req, ?MODULE), {Mode, #context{}}}.
+init(Req, [Mode]) ->
+    {cowboy_rest, rabbit_mgmt_cors:set_headers(Req, ?MODULE), {Mode, #context{}}}.
 
 variances(Req, Context) ->
     {[<<"accept-encoding">>, <<"origin">>], Req, Context}.
@@ -44,7 +42,7 @@ content_types_provided(ReqData, Context) ->
 %% https://github.com/ninenines/cowboy/issues/723#issuecomment-161319576
 resource_exists(ReqData, {Mode, Context}) ->
     case cowboy_req:method(ReqData) of
-        {<<"POST">>, _} ->
+        <<"POST">> ->
             {false, ReqData, {Mode, Context}};
         _ ->
             {case list_bindings(Mode, ReqData) of
@@ -71,25 +69,38 @@ to_json(ReqData, {Mode, Context}) ->
       ReqData, {Mode, Context}).
 
 accept_content(ReqData0, {_Mode, Context}) ->
-    {ok, Body, ReqData} = cowboy_req:body(ReqData0),
+    {ok, Body, ReqData} = cowboy_req:read_body(ReqData0),
     Source = rabbit_mgmt_util:id(source, ReqData),
     Dest = rabbit_mgmt_util:id(destination, ReqData),
     DestType = rabbit_mgmt_util:id(dtype, ReqData),
     VHost = rabbit_mgmt_util:vhost(ReqData),
     {ok, Props} = rabbit_mgmt_util:decode(Body),
-    {Method, Key, Args} = method_key_args(DestType, Source, Dest, Props),
-    Response = rabbit_mgmt_util:amqp_request(VHost, ReqData, Context, Method),
-    case Response of
-        {halt, _, _} = Res ->
+    MethodName = case rabbit_mgmt_util:destination_type(ReqData) of
+                     exchange -> 'exchange.bind';
+                     queue    -> 'queue.bind'
+                 end,
+    {Key, Args} = key_args(DestType, Props),
+    case rabbit_mgmt_util:direct_request(
+           MethodName,
+           fun rabbit_mgmt_format:format_accept_content/1,
+           [{queue, Dest},
+            {exchange, Source},
+            {destination, Dest},
+            {source, Source},
+            {routing_key, Key},
+            {arguments, Args}],
+           "Binding error: ~s", ReqData, Context) of
+        {stop, _, _} = Res ->
             Res;
         {true, ReqData, Context2} ->
-            Loc = rabbit_web_dispatch_util:relativise(
-                    binary_to_list(element(1, cowboy_req:path(ReqData))),
-                    binary_to_list(
-                      rabbit_mgmt_format:url(
-                        "/api/bindings/~s/e/~s/~s/~s/~s",
-                        [VHost, Source, DestType, Dest,
-                         rabbit_mgmt_format:pack_binding_props(Key, Args)]))),
+            From = binary_to_list(cowboy_req:path(ReqData)),
+            Prefix = rabbit_mgmt_util:get_path_prefix(),
+            BindingProps = rabbit_mgmt_format:pack_binding_props(Key, Args),
+            UrlWithBindings = rabbit_mgmt_format:url("/api/bindings/~s/e/~s/~s/~s/~s",
+                                                     [VHost, Source, DestType,
+                                                      Dest, BindingProps]),
+            To = Prefix ++ binary_to_list(UrlWithBindings),
+            Loc = rabbit_web_dispatch_util:relativise(From, To),
             {{true, Loc}, ReqData, Context2}
     end.
 
@@ -106,19 +117,18 @@ basic(ReqData) ->
 augmented(ReqData, Context) ->
     rabbit_mgmt_util:filter_vhost(basic(ReqData), ReqData, Context).
 
-method_key_args(<<"q">>, Source, Dest, Props) ->
-    M = #'queue.bind'{routing_key = K, arguments = A} =
+key_args(<<"q">>, Props) ->
+    #'queue.bind'{routing_key = K, arguments = A} =
         rabbit_mgmt_util:props_to_method(
-          'queue.bind', Props,
-          [], [{exchange, Source}, {queue,       Dest}]),
-    {M, K, A};
+          'queue.bind', Props, [], []),
+    {K, A};
 
-method_key_args(<<"e">>, Source, Dest, Props) ->
-    M = #'exchange.bind'{routing_key = K, arguments = A} =
+key_args(<<"e">>, Props) ->
+    #'exchange.bind'{routing_key = K, arguments = A} =
         rabbit_mgmt_util:props_to_method(
           'exchange.bind', Props,
-          [], [{source,   Source}, {destination, Dest}]),
-    {M, K, A}.
+          [], []),
+    {K, A}.
 
 %%--------------------------------------------------------------------
 

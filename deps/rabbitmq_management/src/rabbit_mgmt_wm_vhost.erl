@@ -16,10 +16,10 @@
 
 -module(rabbit_mgmt_wm_vhost).
 
--export([init/3, rest_init/2, resource_exists/2, to_json/2,
+-export([init/2, resource_exists/2, to_json/2,
          content_types_provided/2, content_types_accepted/2,
          is_authorized/2, allowed_methods/2, accept_content/2,
-         delete_resource/2, id/1, put_vhost/2]).
+         delete_resource/2, id/1, put_vhost/3]).
 -export([variances/2]).
 
 -import(rabbit_misc, [pget/2]).
@@ -29,10 +29,8 @@
 
 %%--------------------------------------------------------------------
 
-init(_, _, _) -> {upgrade, protocol, cowboy_rest}.
-
-rest_init(Req, _Config) ->
-    {ok, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
+init(Req, _State) ->
+    {cowboy_rest, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
 
 variances(Req, Context) ->
     {[<<"accept-encoding">>, <<"origin">>], Req, Context}.
@@ -60,19 +58,24 @@ to_json(ReqData, Context) ->
             rabbit_mgmt_util:bad_request(iolist_to_binary(Reason), ReqData, Context)
     end.
 
-accept_content(ReqData0, Context) ->
+accept_content(ReqData0, Context = #context{user = #user{username = Username}}) ->
     Name = id(ReqData0),
     rabbit_mgmt_util:with_decode(
       [], ReqData0, Context,
       fun(_, VHost, ReqData) ->
               put_vhost(Name, rabbit_mgmt_util:parse_bool(
-                                pget(tracing, VHost))),
+                                maps:get(tracing, VHost, undefined)),
+                        Username),
               {true, ReqData, Context}
       end).
 
-delete_resource(ReqData, Context) ->
+delete_resource(ReqData, Context = #context{user = #user{username = Username}}) ->
     VHost = id(ReqData),
-    rabbit_vhost:delete(VHost),
+    try
+        rabbit_vhost:delete(VHost, Username)
+    catch _:{error, {no_such_vhost, _}} ->
+        ok
+    end,
     {true, ReqData, Context}.
 
 is_authorized(ReqData, Context) ->
@@ -83,13 +86,28 @@ is_authorized(ReqData, Context) ->
 id(ReqData) ->
     rabbit_mgmt_util:id(vhost, ReqData).
 
-put_vhost(Name, Trace) ->
+put_vhost(Name, Trace, Username) ->
     case rabbit_vhost:exists(Name) of
         true  -> ok;
-        false -> rabbit_vhost:add(Name)
+        false -> rabbit_vhost:add(Name, Username),
+                 maybe_grant_full_permissions(Name, Username)
     end,
     case Trace of
         true      -> rabbit_trace:start(Name);
         false     -> rabbit_trace:stop(Name);
         undefined -> ok
     end.
+
+%% when definitions are loaded on boot, Username here will be ?INTERNAL_USER,
+%% which does not actually exist
+maybe_grant_full_permissions(_Name, ?INTERNAL_USER) ->
+    ok;
+maybe_grant_full_permissions(Name, Username) ->
+    U = rabbit_auth_backend_internal:lookup_user(Username),
+    maybe_grant_full_permissions(U, Name, Username).
+
+maybe_grant_full_permissions({ok, _}, Name, Username) ->
+    rabbit_auth_backend_internal:set_permissions(
+      Username, Name, <<".*">>, <<".*">>, <<".*">>, Username);
+maybe_grant_full_permissions(_, _Name, _Username) ->
+    ok.

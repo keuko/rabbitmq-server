@@ -15,7 +15,7 @@
 
 -module(rabbit_mgmt_wm_consumers).
 
--export([init/3, rest_init/2, to_json/2, content_types_provided/2, resource_exists/2,
+-export([init/2, to_json/2, content_types_provided/2, resource_exists/2,
          is_authorized/2]).
 -export([variances/2]).
 
@@ -26,10 +26,8 @@
 
 %%--------------------------------------------------------------------
 
-init(_, _, _) -> {upgrade, protocol, cowboy_rest}.
-
-rest_init(Req, _Config) ->
-    {ok, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
+init(Req, _State) ->
+    {cowboy_rest, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
 
 variances(Req, Context) ->
     {[<<"accept-encoding">>, <<"origin">>], Req, Context}.
@@ -50,10 +48,10 @@ to_json(ReqData, Context = #context{user = User}) ->
               VHost -> VHost
           end,
 
-    Consumers = rabbit_mgmt_format:strip_pids(
-                          rabbit_mgmt_db:get_all_consumers(Arg)),
+    Consumers = rabbit_mgmt_format:strip_pids(rabbit_mgmt_db:get_all_consumers(Arg)),
+    Formatted = [rabbit_mgmt_format:format_consumer_arguments(C) || C <- Consumers],
     rabbit_mgmt_util:reply_list(
-      filter_user(Consumers, User), ReqData, Context).
+      filter_user(Formatted, User), ReqData, Context).
 
 is_authorized(ReqData, Context) ->
     rabbit_mgmt_util:is_authorized(ReqData, Context).

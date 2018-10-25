@@ -36,7 +36,7 @@
                 config, route_state, reply_queues, frame_transformer,
                 adapter_info, send_fun, ssl_login_name, peer_addr,
                 %% see rabbitmq/rabbitmq-stomp#39
-                trailing_lf}).
+                trailing_lf, auth_mechanism, auth_login}).
 
 -record(subscription, {dest_hdr, ack_mode, multi_ack, description}).
 
@@ -110,11 +110,9 @@ info(session_id, #proc_state{session_id = Val}) ->
     Val;
 info(channel, #proc_state{channel = Val}) -> Val;
 info(version, #proc_state{version = Val}) -> Val;
-info(ssl_cert_login, #proc_state{config = #stomp_configuration{ssl_cert_login = Val}}) ->  Val;
 info(implicit_connect, #proc_state{config = #stomp_configuration{implicit_connect = Val}}) ->  Val;
-info(default_login, #proc_state{config = #stomp_configuration{default_login = Val}}) ->  Val;
-info(default_passcode, #proc_state{config = #stomp_configuration{default_passcode = Val}}) ->  Val;
-info(ssl_login_name, #proc_state{ssl_login_name = Val}) -> Val;
+info(auth_login, #proc_state{auth_login = Val}) ->  Val;
+info(auth_mechanism, #proc_state{auth_mechanism = Val}) ->  Val;
 info(peer_addr, #proc_state{peer_addr = Val}) -> Val;
 info(host, #proc_state{adapter_info = #amqp_adapter_info{host = Val}}) -> Val;
 info(port, #proc_state{adapter_info = #amqp_adapter_info{port = Val}}) -> Val;
@@ -128,7 +126,12 @@ info(protocol, #proc_state{adapter_info = #amqp_adapter_info{protocol = Val}}) -
 info(channels, PState) -> additional_info(channels, PState);
 info(channel_max, PState) -> additional_info(channel_max, PState);
 info(frame_max, PState) -> additional_info(frame_max, PState);
-info(client_properties, PState) -> additional_info(client_properties, PState).
+info(client_properties, PState) -> additional_info(client_properties, PState);
+info(ssl, PState) -> additional_info(ssl, PState);
+info(ssl_protocol, PState) -> additional_info(ssl_protocol, PState);
+info(ssl_key_exchange, PState) -> additional_info(ssl_key_exchange, PState);
+info(ssl_cipher, PState) -> additional_info(ssl_cipher, PState);
+info(ssl_hash, PState) -> additional_info(ssl_hash, PState).
 
 initial_state(Configuration,
     {SendFun, AdapterInfo0 = #amqp_adapter_info{additional_info = Extra},
@@ -151,12 +154,12 @@ initial_state(Configuration,
        session_id          = none,
        channel             = none,
        connection          = none,
-       subscriptions       = dict:new(),
+       subscriptions       = #{},
        version             = none,
        pending_receipts    = undefined,
        config              = Configuration,
        route_state         = rabbit_routing_util:init_state(),
-       reply_queues        = dict:new(),
+       reply_queues        = #{},
        frame_transformer   = undefined,
        trailing_lf         = rabbit_misc:get_env(rabbitmq_stomp, trailing_lf, true)}.
 
@@ -235,6 +238,8 @@ process_request(ProcessFun, SuccessFun, State) ->
                {{shutdown,
                  {server_initiated_close, ReplyCode, Explanation}}, _}} ->
                   amqp_death(ReplyCode, Explanation, State);
+              {'EXIT', {amqp_error, access_refused, Msg, _}} ->
+                  amqp_death(access_refused, Msg, State);
               {'EXIT', Reason} ->
                   priv_error("Processing error", "Processing error",
                               Reason, State);
@@ -267,7 +272,7 @@ process_connect(Implicit, Frame,
                   {ok, Version} ->
                       FT = frame_transformer(Version),
                       Frame1 = FT(Frame),
-                      {Username, Passwd} = creds(Frame1, SSLLoginName, Config),
+                      {Auth, {Username, Passwd}} = creds(Frame1, SSLLoginName, Config),
                       {ok, DefaultVHost} = application:get_env(
                                              rabbitmq_stomp, default_vhost),
                       {ProtoName, _} = AdapterInfo#amqp_adapter_info.protocol,
@@ -277,7 +282,9 @@ process_connect(Implicit, Frame,
                               login_header(Frame1, ?HEADER_HEART_BEAT, "0,0"),
                               AdapterInfo#amqp_adapter_info{
                                 protocol = {ProtoName, Version}}, Version,
-                              StateN#proc_state{frame_transformer = FT}),
+                              StateN#proc_state{frame_transformer = FT,
+                                                auth_mechanism = Auth,
+                                                auth_login = Username}),
                       case {Res, Implicit} of
                           {{ok, _, StateN1}, implicit} -> ok(StateN1);
                           _                            -> Res
@@ -294,16 +301,16 @@ process_connect(Implicit, Frame,
 creds(_, _, #stomp_configuration{default_login       = DefLogin,
                                  default_passcode    = DefPasscode,
                                  force_default_creds = true}) ->
-    {iolist_to_binary(DefLogin), iolist_to_binary(DefPasscode)};
+    {config, {iolist_to_binary(DefLogin), iolist_to_binary(DefPasscode)}};
 creds(Frame, SSLLoginName,
       #stomp_configuration{default_login    = DefLogin,
                            default_passcode = DefPasscode}) ->
     PasswordCreds = {login_header(Frame, ?HEADER_LOGIN,    DefLogin),
                      login_header(Frame, ?HEADER_PASSCODE, DefPasscode)},
     case {rabbit_stomp_frame:header(Frame, ?HEADER_LOGIN), SSLLoginName} of
-        {not_found, none}    -> PasswordCreds;
-        {not_found, SSLName} -> {SSLName, none};
-        _                    -> PasswordCreds
+        {not_found, none}    -> {config, PasswordCreds};
+        {not_found, SSLName} -> {ssl, {SSLName, none}};
+        _                    -> {stomp_headers, PasswordCreds}
     end.
 
 login_header(Frame, Key, Default) when is_binary(Default) ->
@@ -396,7 +403,7 @@ ack_action(Command, Frame,
         {ok, AckValue} ->
             case rabbit_stomp_util:parse_message_id(AckValue) of
                 {ok, {ConsumerTag, _SessionId, DeliveryTag}} ->
-                    case dict:find(ConsumerTag, Subs) of
+                    case maps:find(ConsumerTag, Subs) of
                         {ok, Sub} ->
                             Requeue = rabbit_stomp_frame:boolean_header(Frame, "requeue", true),
                             Method = MethodFun(DeliveryTag, Sub, Requeue),
@@ -431,7 +438,7 @@ ack_action(Command, Frame,
 %% Internal helpers for processing frames callbacks
 %%----------------------------------------------------------------------------
 server_cancel_consumer(ConsumerTag, State = #proc_state{subscriptions = Subs}) ->
-    case dict:find(ConsumerTag, Subs) of
+    case maps:find(ConsumerTag, Subs) of
         error ->
             error("Server cancelled unknown subscription",
                   "Consumer tag ~p is not associated with a subscription.~n",
@@ -466,7 +473,7 @@ cancel_subscription({error, _}, _Frame, State) ->
 cancel_subscription({ok, ConsumerTag, Description}, Frame,
                     State = #proc_state{subscriptions = Subs,
                                    channel       = Channel}) ->
-    case dict:find(ConsumerTag, Subs) of
+    case maps:find(ConsumerTag, Subs) of
         error ->
             error("No subscription found",
                   "UNSUBSCRIBE must refer to an existing subscription.~n"
@@ -499,7 +506,7 @@ tidy_canceled_subscription(ConsumerTag, _Subscription,
 %% Client-initiated cancelations will pass an actual frame
 tidy_canceled_subscription(ConsumerTag, #subscription{dest_hdr = DestHdr},
                            Frame, State = #proc_state{subscriptions = Subs}) ->
-    Subs1 = dict:erase(ConsumerTag, Subs),
+    Subs1 = maps:remove(ConsumerTag, Subs),
     {ok, Dest} = rabbit_routing_util:parse_endpoint(DestHdr),
     maybe_delete_durable_sub(Dest, Frame, State#proc_state{subscriptions = Subs1}).
 
@@ -647,6 +654,7 @@ do_subscribe(Destination, DestHdr, Frame,
              State = #proc_state{subscriptions = Subs,
                             route_state   = RouteState,
                             channel       = Channel}) ->
+    check_subscription_access(Destination, State),
     Prefetch =
         rabbit_stomp_frame:integer_header(Frame, ?HEADER_PREFETCH_COUNT,
                                           undefined),
@@ -660,10 +668,10 @@ do_subscribe(Destination, DestHdr, Frame,
                 _         -> amqp_channel:call(
                                Channel, #'basic.qos'{prefetch_count = Prefetch})
             end,
-            case dict:find(ConsumerTag, Subs) of
+            case maps:find(ConsumerTag, Subs) of
                 {ok, _} ->
                     Message = "Duplicated subscription identifier",
-                    Detail = "A subscription identified by '~s' alredy exists.",
+                    Detail = "A subscription identified by '~s' already exists.",
                     _ = error(Message, Detail, [ConsumerTag], State),
                     _ = send_error(Message, Detail, [ConsumerTag], State),
                     {stop, normal, close_connection(State)};
@@ -696,7 +704,7 @@ do_subscribe(Destination, DestHdr, Frame,
                             exit(Err)
                     end,
                     ok(State#proc_state{subscriptions =
-                                       dict:store(
+                                       maps:put(
                                          ConsumerTag,
                                          #subscription{dest_hdr    = DestHdr,
                                                        ack_mode    = AckMode,
@@ -708,6 +716,23 @@ do_subscribe(Destination, DestHdr, Frame,
         {error, _} = Err ->
             Err
     end.
+
+check_subscription_access(Destination = {topic, _Topic},
+                          #proc_state{auth_login = _User,
+                                      connection = Connection}) ->
+    [{amqp_params, AmqpParams}, {internal_user, InternalUser = #user{username = Username}}] =
+        amqp_connection:info(Connection, [amqp_params, internal_user]),
+    #amqp_params_direct{virtual_host = VHost} = AmqpParams,
+    {Exchange, RoutingKey} = rabbit_routing_util:parse_routing(Destination),
+    Resource = #resource{virtual_host = VHost,
+        kind = topic,
+        name = rabbit_data_coercion:to_binary(Exchange)},
+    Context = #{routing_key  => rabbit_data_coercion:to_binary(RoutingKey),
+                variable_map => #{<<"vhost">> => VHost, <<"username">> => Username}
+    },
+    rabbit_access_control:check_topic_access(InternalUser, Resource, read, Context);
+check_subscription_access(_, _) ->
+    authorized.
 
 maybe_clean_up_queue(Queue, #proc_state{connection = Connection}) ->
     {ok, Channel} = amqp_connection:open_channel(Connection),
@@ -777,7 +802,7 @@ send_delivery(Delivery = #'basic.deliver'{consumer_tag = ConsumerTag},
                           session_id  = SessionId,
                           subscriptions = Subs,
                           version       = Version}) ->
-    NewState = case dict:find(ConsumerTag, Subs) of
+    NewState = case maps:find(ConsumerTag, Subs) of
         {ok, #subscription{ack_mode = AckMode}} ->
             send_frame(
               "MESSAGE",
@@ -848,7 +873,7 @@ ensure_reply_to(Frame = #stomp_frame{headers = Headers}, State) ->
 ensure_reply_queue(TempQueueId, State = #proc_state{channel       = Channel,
                                                reply_queues  = RQS,
                                                subscriptions = Subs}) ->
-    case dict:find(TempQueueId, RQS) of
+    case maps:find(TempQueueId, RQS) of
         {ok, RQ} ->
             {binary_to_list(RQ), State};
         error ->
@@ -870,13 +895,13 @@ ensure_reply_queue(TempQueueId, State = #proc_state{channel       = Channel,
             Destination = binary_to_list(Queue),
 
             %% synthesise a subscription to the reply queue destination
-            Subs1 = dict:store(ConsumerTag,
-                               #subscription{dest_hdr  = Destination,
-                                             multi_ack = false},
-                               Subs),
+            Subs1 = maps:put(ConsumerTag,
+                             #subscription{dest_hdr  = Destination,
+                                           multi_ack = false},
+                             Subs),
 
             {Destination, State#proc_state{
-                            reply_queues  = dict:store(TempQueueId, Queue, RQS),
+                            reply_queues  = maps:put(TempQueueId, Queue, RQS),
                             subscriptions = Subs1}}
     end.
 
@@ -1088,6 +1113,10 @@ ok(Command, Headers, BodyFragments, State) ->
                       headers     = Headers,
                       body_iolist = BodyFragments}, State}.
 
+amqp_death(access_refused = ErrorName, Explanation, State) ->
+    ErrorDesc = rabbit_misc:format("~s~n", [Explanation]),
+    log_error(ErrorName, ErrorDesc, none),
+    {stop, normal, close_connection(send_error(atom_to_list(ErrorName), ErrorDesc, State))};
 amqp_death(ReplyCode, Explanation, State) ->
     ErrorName = amqp_connection:error_atom(ReplyCode),
     ErrorDesc = rabbit_misc:format("~s~n", [Explanation]),
