@@ -13,6 +13,7 @@ Build-Depends:
  erlang-dev (>= 1:19.3),
  erlang-nox (>= 1:19.3),
  erlang-src (>= 1:19.3),
+ locales-all,
  python-all,
  python-simplejson,
  rsync,
