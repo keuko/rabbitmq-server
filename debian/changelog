@@ -26,6 +26,8 @@ rabbitmq-server (3.7.6-1) unstable; urgency=medium
     in this file (Closes: #812342), do not wait for timeout on shutdown either
     (Closes: #902136).
   * Updated debian/control for this release.
+  * Bumped debhelper to 10.
+  * Standards-Version is now 4.2.1.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 24 Oct 2018 18:39:10 +0200
 
