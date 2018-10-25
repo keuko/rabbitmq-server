@@ -30,6 +30,7 @@ Package: rabbitmq-server
 Architecture: all
 Depends:
  adduser,
+ erlang-base | erlang-base-hipe,
  erlang-nox (>= 1:19.3) | esl-erlang (>= 1:19.3),
  init-system-helpers,
  logrotate,
