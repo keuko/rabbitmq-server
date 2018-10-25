@@ -1,0 +1,16 @@
+Description: Allow using Elixir 1.6.5
+Author: Thomas Goirand <zigo@debian.org>
+Forwarded: not-needed
+Last-Update: 2018-10-25
+
+--- rabbitmq-server-3.7.8.orig/deps/rabbitmq_cli/mix.exs
++++ rabbitmq-server-3.7.8/deps/rabbitmq_cli/mix.exs
+@@ -20,7 +20,7 @@ defmodule RabbitMQCtl.MixfileBase do
+     [
+       app: :rabbitmqctl,
+       version: "3.7.8",
+-      elixir: ">= 1.6.6 and < 1.8.0",
++      elixir: ">= 1.6.5 and < 1.8.0",
+       build_embedded: Mix.env == :prod,
+       start_permanent: Mix.env == :prod,
+       escript: [main_module: RabbitMQCtl,
