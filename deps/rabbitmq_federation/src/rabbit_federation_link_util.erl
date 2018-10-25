@@ -36,7 +36,8 @@
 
 start_conn_ch(Fun, Upstream, UParams,
               XorQName = #resource{virtual_host = DownVHost}, State) ->
-    case open_monitor(#amqp_params_direct{virtual_host = DownVHost}, get_connection_name(Upstream, UParams)) of
+    ConnName = get_connection_name(Upstream, UParams),
+    case open_monitor(#amqp_params_direct{virtual_host = DownVHost}, ConnName) of
         {ok, DConn, DCh} ->
             case Upstream#upstream.ack_mode of
                 'on-confirm' ->
@@ -46,7 +47,7 @@ start_conn_ch(Fun, Upstream, UParams,
                 _ ->
                     ok
             end,
-            case open_monitor(UParams#upstream_params.params, get_connection_name(Upstream, UParams)) of
+            case open_monitor(UParams#upstream_params.params, ConnName) of
                 {ok, Conn, Ch} ->
                     %% Don't trap exits until we have established
                     %% connections so that if we try to delete
@@ -290,13 +291,18 @@ disposable_channel_call(Conn, Method) ->
     disposable_channel_call(Conn, Method, fun(_, _) -> ok end).
 
 disposable_channel_call(Conn, Method, ErrFun) ->
-    {ok, Ch} = amqp_connection:open_channel(Conn),
     try
-        amqp_channel:call(Ch, Method)
-    catch exit:{{shutdown, {server_initiated_close, Code, Text}}, _} ->
-            ErrFun(Code, Text)
-    after
-        ensure_channel_closed(Ch)
+        {ok, Ch} = amqp_connection:open_channel(Conn),
+        try
+            amqp_channel:call(Ch, Method)
+        catch exit:{{shutdown, {server_initiated_close, Code, Text}}, _} ->
+                ErrFun(Code, Text)
+        after
+            ensure_channel_closed(Ch)
+        end
+    catch
+          Exception:Reason ->
+            rabbit_log_federation:error("Federation link could not create a disposable (one-off) channel due to an error ~p: ~p~n", [Exception, Reason])
     end.
 
 disposable_connection_call(Params, Method, ErrFun) ->

@@ -538,13 +538,15 @@ unsafe_format(Fmt, Args) ->
         _:_ -> io_lib:format("FORMAT ERROR: ~p ~p", [Fmt, Args])
     end.
 
-%% @doc Print a record lager found during parse transform
+%% @doc Print a record or a list of records lager found during parse transform
 pr(Record, Module) when is_tuple(Record), is_atom(element(1, Record)) ->
     pr(Record, Module, []);
+pr(List, Module) when is_list(List) ->
+    pr(List, Module, []);
 pr(Record, _) ->
     Record.
 
-%% @doc Print a record lager found during parse transform
+%% @doc Print a record or a list of records lager found during parse transform
 pr(Record, Module, Options) when is_tuple(Record), is_atom(element(1, Record)), is_list(Options) ->
     try 
         case is_record_known(Record, Module) of
@@ -558,9 +560,14 @@ pr(Record, Module, Options) when is_tuple(Record), is_atom(element(1, Record)), 
         error:undef ->
             Record
     end;
+pr(List, Module, Options) when is_list(List), is_list(Options) ->
+    [pr(Element, Module, Options) || Element <- List];
 pr(Record, _, _) ->
     Record.
 
+zip([FieldName|RecordFields], [FieldValue|Record], Module, Options, ToReturn) when is_list(FieldValue) ->
+    zip(RecordFields, Record, Module, Options,
+        [{FieldName, pr(FieldValue, Module, Options)}|ToReturn]);
 zip([FieldName|RecordFields], [FieldValue|Record], Module, Options, ToReturn) ->
     Compress = lists:member(compress, Options),
     case   is_tuple(FieldValue) andalso
@@ -597,31 +604,36 @@ is_record_known(Record, Module) ->
 
 %% @doc Print stacktrace in human readable form
 pr_stacktrace(Stacktrace) ->
+    Stacktrace1 = case application:get_env(lager, reverse_pretty_stacktrace, true) of
+                      true ->
+                          lists:reverse(Stacktrace);
+                      _ ->
+                          Stacktrace
+                  end,
+    pr_stacktrace_(Stacktrace1).
+
+pr_stacktrace_(Stacktrace) ->
     Indent = "\n    ",
     lists:foldl(
         fun(Entry, Acc) ->
             Acc ++ Indent ++ error_logger_lager_h:format_mfa(Entry)
         end,
         [],
-        lists:reverse(Stacktrace)).
+        Stacktrace).
 
 pr_stacktrace(Stacktrace, {Class, Reason}) ->
-    lists:flatten(
-        pr_stacktrace(Stacktrace) ++ "\n" ++ io_lib:format("~s:~p", [Class, Reason])).
-    
-
-%% R15 compatibility only
-filtermap(Fun, List1) ->
-    lists:foldr(fun(Elem, Acc) ->
-                       case Fun(Elem) of
-                           false -> Acc;
-                           {true,Value} -> [Value|Acc]
-                       end
-                end, [], List1).
+    case application:get_env(lager, reverse_pretty_stacktrace, true) of
+        true ->
+            lists:flatten(
+              pr_stacktrace_(lists:reverse(Stacktrace)) ++ "\n" ++ io_lib:format("~s:~p", [Class, Reason]));
+        _ ->
+            lists:flatten(
+              io_lib:format("~s:~p", [Class, Reason]) ++ pr_stacktrace_(Stacktrace))
+    end.
 
 rotate_sink(Sink) ->
     Handlers = lager_config:global_get(handlers),
-    RotateHandlers = filtermap(
+    RotateHandlers = lists:filtermap(
         fun({Handler,_,S}) when S == Sink -> {true, {Handler, Sink}};
            (_)                            -> false 
         end, 

@@ -13,8 +13,7 @@
 ## The Initial Developer of the Original Code is GoPivotal, Inc.
 ## Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
 
-alias RabbitMQ.CLI.Core.CommandModules, as: CommandModules
-alias RabbitMQ.CLI.Core.Config, as: Config
+alias RabbitMQ.CLI.Core.{CommandModules, Config}
 
 defmodule RabbitMQ.CLI.Core.Parser do
 
@@ -142,7 +141,12 @@ defmodule RabbitMQ.CLI.Core.Parser do
     switches = default_switches()
     aliases = default_aliases()
     {options, tail, invalid} =
-      OptionParser.parse_head(input, strict: switches, aliases: aliases)
+      OptionParser.parse_head(
+        input,
+        strict: switches,
+        aliases: aliases,
+        allow_nonexistent_atoms: true,
+      )
     norm_options = normalize_options(options, switches) |> Map.new
     {norm_options, tail, invalid}
   end
@@ -157,7 +161,8 @@ defmodule RabbitMQ.CLI.Core.Parser do
     {options, args, invalid} = OptionParser.parse(
       input,
       strict: switches,
-      aliases: aliases
+      aliases: aliases,
+      allow_nonexistent_atoms: true,
     )
     norm_options = normalize_options(options, switches) |> Map.new
     {args, norm_options, invalid}
@@ -210,7 +215,7 @@ defmodule RabbitMQ.CLI.Core.Parser do
                         {command, {:redefining_global_aliases,
                                    command_aliases}}})
   end
-  
+
   defp apply_if_exported(mod, fun, args, default) do
     case function_exported?(mod, fun, length(args)) do
       true  -> apply(mod, fun, args);

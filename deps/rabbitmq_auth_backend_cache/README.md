@@ -47,37 +47,51 @@ for the `rabbit` application to include `rabbit_auth_backend_cache`.
 `auth_backends` is a list of authentication providers to try in order.
 
 
-So a configuration fragment that enables this plugin *only* would look like:
+So a configuration fragment that enables this plugin *only* (this example is **intentionally incomplete**) would look like:
 
     auth_backends.1 = cache
 
-Or using the classic config for both parameters:
+In the [classic config format](http://www.rabbitmq.com/configure.html#config-file-formats):
 
-    [{rabbit, [{auth_backends, [rabbit_auth_backend_cache]}]}].
+``` erlang
+[
+  {rabbit, [
+            {auth_backends, [rabbit_auth_backend_cache]}
+            ]
+  }
+].
+```
 
-To configure upstream auth backend, you should use `cached_backend` configuration item
-for the `rabbitmq_auth_backend_cache` application.
+This plugin wraps another auth backend (an "upstream" one) to reduce load on it.
 
-Configuration that uses [LDAP auth backend](https://rabbitmq.com/ldap.html):
+To configure upstream auth backend, use the `auth_cache.cached_backend` configuration key
+(`rabbitmq_auth_backend_cache.cached_backend` in the classic config format).
+
+The following configuration uses the [LDAP backend]((https://rabbitmq.com/ldap.html)) for both authentication and authorization
+and wraps it with caching:
+
+    auth_backends.1 = cache
 
     auth_cache.cached_backend = ldap
 
-    [{rabbitmq_auth_backend_cache, [{cached_backend, rabbit_auth_backend_ldap}]}].
+In the classic config format:
 
-It is still possible to [use different backends for authorization and authentication](https://www.rabbitmq.com/access-control.html).
+``` erlang
+[
+  {rabbit, [
+    %% ...
+  ]},
+  {rabbitmq_auth_backend_cache, [
+                                  {cached_backend, rabbit_auth_backend_ldap}
+                                ]},
+  {rabbit_auth_backend_ldap, [
+    %% ...
+  ]},
+].
+```
 
-The following example configures plugin to use LDAP backend for authentication
-but internal backend for authorisation:
+The following example combines this backend with the [HTTP backend](https://github.com/rabbitmq/rabbitmq-auth-backend-http/tree/master) and its [example Spring Boot application](https://github.com/rabbitmq/rabbitmq-auth-backend-http/tree/master/examples):
 
-    auth_cache.cached_backend.authn = ldap
-    auth_cache.cached_backend.authz = internal
-
-Or using the classic config for both parameters:
-
-    [{rabbitmq_auth_backend_cache, [{cached_backend, {rabbit_auth_backend_ldap,
-                                                      rabbit_auth_backend_internal}}]}].
-
-Another example for the [HTTP backend](https://github.com/rabbitmq/rabbitmq-auth-backend-http)
 
     auth_backends.1 = cache
     auth_cache.cached_backend = http
@@ -86,6 +100,49 @@ Another example for the [HTTP backend](https://github.com/rabbitmq/rabbitmq-auth
     auth_http.user_path     = http://localhost:8080/auth/user
     auth_http.vhost_path    = http://localhost:8080/auth/vhost
     auth_http.resource_path = http://localhost:8080/auth/resource
+
+In the classic config format:
+
+``` erlang
+[
+ {rabbit, [
+           {auth_backends, [rabbit_auth_backend_cache]}
+          ]
+ },
+ {rabbitmq_auth_backend_cache, [
+                                {cached_backend, rabbit_auth_backend_http}
+                               ]
+  },
+  {rabbitmq_auth_backend_http, [{http_method,   post},
+                                {user_path,     "http://127.0.0.1:8080/auth/user"},
+                                {vhost_path,    "http://127.0.0.1:8080/auth/vhost"},
+                                {resource_path, "http://127.0.0.1:8080/auth/resource"}
+                               ]
+  }
+].
+```
+
+It is still possible to [use different backends for authorization and authentication](https://www.rabbitmq.com/access-control.html).
+
+The following example configures plugin to use LDAP backend for authentication
+but internal backend for authorisation:
+
+    auth_backends.1 = cache
+
+    auth_cache.cached_backend.authn = ldap
+    auth_cache.cached_backend.authz = internal
+
+In the classic config format:
+
+``` erlang
+[
+  {rabbit, [
+    %% ...
+  ]},
+  {rabbitmq_auth_backend_cache, [{cached_backend, {rabbit_auth_backend_ldap,
+                                                   rabbit_auth_backend_internal}}]}].
+```
+
 
 
 ## Cache Configuration
@@ -97,8 +154,14 @@ You can configure TTL for cache items, by using `cache_ttl` configuration item, 
 
 Or using the classic config for both parameters:
 
-    [{rabbitmq_auth_backend_cache, [{cached_backend, rabbit_auth_backend_ldap}
-                                    {cache_ttl, 5000}]}].
+``` erlang
+[
+ {rabbit, [
+   %% ...
+ ]},
+ {rabbitmq_auth_backend_cache, [{cached_backend, rabbit_auth_backend_ldap}
+                                {cache_ttl, 5000}]}].
+```
 
 You can also use a custom cache module to store cached requests. This module
 should be an erlang module implementing `rabbit_auth_cache` behaviour and (optionally)
@@ -120,20 +183,36 @@ Cache module can be set via sysctl config format:
 
     auth_cache.cache_module = rabbit_auth_backend_ets_segmented
 
-Cache module additional arguments can be defined via the classic-style config only:
+Additional cache modulee arguments can only be defined via the [advanced config](http://www.rabbitmq.com/configure.html#advanced-config-file) or classic config format:
 
-    [{rabbitmq_auth_backend_cache, [{cache_module_args, [10000]}]}].
+``` erlang
+[
+ {rabbit, [
+   %% ...
+ ]},
 
-The above two snippets used in the classic config format:
+ {rabbitmq_auth_backend_cache, [{cache_module_args, [10000]}]}
+].
+```
 
-    [{rabbitmq_auth_backend_cache, [{cache_module, rabbit_auth_backend_ets_segmented},
-                                    {cache_module_args, [10000]}]}].
+The above two snippets combined in the classic config format:
+
+``` erlang
+[
+ {rabbit, [
+   %% ...
+ ]},
+
+ {rabbitmq_auth_backend_cache, [{cache_module, rabbit_auth_backend_ets_segmented},
+                                {cache_module_args, [10000]}]}
+].
+```
 
 The default values are `rabbit_auth_cache_ets` and `[]`, respectively.
 
 
 ## License and Copyright
 
-(c) 2016-2017 Pivotal Software Inc.
+(c) 2016-2018 Pivotal Software Inc.
 
 Released under the Mozilla Public License 1.1, same as RabbitMQ.

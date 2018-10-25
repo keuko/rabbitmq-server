@@ -31,7 +31,8 @@
          get_utc_offset/2,
          truncate/2,
          format_rfc3164_date/1,
-         format_rfc5424_date/1]).
+         format_rfc5424_date/1,
+         ensure_error_logger/0]).
 
 -define(GET_ENV(Property), application:get_env(syslog, Property)).
 
@@ -197,9 +198,41 @@ format_rfc3164_date({UtcDatetime, _MicroSecs}) ->
 format_rfc3164_date_({{_, Mo, D}, {H, Mi, S}}) ->
     [month(Mo), " ", day(D), " ", digit(H), $:, digit(Mi), $:, digit(S)].
 
+%%------------------------------------------------------------------------------
+%% @doc
+%% Start the `error_logger' process if not running and block the calling process
+%% until the `error_logger' is started and registered by name.
+%% @end
+%%------------------------------------------------------------------------------
+-spec ensure_error_logger() -> ok | {error, term()}.
+ensure_error_logger() ->
+    case whereis(error_logger) of
+        P when is_pid(P) ->
+            ok;
+        undefined ->
+            %% See error_logger:add_report_handler/3
+            wait_for_error_logger(
+              logger:add_handler(
+                error_logger,
+                error_logger,
+                #{level => info, filter_default => log}))
+    end.
+
 %%%=============================================================================
 %%% internal functions
 %%%=============================================================================
+
+%%------------------------------------------------------------------------------
+%% @private
+%%------------------------------------------------------------------------------
+wait_for_error_logger(ok) ->
+    try gen_event:which_handlers(error_logger) of
+        L when is_list(L) -> ok
+    catch
+        exit:noproc -> wait_for_error_logger(timer:sleep(100))
+    end;
+wait_for_error_logger(Error) ->
+    Error.
 
 %%------------------------------------------------------------------------------
 %% @private
@@ -332,13 +365,31 @@ to_type(integer, V) when is_list(V) ->
 to_type(ip_addr, V) when is_tuple(V) ->
     V;
 to_type(ip_addr, V) when is_list(V) ->
-    element(2, {ok, _} = inet:parse_address(V));
+    to_ip_addr_type(V);
 to_type(Type, V) when is_pid(V) ->
     to_type(Type, pid_to_list(V));
 to_type(Type, V) when is_integer(V) ->
     to_type(Type, integer_to_list(V));
 to_type(Type, V) when is_binary(V) ->
     to_type(Type, binary_to_list(V)).
+
+to_ip_addr_type(V) ->
+    handle_inet_parse_address(inet:parse_address(V), V).
+
+handle_inet_parse_address({error, einval}, V) ->
+    try_inet_getaddr(V, [inet, inet6]);
+handle_inet_parse_address({ok, IpAddr}, _V) ->
+    IpAddr.
+
+try_inet_getaddr(V, [AddrFamily|Rest]) ->
+    handle_inet_getaddr(inet:getaddr(V, AddrFamily), V, Rest).
+
+handle_inet_getaddr(_, _, []) ->
+    error(invalid_dest_host);
+handle_inet_getaddr({error, _}, V, AddrFamilies) ->
+    try_inet_getaddr(V, AddrFamilies);
+handle_inet_getaddr({ok, IpAddr}, _, _) ->
+    IpAddr.
 
 %%%=============================================================================
 %%% TESTS
@@ -409,8 +460,11 @@ to_type_test() ->
     ?assertEqual(1, to_type(integer, <<"1">>)),
     ?assertEqual(1, to_type(integer, "1")),
     ?assertEqual(1, to_type(integer, 1)),
+    ?assertEqual({127,0,0,1}, to_type(ip_addr, "localhost")),
+    ?assertEqual({127,0,0,1}, to_type(ip_addr, <<"localhost">>)),
     ?assertEqual({127,0,0,1}, to_type(ip_addr, <<"127.0.0.1">>)),
     ?assertEqual({127,0,0,1}, to_type(ip_addr, "127.0.0.1")),
-    ?assertEqual({0,0,0,0,0,0,0,1}, to_type(ip_addr, "::1")).
+    ?assertEqual({0,0,0,0,0,0,0,1}, to_type(ip_addr, "::1")),
+    ?assertError(invalid_dest_host, to_type(ip_addr, "5dzFvraZ7lZUAlQu")).
 
 -endif. %% TEST
