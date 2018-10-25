@@ -202,11 +202,14 @@ terminate(Reason, #state{downstream_connection = DConn,
                          internal_exchange     = IntExchange,
                          queue                 = Queue}) ->
     timer:cancel(TRef),
+
+    %% Terminate the direct connection
+    rabbit_federation_link_util:ensure_connection_closed(DConn),
+
     %% Cleanup of internal queue and exchange
     delete_upstream_queue(Conn, Queue),
     delete_upstream_exchange(Conn, IntExchange),
 
-    rabbit_federation_link_util:ensure_connection_closed(DConn),
     rabbit_federation_link_util:ensure_connection_closed(Conn),
     rabbit_federation_link_util:log_terminate(Reason, Upstream, UParams, XName),
     ok.
@@ -477,28 +480,24 @@ consume_from_upstream_queue(
                 queue        = Q}.
 
 ensure_upstream_bindings(State = #state{upstream            = Upstream,
-                                        upstream_params     = UParams,
                                         connection          = Conn,
                                         channel             = Ch,
                                         downstream_exchange = DownXName,
                                         queue               = Q}, Bindings) ->
-    #upstream_params{x_or_q = X, params = Params} = UParams,
     OldSuffix = rabbit_federation_db:get_active_suffix(
                   DownXName, Upstream, <<"A">>),
     Suffix = case OldSuffix of
                  <<"A">> -> <<"B">>;
                  <<"B">> -> <<"A">>
              end,
-    IntXNameBin = upstream_exchange_name(name(X), vhost(Params),
-                                         DownXName, Suffix),
+    IntXNameBin = upstream_exchange_name(Q, Suffix),
     ensure_upstream_exchange(State),
     ensure_internal_exchange(IntXNameBin, State),
     amqp_channel:call(Ch, #'queue.bind'{exchange = IntXNameBin, queue = Q}),
     State1 = State#state{internal_exchange = IntXNameBin},
     rabbit_federation_db:set_active_suffix(DownXName, Upstream, Suffix),
     State2 = lists:foldl(fun add_binding/2, State1, Bindings),
-    OldIntXNameBin = upstream_exchange_name(
-                       name(X), vhost(Params), DownXName, OldSuffix),
+    OldIntXNameBin = upstream_exchange_name(Q, OldSuffix),
     delete_upstream_exchange(Conn, OldIntXNameBin),
     State2.
 
@@ -589,9 +588,8 @@ upstream_queue_name(XNameBin, VHost, #resource{name         = DownXNameBin,
                end,
     <<"federation: ", XNameBin/binary, " -> ", Node/binary, DownPart/binary>>.
 
-upstream_exchange_name(XNameBin, VHost, DownXName, Suffix) ->
-    Name = upstream_queue_name(XNameBin, VHost, DownXName),
-    <<Name/binary, " ", Suffix/binary>>.
+upstream_exchange_name(UpstreamQName, Suffix) ->
+    <<UpstreamQName/binary, " ", Suffix/binary>>.
 
 delete_upstream_exchange(Conn, XNameBin) ->
     rabbit_federation_link_util:disposable_channel_call(

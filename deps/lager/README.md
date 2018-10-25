@@ -54,9 +54,8 @@ We review PRs and issues at least once a month as described below.
 OTP Support Policy
 ------------------
 The lager maintainers intend to support the past three OTP releases from
-current on the main 3.x branch of the project. As of 3.4.0 that includes 19, 18
-and 17. As a special case, until OTP 20 is released, we will continue to accept
-PRs for and support R16.
+current on the main 3.x branch of the project. As of July 2017 that includes 
+20, 19, and 18. 
 
 Lager may or may not run on older OTP releases but it will only be guaranteed
 tested on the previous three OTP releases. If you need a version of lager
@@ -297,7 +296,7 @@ You can also disable reformatting for OTP and Cowboy messages by setting variabl
 
 The `error_logger` handler will also log more complete error messages (protected
 with use of `trunc_io`) to a "crash log" which can be referred to for further
-information. The location of the crash log can be specified by the crash_log
+information. The location of the crash log can be specified by the `crash_log`
 application variable. If set to `false` it is not written at all.
 
 Messages in the crash log are subject to a maximum message size which can be
@@ -356,6 +355,39 @@ related processes crash, you can set a limit:
 ```
 
 It is probably best to keep this number small.
+
+### Event queue flushing
+
+When the high-water mark is exceeded, lager can be configured to flush all
+event notifications in the message queue. This can have unintended consequences
+for other handlers in the same event manager (in e.g. the `error_logger'), as
+events they rely on may be wrongly discarded. By default, this behavior is enabled,
+but can be controlled, for the `error_logger' via:
+
+```erlang
+{error_logger_flush_queue, true | false}
+```
+
+or for a specific sink, using the option:
+
+```erlang
+{flush_queue, true | false}
+
+If `flush_queue` is true, a message queue length threshold can be set, at which
+messages will start being discarded. The default threshold is `0`, meaning that
+if `flush_queue` is true, messages will be discarded if the high-water mark is
+exceeded, regardless of the length of the message queue. The option to control
+the threshold is, for `error_logger`:
+
+```erlang
+{error_logger_flush_threshold, 1000}
+```
+
+and for sinks:
+
+```erlang
+{flush_threshold, 1000}
+```
 
 ### Sink Killer
 
@@ -489,13 +521,58 @@ Some examples:
           6:00 hr
 ```
 
+On top of the day, week and month time format from newsyslog,
+hour specification is added from PR [#420](https://github.com/erlang-lager/lager/pull/420)
+
+```
+Format of hour specification is : [Hmm]
+The range for minute specification is:
+
+  mm      minutes, range 0 ... 59
+
+Some examples:
+
+  $H00    rotate every hour at HH:00
+  $D12H30 rotate every day at 12:30
+  $W0D0H0 rotate every week on Sunday at 00:00
+```
+
 To configure the crash log rotation, the following application variables are
 used:
 * `crash_log_size`
 * `crash_log_date`
 * `crash_log_count`
+* `crash_log_rotator`
 
 See the `.app.src` file for further details.
+
+Custom Log Rotation
+-------------------
+Custom log rotator could be configured with option for `lager_file_backend`
+```erlang
+{rotator, lager_rotator_default}
+```
+
+The module should provide the following callbacks as `lager_rotator_behaviour`
+
+```erlang
+%% @doc Create a log file
+-callback(create_logfile(Name::list(), Buffer::{integer(), integer()} | any()) ->
+    {ok, {FD::file:io_device(), Inode::integer(), Size::integer()}} | {error, any()}).
+
+%% @doc Open a log file
+-callback(open_logfile(Name::list(), Buffer::{integer(), integer()} | any()) ->
+    {ok, {FD::file:io_device(), Inode::integer(), Size::integer()}} | {error, any()}).
+
+%% @doc Ensure reference to current target, could be rotated
+-callback(ensure_logfile(Name::list(), FD::file:io_device(), Inode::integer(),
+                         Buffer::{integer(), integer()} | any()) ->
+    {ok, {FD::file:io_device(), Inode::integer(), Size::integer()}} | {error, any()}).
+
+%% @doc Rotate the log file
+-callback(rotate_logfile(Name::list(), Count::integer()) ->
+    ok).
+```
 
 Syslog Support
 --------------
@@ -504,11 +581,14 @@ Lager syslog output is provided as a separate application:
 separate application so lager itself doesn't have an indirect dependency on a
 port driver. Please see the `lager_syslog` README for configuration information.
 
-Older Backends
+Other Backends
 --------------
-Lager 2.0 changed the backend API, there are various 3rd party backends for
-lager available, but they may not have been updated to the new API. As they
-are updated, links to them can be re-added here.
+There are lots of them! Some connect log messages to AMQP, various logging
+analytic services ([bunyan](https://github.com/Vagabond/lager_bunyan_formatter),
+[loggly](https://github.com/kivra/lager_loggly), etc), and more. [Looking on
+hex](https://hex.pm/packages?_utf8=✓&search=lager&sort=recent_downloads) or
+using "lager BACKEND" where "BACKEND" is your preferred log solution
+on your favorite search engine is a good starting point.
 
 Exception Pretty Printing
 ----------------------
@@ -901,10 +981,10 @@ This approach will benefit from the fact that most elixir libs and frameworks
 are likely to use the elixir Logger and as such logging will all flow via the
 same logging mechanism.
 
-In [elixir 2.0 support for parse transforms will be deprecated](https://github.com/elixir-lang/elixir/issues/5762).
+In [elixir 1.5 support for parse transforms was deprecated](https://github.com/elixir-lang/elixir/issues/5762).
 Taking the "Lager as a Logger Backend" approach is likely bypass any related 
 regression issues that would be introduced into a project which is using lager 
-directly when updating to elixir 2.0.
+directly when updating to elixir 1.5.
 
 There are open source elixir Logger backends for Lager available:
 - [LagerLogger](https://github.com/PSPDFKit-labs/lager_logger)
@@ -912,10 +992,10 @@ There are open source elixir Logger backends for Lager available:
 
 ### Directly
 
-It is fully possible prior to elixir 2.0 to use lager and all its features
+It is fully possible prior to elixir 1.5 to use lager and all its features
 directly.
 
-After elixir 2.0 there will be no support for parse transforms, and it would be
+After elixir 1.5 there is no support for parse transforms, and it is
 recommended to use an elixir wrapper for the lager api that provides compile time
 log level exclusion via elixir macros when opting for direct use of lager.
 
@@ -974,6 +1054,46 @@ Example Usage:
 
 3.x Changelog
 -------------
+3.6.3 - 6 June 2018
+
+    * OTP 21 support
+
+3.6.2 - 26 April 2018
+
+    * Bugfix: flush_threshold not working (#449)
+    * Feature: Add `node` as a formatting option (#447)
+    * Documentation: Update Elixir section with information about parse_transform (#446)
+    * Bugfix: Correct default console configuation to use "[{level,info}]" instead (#445)
+    * Feature: Pretty print lists of records at top level and field values with lager:pr (#442)
+    * Bugfix: Ignore return value of lager:dispatch_log in lager.hrl (#441)
+
+3.6.1 - 1 February 2018
+
+    * Bugfix: Make a few corrections to the recent mailbox flushing changes (#436)
+    * Bugfix: add flush options to proplist validation (#439)
+    * Bugfix: Don't log when we dropped 0 messages (#440)
+
+3.6.0 - 16 January 2018
+
+    * Feature: Support logging with macros per level (#419)
+    * Feature: Support custom file rotation handler; support hourly file
+               rotation (#420)
+    * Feature: Optionally reverse pretty stacktraces (so errors are
+               at the top and the failed function call is at the bottom.)
+               (#424)
+    * Bugfix:  Handle OTP 20 gen_server failure where client pid
+               is dead. (#426)
+    * Feature: Optionally don't flush notify messages at
+               high water mark. (#427)
+    * Bugfix:  Handle another stacktrace format (#429)
+    * Bugfix:  Fix test failure using macros on OTP 18 (#430)
+    * Policy:  Remove all code which supports R15 (#432)
+
+3.5.2 - 19 October 2017
+
+    * Bugfix: Properly check for unicode characters in potentially deep
+              character list. (#417)
+
 3.5.1 - 15 June 2017
 
     * Doc fix: Missed a curly brace in an example. (#412)

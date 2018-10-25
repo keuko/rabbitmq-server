@@ -17,7 +17,7 @@
 -module(rabbit_binding).
 -include("rabbit.hrl").
 
--export([recover/2, exists/1, add/2, add/3, remove/1, remove/3, list/1]).
+-export([recover/0, recover/2, exists/1, add/2, add/3, remove/1, remove/3, list/1]).
 -export([list_for_source/1, list_for_destination/1,
          list_for_source_and_destination/2]).
 -export([new_deletions/0, combine_deletions/2, add_deletion/3,
@@ -102,16 +102,20 @@
                     routing_key, arguments,
                     vhost]).
 
-recover(XNames, QNames) ->
+%% Global table recovery
+recover() ->
     rabbit_misc:table_filter(
-      fun (Route) ->
-              mnesia:read({rabbit_semi_durable_route, Route}) =:= []
-      end,
-      fun (Route,  true) ->
-              ok = mnesia:write(rabbit_semi_durable_route, Route, write);
-          (_Route, false) ->
-              ok
-      end, rabbit_durable_route),
+        fun (Route) ->
+            mnesia:read({rabbit_semi_durable_route, Route}) =:= []
+        end,
+        fun (Route,  true) ->
+            ok = mnesia:write(rabbit_semi_durable_route, Route, write);
+            (_Route, false) ->
+                ok
+        end, rabbit_durable_route).
+
+%% Virtual host-specific recovery
+recover(XNames, QNames) ->
     XNameSet = sets:from_list(XNames),
     QNameSet = sets:from_list(QNames),
     SelectSet = fun (#resource{kind = exchange}) -> XNameSet;
@@ -339,9 +343,6 @@ binding_action(Binding = #binding{source      = SrcName,
               Fun(Src, Dst, Binding#binding{args = SortedArgs})
       end, ErrFun).
 
-dirty_delete_object(Table, Record, _LockKind) ->
-    mnesia:dirty_delete_object(Table, Record).
-
 sync_route(Route, true, true, Fun) ->
     ok = Fun(rabbit_durable_route, Route, write),
     sync_route(Route, false, true, Fun);
@@ -411,15 +412,15 @@ remove_routes(Routes) ->
     %% Of course the destination might not really be durable but it's
     %% just as easy to try to delete it from the semi-durable table
     %% than check first
-    [ok = sync_route(R, false, true, fun dirty_delete_object/3) ||
+    [ok = sync_route(R, false, true, fun mnesia:delete_object/3) ||
         R <- RamRoutes],
-    [ok = sync_route(R, true,  true, fun dirty_delete_object/3) ||
+    [ok = sync_route(R, true,  true, fun mnesia:delete_object/3) ||
         R <- DiskRoutes],
     [R#route.binding || R <- Routes].
 
 remove_transient_routes(Routes) ->
     [begin
-         ok = sync_transient_route(R, fun dirty_delete_object/3),
+         ok = sync_transient_route(R, fun mnesia:delete_object/3),
          R#route.binding
      end || R <- Routes].
 
@@ -443,10 +444,7 @@ remove_for_destination(DstName, OnlyDurable, Fun) ->
                         lists:keysort(#binding.source, Bindings), OnlyDurable).
 
 %% Instead of locking entire table on remove operations we can lock the
-%% affected resource only. This will allow us to use dirty_match_object for
-%% do faster search of records to delete.
-%% This works better when there are multiple resources deleted at once, for
-%% example when exclusive queues are deleted.
+%% affected resource only.
 lock_resource(Name) ->
     mnesia:lock({global, Name, mnesia:table_info(rabbit_route, where_to_write)},
                 write).

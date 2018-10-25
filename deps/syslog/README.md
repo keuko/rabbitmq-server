@@ -94,7 +94,7 @@ are available and can be configured in the application environment:
   Specifies whether the RFC5424 protocol backend should include the UTF-8 BOM
   in the message part of a Syslog packet. Default is `false`.
 
-* `{dest_host, inet:ip_address()}`
+* `{dest_host, inet:ip_address() | inet:hostname()}`
 
   Specifies the host to which Syslog packets will be sent. Default is
   `{127, 0, 0, 1}`.
@@ -331,6 +331,23 @@ TODO more details?
 
 History
 -------
+
+### Master (3.4.4)
+
+No changes to latest tag
+
+### 3.4.3
+
+* Add support for process ids formatted as strings in `lager` metadata (thanks
+  to @hairyhum)
+* Add basic support for OTP 21. This will make `syslog` _work_ with the new
+  `logger` API. But be aware that this is only a hack involving the start of the
+  legacy `error_logger`. If you want to use this, *do not forget* to set the
+  `kernel` environment variable `logger_sasl_compatible` to `true` in your
+  release. Unfortunately, the unit tests don't work with OTP 21. Proper support
+  for OTP 21 will be a topic for version 4.
+* Add support for hostnames as values for the `dest_host` configuration
+  (thanks to @lukebakken)
 
 ### 3.4.2
 
