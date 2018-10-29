@@ -58,6 +58,7 @@ Depends:
  erlang-syntax-tools (>= 1:19.3),
  erlang-tools (>= 1:19.3),
  erlang-xmerl (>= 1:19.3),
+ locales-all,
  logrotate,
  lsb-base,
  socat,
