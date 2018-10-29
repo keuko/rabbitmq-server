@@ -66,8 +66,8 @@ override_dh_auto_clean:
 override_dh_python2:
 	dh_python2 --shebang=/usr/bin/python
 
-override_dh_link:
-	dh_link
-	mv $(CURDIR)/debian/rabbitmq-server/usr/sbin/rabbitmqctl $(CURDIR)/debian/rabbitmq-server/usr/sbin/rabbitmqctl-real
-	cp $(CURDIR)/debian/rabbitmq-debian-wrapper $(CURDIR)/debian/rabbitmq-server/usr/sbin/rabbitmqctl
-	ln -s rabbitmqctl $(CURDIR)/debian/rabbitmq-server/usr/lib/rabbitmq/bin/rabbitmqctl-real
+#override_dh_link:
+#	dh_link
+#	mv $(CURDIR)/debian/rabbitmq-server/usr/sbin/rabbitmqctl $(CURDIR)/debian/rabbitmq-server/usr/sbin/rabbitmqctl-real
+#	cp $(CURDIR)/debian/rabbitmq-debian-wrapper $(CURDIR)/debian/rabbitmq-server/usr/sbin/rabbitmqctl
+#	ln -s rabbitmqctl $(CURDIR)/debian/rabbitmq-server/usr/lib/rabbitmq/bin/rabbitmqctl-real
