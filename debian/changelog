@@ -1,3 +1,9 @@
+rabbitmq-server (3.7.8-2) unstable; urgency=medium
+
+  * Remove Elixir version patch.
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 30 Oct 2018 08:28:31 +0000
+
 rabbitmq-server (3.7.8-1) unstable; urgency=medium
 
   [ Daniel Baumann ]
