@@ -1,6 +1,7 @@
 rabbitmq-server (3.7.8-4) unstable; urgency=medium
 
   * Remove Elixir version patch.
+  * Build-depends on Elixir 1.6.6.
 
  -- Thomas Goirand <zigo@debian.org>  Tue, 30 Oct 2018 08:28:31 +0000
 

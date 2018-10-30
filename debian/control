@@ -8,7 +8,7 @@ Uploaders:
 Build-Depends:
  debhelper (>= 10),
  dh-python,
- elixir (>= 1.6.5),
+ elixir (>= 1.6.6),
  erlang-base (>= 1:19.3),
  erlang-crypto (>= 1:19.3),
  erlang-dev (>= 1:19.3),
