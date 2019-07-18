@@ -6,7 +6,7 @@ Uploaders:
  James Page <james.page@ubuntu.com>,
  Thomas Goirand <zigo@debian.org>,
 Build-Depends:
- debhelper (>= 10),
+ debhelper-compat (= 10),
  dh-python,
  elixir (>= 1.6.6),
  erlang-base (>= 1:19.3),

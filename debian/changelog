@@ -3,6 +3,7 @@ rabbitmq-server (3.7.8-5) unstable; urgency=medium
   [ Ondřej Nový ]
   * Removing gbp.conf, not used anymore or should be specified in the
     developers dotfiles.
+  * Use debhelper-compat instead of debian/compat.
 
   [ Thomas Goirand ]
   * Also package rabbitmq-diagnostics.
