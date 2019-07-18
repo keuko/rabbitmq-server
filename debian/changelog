@@ -2,6 +2,7 @@ rabbitmq-server (3.7.8-5) UNRELEASED; urgency=medium
 
   * Removing gbp.conf, not used anymore or should be specified in the
     developers dotfiles.
+  * Use debhelper-compat instead of debian/compat.
 
  -- Ondřej Nový <onovy@debian.org>  Wed, 09 Jan 2019 14:42:13 +0100
 
