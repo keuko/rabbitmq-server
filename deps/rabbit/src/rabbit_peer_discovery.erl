@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is Pivotal Software, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_peer_discovery).
@@ -105,9 +105,15 @@ maybe_init() ->
     end.
 
 
--spec discover_cluster_nodes() -> {ok, Nodes :: list()} |
-                                  {ok, {Nodes :: list(), NodeType :: rabbit_types:node_type()}} |
-                                  {error, Reason :: string()}.
+%% This module doesn't currently sanity-check the return value of
+%% `Backend:list_nodes()`. Therefore, it could return something invalid:
+%% thus the `{ok, any()} in the spec.
+%%
+%% `rabbit_mnesia:init_from_config()` does some verifications.
+
+-spec discover_cluster_nodes() ->
+    {ok, {Nodes :: [node()], NodeType :: rabbit_types:node_type()} | any()} |
+    {error, Reason :: string()}.
 
 discover_cluster_nodes() ->
     Backend = backend(),
@@ -156,10 +162,7 @@ maybe_inject_randomized_delay() ->
 -spec inject_randomized_delay() -> ok.
 
 inject_randomized_delay() ->
-    {Min, Max} = case randomized_delay_range_in_ms() of
-                     {A, B} -> {A, B};
-                     [A, B] -> {A, B}
-                 end,
+    {Min, Max} = randomized_delay_range_in_ms(),
     case {Min, Max} of
         %% When the max value is set to 0, consider the delay to be disabled.
         %% In addition, `rand:uniform/1` will fail with a "no function clause"
@@ -253,12 +256,15 @@ unlock(Data) ->
 %% Implementation
 %%
 
--spec normalize(Nodes :: list() |
-                {Nodes :: list(), NodeType :: rabbit_types:node_type()} |
-                {ok, Nodes :: list()} |
-                {ok, {Nodes :: list(), NodeType :: rabbit_types:node_type()}} |
-                {error, Reason :: string()}) -> {ok, {Nodes :: list(), NodeType :: rabbit_types:node_type()}} |
-                                                {error, Reason :: string()}.
+-spec normalize(Nodes :: [node()] |
+                {Nodes :: [node()],
+                 NodeType :: rabbit_types:node_type()} |
+                {ok, Nodes :: [node()]} |
+                {ok, {Nodes :: [node()],
+                      NodeType :: rabbit_types:node_type()}} |
+                {error, Reason :: string()}) ->
+    {ok, {Nodes :: [node()], NodeType :: rabbit_types:node_type()}} |
+    {error, Reason :: string()}.
 
 normalize(Nodes) when is_list(Nodes) ->
   {ok, {Nodes, disc}};
@@ -291,14 +297,12 @@ node_prefix() ->
 
 
 
--spec append_node_prefix(Value :: binary() | list()) -> atom().
+-spec append_node_prefix(Value :: binary() | string()) -> string().
 
-append_node_prefix(Value) ->
+append_node_prefix(Value) when is_binary(Value) orelse is_list(Value) ->
     Val = rabbit_data_coercion:to_list(Value),
     Hostname = case string:tokens(Val, ?NODENAME_PART_SEPARATOR) of
-                   [_ExistingPrefix, Val] ->
-                       Val;
-                   [Val]                  ->
-                       Val
+                   [_ExistingPrefix, HN] -> HN;
+                   [HN]                  -> HN
                end,
     string:join([node_prefix(), Hostname], ?NODENAME_PART_SEPARATOR).

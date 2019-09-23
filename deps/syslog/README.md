@@ -94,7 +94,7 @@ are available and can be configured in the application environment:
   Specifies whether the RFC5424 protocol backend should include the UTF-8 BOM
   in the message part of a Syslog packet. Default is `false`.
 
-* `{dest_host, inet:ip_address()}`
+* `{dest_host, inet:ip_address() | inet:hostname()}`
 
   Specifies the host to which Syslog packets will be sent. Default is
   `{127, 0, 0, 1}`.
@@ -173,10 +173,21 @@ are available and can be configured in the application environment:
   multiline messages well, e.g. will insert garbage characters for a newline
   character. Default is `false`.
 
+* `{hostname_transform, none | short | long}`
+
+  Specifies how the hostname obtained from `node()` will be transformed for use
+  as the hostname in messages. If the setting is `none` the value will be used
+  as-is, if the setting is `short` any domain part of the name will be removed,
+  and if the setting is `long` then `syslog` will attempt to fully qualify the
+  name if no domain part is present. If the hostname obtained from `node()` is
+  an IP address then no transformation is applied. If the node is not alive then
+  the result of `inet:gethostname` will be used in place of `node()`. Note that
+  RFC 3164 requires that the domain is not included in the hostname, and will
+  remove the domain part from the resulting hostname. Default is `none`.
+
 If your application really needs fast asynchronous logging and you like to live
-dangerously, logging can be done either with the `error_logger` or the `syslog`
-API and the `syslog` application should be configured with `{async, true}` and
-`{msg_queue_limit, infinity}`. This sets `syslog` into asynchronous delivery
+dangerously, the `syslog` application should be configured with `{async, true}`
+and `{msg_queue_limit, infinity}`. This sets `syslog` into asynchronous delivery
 mode and all message queues are allowed to grow indefinitely.
 
 The `syslog` application will disable the standard `error_logger` TTY output on
@@ -238,7 +249,9 @@ It can handle more complex options such as below
         {syslog_lager_backend, [
           debug,                                 %% Level
           {"sdata_id", [application, pid]},      %% STRUCTURED-DATA
-          {lager_default_formatter, [message]}   %% Lager formatting
+          {lager_default_formatter, [message]},  %% Lager formatting
+          true                                   %% Use application field from
+                                                 %% lager metadata for appname
         ]}
     ]}
 ]}.
@@ -327,10 +340,31 @@ probably, copying the large terms makes the logging processes slow enough that
 from growing too much. However, it could be observed again that some senders
 were blocked over 10 seconds.
 
-TODO more details?
-
 History
 -------
+
+### 3.4.5
+
+* Do not open sockets in active mode. This prevents a socket `bind` which in
+  turn lets the socket listen for incoming traffic (thanks to @lukebakken)
+
+### 3.4.4
+
+* Allow message header customizations, e.g. `APP-NAME` and/or `HOSTNAME` (thanks
+  to @GlenWalker)
+
+### 3.4.3
+
+* Add support for process ids formatted as strings in `lager` metadata (thanks
+  to @hairyhum)
+* Add basic support for OTP 21. This will make `syslog` _work_ with the new
+  `logger` API. But be aware that this is only a hack involving the start of the
+  legacy `error_logger`. If you want to use this, *do not forget* to set the
+  `kernel` environment variable `logger_sasl_compatible` to `true` in your
+  release. Unfortunately, the unit tests don't work with OTP 21. Proper support
+  for OTP 21 will be a topic for version 4.
+* Add support for hostnames as values for the `dest_host` configuration
+  (thanks to @lukebakken)
 
 ### 3.4.2
 

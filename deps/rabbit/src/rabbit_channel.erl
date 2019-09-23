@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,10 +11,14 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_channel).
+
+%% Transitional step until we can require Erlang/OTP 21 and
+%% use the now recommended try/catch syntax for obtaining the stack trace.
+-compile(nowarn_deprecated_function).
 
 %% rabbit_channel processes represent an AMQP 0-9-1 channels.
 %%
@@ -60,10 +64,12 @@
 -export([refresh_config_local/0, ready_for_close/1]).
 -export([refresh_interceptors/0]).
 -export([force_event_refresh/1]).
+-export([source/2]).
 
 -export([init/1, terminate/2, code_change/3, handle_call/3, handle_cast/2,
          handle_info/2, handle_pre_hibernate/1, prioritise_call/4,
          prioritise_cast/3, prioritise_info/3, format_message_queue/2]).
+
 %% Internal
 -export([list_local/0, emit_info_local/3, deliver_reply_local/3]).
 -export([get_vhost/1, get_user/1]).
@@ -71,7 +77,7 @@
 -export([build_topic_variable_map/3]).
 
 %% Mgmt HTTP API refactor
--export([handle_method/5]).
+-export([handle_method/6]).
 
 -record(ch, {
   %% starting | running | flow | closing
@@ -90,6 +96,9 @@
   %% same as reader's name, see #v1.name
   %% in rabbit_reader
   conn_name,
+  %% channel's originating source e.g. rabbit_reader | rabbit_direct | undefined
+  %% or any other channel creating/spawning entity
+  source,
   %% limiter pid, see rabbit_limiter
   limiter,
   %% none | {Msgs, Acks} | committing | failed |
@@ -331,12 +340,29 @@ list_local() ->
 info_keys() -> ?INFO_KEYS.
 
 info(Pid) ->
-    gen_server2:call(Pid, info, infinity).
+    {Timeout, Deadline} = get_operation_timeout_and_deadline(),
+    try
+        case gen_server2:call(Pid, {info, Deadline}, Timeout) of
+            {ok, Res}      -> Res;
+            {error, Error} -> throw(Error)
+        end
+    catch
+        exit:{timeout, _} ->
+            rabbit_log:error("Timed out getting channel ~p info", [Pid]),
+            throw(timeout)
+    end.
 
 info(Pid, Items) ->
-    case gen_server2:call(Pid, {info, Items}, infinity) of
-        {ok, Res}      -> Res;
-        {error, Error} -> throw(Error)
+    {Timeout, Deadline} = get_operation_timeout_and_deadline(),
+    try
+        case gen_server2:call(Pid, {{info, Items}, Deadline}, Timeout) of
+            {ok, Res}      -> Res;
+            {error, Error} -> throw(Error)
+        end
+    catch
+        exit:{timeout, _} ->
+            rabbit_log:error("Timed out getting channel ~p info", [Pid]),
+            throw(timeout)
     end.
 
 info_all() ->
@@ -390,9 +416,20 @@ refresh_interceptors() ->
 ready_for_close(Pid) ->
     rabbit_channel_common:ready_for_close(Pid).
 
+% Note: https://www.pivotaltracker.com/story/show/166962656
+% This event is necessary for the stats timer to be initialized with
+% the correct values once the management agent has started
 force_event_refresh(Ref) ->
     [gen_server2:cast(C, {force_event_refresh, Ref}) || C <- list()],
     ok.
+
+-spec source(pid(), any()) -> any().
+
+source(Pid, Source) when is_pid(Pid) ->
+    case erlang:is_process_alive(Pid) of
+        true  -> Pid ! {channel_source, Source};
+        false -> {error, channel_terminated}
+    end.
 
 %%---------------------------------------------------------------------------
 
@@ -483,13 +520,20 @@ prioritise_info(Msg, _Len, _State) ->
 handle_call(flush, _From, State) ->
     reply(ok, State);
 
-handle_call(info, _From, State) ->
-    reply(infos(?INFO_KEYS, State), State);
-
-handle_call({info, Items}, _From, State) ->
+handle_call({info, Deadline}, _From, State) ->
     try
-        reply({ok, infos(Items, State)}, State)
-    catch Error -> reply({error, Error}, State)
+        reply({ok, infos(?INFO_KEYS, Deadline, State)}, State)
+    catch
+        Error ->
+            reply({error, Error}, State)
+    end;
+
+handle_call({{info, Items}, Deadline}, _From, State) ->
+    try
+        reply({ok, infos(Items, Deadline, State)}, State)
+    catch
+        Error ->
+            reply({error, Error}, State)
     end;
 
 handle_call(refresh_config, _From, State = #ch{virtual_host = VHost}) ->
@@ -610,6 +654,9 @@ handle_cast({send_drained, CTagCredit}, State = #ch{writer_pid = WriterPid}) ->
      || {ConsumerTag, CreditDrained} <- CTagCredit],
     noreply(State);
 
+% Note: https://www.pivotaltracker.com/story/show/166962656
+% This event is necessary for the stats timer to be initialized with
+% the correct values once the management agent has started
 handle_cast({force_event_refresh, Ref}, State) ->
     rabbit_event:notify(channel_created, infos(?CREATION_EVENT_KEYS, State),
                         Ref),
@@ -676,7 +723,10 @@ handle_info({{Ref, Node}, LateAnswer}, State = #ch{channel = Channel})
   when is_reference(Ref) ->
     rabbit_log_channel:warning("Channel ~p ignoring late answer ~p from ~p",
         [Channel, LateAnswer, Node]),
-    noreply(State).
+    noreply(State);
+
+handle_info({channel_source, Source}, State = #ch{}) ->
+    noreply(State#ch{source = Source}).
 
 handle_pre_hibernate(State) ->
     ok = clear_permission_cache(),
@@ -730,9 +780,7 @@ send(Command, #ch{writer_pid = WriterPid}) ->
     ok = rabbit_writer:send_command(WriterPid, Command).
 
 format_soft_error(#amqp_error{name = N, explanation = E, method = M}) ->
-    io_lib:format("operation ~s caused a channel exception ~s: ~ts", [M, N, E]);
-format_soft_error(Reason) ->
-    Reason.
+    io_lib:format("operation ~s caused a channel exception ~s: ~ts", [M, N, E]).
 
 handle_exception(Reason, State = #ch{protocol     = Protocol,
                                      channel      = Channel,
@@ -801,11 +849,11 @@ check_write_permitted(Resource, User) ->
 check_read_permitted(Resource, User) ->
     check_resource_access(User, Resource, read).
 
-check_write_permitted_on_topic(Resource, User, ConnPid, RoutingKey) ->
-    check_topic_authorisation(Resource, User, ConnPid, RoutingKey, write).
+check_write_permitted_on_topic(Resource, User, ConnPid, RoutingKey, ChSrc) ->
+    check_topic_authorisation(Resource, User, ConnPid, RoutingKey, ChSrc, write).
 
-check_read_permitted_on_topic(Resource, User, ConnPid, RoutingKey) ->
-    check_topic_authorisation(Resource, User, ConnPid, RoutingKey, read).
+check_read_permitted_on_topic(Resource, User, ConnPid, RoutingKey, ChSrc) ->
+    check_topic_authorisation(Resource, User, ConnPid, RoutingKey, ChSrc, read).
 
 check_user_id_header(#'P_basic'{user_id = undefined}, _) ->
     ok;
@@ -841,14 +889,17 @@ check_internal_exchange(_) ->
     ok.
 
 check_topic_authorisation(Resource = #exchange{type = topic},
-                          User, none, RoutingKey, Permission) ->
+                          User, none, RoutingKey, _ChSrc, Permission) ->
     %% Called from outside the channel by mgmt API
     AmqpParams = [],
     check_topic_authorisation(Resource, User, AmqpParams, RoutingKey, Permission);
 check_topic_authorisation(Resource = #exchange{type = topic},
-                          User, ConnPid, RoutingKey, Permission) when is_pid(ConnPid) ->
-    AmqpParams = get_amqp_params(ConnPid),
+                          User, ConnPid, RoutingKey, ChSrc, Permission) when is_pid(ConnPid) ->
+    AmqpParams = get_amqp_params(ConnPid, ChSrc),
     check_topic_authorisation(Resource, User, AmqpParams, RoutingKey, Permission);
+check_topic_authorisation(_, _, _, _, _, _) ->
+    ok.
+
 check_topic_authorisation(#exchange{name = Name = #resource{virtual_host = VHost}, type = topic},
                           User = #user{username = Username},
                           AmqpParams, RoutingKey, Permission) ->
@@ -866,11 +917,10 @@ check_topic_authorisation(#exchange{name = Name = #resource{virtual_host = VHost
             User, Resource, Permission, Context),
             CacheTail = lists:sublist(Cache, ?MAX_PERMISSION_CACHE_SIZE-1),
             put(topic_permission_cache, [{Resource, Context, Permission} | CacheTail])
-    end;
-check_topic_authorisation(_, _, _, _, _) ->
-    ok.
+    end.
 
-get_amqp_params(ConnPid) when is_pid(ConnPid) ->
+get_amqp_params(_ConnPid, rabbit_reader) -> [];
+get_amqp_params(ConnPid, _Any) when is_pid(ConnPid) ->
     Timeout = get_operation_timeout(),
     get_amqp_params(ConnPid, rabbit_misc:is_process_alive(ConnPid), Timeout).
 
@@ -1082,13 +1132,14 @@ handle_method(#'basic.publish'{exchange    = ExchangeNameBin,
                                    user            = #user{username = Username} = User,
                                    conn_name       = ConnName,
                                    delivery_flow   = Flow,
-                                   conn_pid        = ConnPid}) ->
+                                   conn_pid        = ConnPid,
+                                   source          = ChSrc}) ->
     check_msg_size(Content),
     ExchangeName = rabbit_misc:r(VHostPath, exchange, ExchangeNameBin),
     check_write_permitted(ExchangeName, User),
     Exchange = rabbit_exchange:lookup_or_die(ExchangeName),
     check_internal_exchange(Exchange),
-    check_write_permitted_on_topic(Exchange, User, ConnPid, RoutingKey),
+    check_write_permitted_on_topic(Exchange, User, ConnPid, RoutingKey, ChSrc),
     %% We decode the content's properties here because we're almost
     %% certain to want to look at delivery-mode and priority.
     DecodedContent = #content {properties = Props} =
@@ -1306,7 +1357,7 @@ handle_method(#'basic.qos'{prefetch_size = Size}, _, _State) when Size /= 0 ->
 handle_method(#'basic.qos'{global         = false,
                            prefetch_count = PrefetchCount},
               _, State = #ch{limiter = Limiter}) ->
-    %% Ensures that if default was set, it's overriden
+    %% Ensures that if default was set, it's overridden
     Limiter1 = rabbit_limiter:unlimit_prefetch(Limiter),
     {reply, #'basic.qos_ok'{}, State#ch{consumer_prefetch = PrefetchCount,
                                         limiter = Limiter1}};
@@ -1363,79 +1414,90 @@ handle_method(#'exchange.declare'{nowait = NoWait} = Method,
               _, State = #ch{virtual_host = VHostPath,
                              user = User,
                              queue_collector_pid = CollectorPid,
-                             conn_pid = ConnPid}) ->
-    handle_method(Method, ConnPid, CollectorPid, VHostPath, User),
+                             conn_pid = ConnPid,
+                             source   = ChSrc}) ->
+    handle_method(Method, ConnPid, ChSrc, CollectorPid, VHostPath, User),
     return_ok(State, NoWait, #'exchange.declare_ok'{});
 
 handle_method(#'exchange.delete'{nowait = NoWait} = Method,
               _, State = #ch{conn_pid = ConnPid,
+                             source   = ChSrc,
                              virtual_host = VHostPath,
                              queue_collector_pid = CollectorPid,
                              user = User}) ->
-    handle_method(Method, ConnPid, CollectorPid, VHostPath, User),
+    handle_method(Method, ConnPid, ChSrc, CollectorPid, VHostPath, User),
     return_ok(State, NoWait,  #'exchange.delete_ok'{});
 
 handle_method(#'exchange.bind'{nowait = NoWait} = Method,
               _, State = #ch{virtual_host        = VHostPath,
                              conn_pid            = ConnPid,
+                             source              = ChSrc,
                              queue_collector_pid = CollectorPid,
                              user = User}) ->
-    handle_method(Method, ConnPid, CollectorPid, VHostPath, User),
+    handle_method(Method, ConnPid, ChSrc, CollectorPid, VHostPath, User),
     return_ok(State, NoWait, #'exchange.bind_ok'{});
 
 handle_method(#'exchange.unbind'{nowait = NoWait} = Method,
               _, State = #ch{virtual_host        = VHostPath,
                              conn_pid            = ConnPid,
+                             source              = ChSrc,
                              queue_collector_pid = CollectorPid,
                              user = User}) ->
-    handle_method(Method, ConnPid, CollectorPid, VHostPath, User),
+    handle_method(Method, ConnPid, ChSrc, CollectorPid, VHostPath, User),
     return_ok(State, NoWait, #'exchange.unbind_ok'{});
 
 handle_method(#'queue.declare'{nowait = NoWait} = Method,
               _, State = #ch{virtual_host        = VHostPath,
                              conn_pid            = ConnPid,
+                             source              = ChSrc,
                              queue_collector_pid = CollectorPid,
                              user = User}) ->
     {ok, QueueName, MessageCount, ConsumerCount} =
-        handle_method(Method, ConnPid, CollectorPid, VHostPath, User),
+        handle_method(Method, ConnPid, ChSrc, CollectorPid, VHostPath, User),
     return_queue_declare_ok(QueueName, NoWait, MessageCount,
                             ConsumerCount, State);
 
 handle_method(#'queue.delete'{nowait = NoWait} = Method, _,
               State = #ch{conn_pid     = ConnPid,
+                          source       = ChSrc,
                           virtual_host = VHostPath,
                           queue_collector_pid = CollectorPid,
                           user         = User}) ->
-    {ok, PurgedMessageCount} = handle_method(Method, ConnPid, CollectorPid,
-                                             VHostPath, User),
+    {ok, PurgedMessageCount} =
+        handle_method(Method, ConnPid, ChSrc, CollectorPid, VHostPath, User),
     return_ok(State, NoWait,
               #'queue.delete_ok'{message_count = PurgedMessageCount});
 
 handle_method(#'queue.bind'{nowait = NoWait} = Method, _,
               State = #ch{conn_pid = ConnPid,
+                          source   = ChSrc,
                           user     = User,
                           queue_collector_pid = CollectorPid,
                           virtual_host = VHostPath}) ->
-    handle_method(Method, ConnPid, CollectorPid, VHostPath, User),
+    handle_method(Method, ConnPid, ChSrc, CollectorPid, VHostPath, User),
     return_ok(State, NoWait, #'queue.bind_ok'{});
 
 handle_method(#'queue.unbind'{} = Method, _,
               State = #ch{conn_pid = ConnPid,
+                          source   = ChSrc,
                           user     = User,
                           queue_collector_pid = CollectorPid,
                           virtual_host = VHostPath}) ->
-    handle_method(Method, ConnPid, CollectorPid, VHostPath, User),
+    handle_method(Method, ConnPid, ChSrc, CollectorPid, VHostPath, User),
     return_ok(State, false, #'queue.unbind_ok'{});
 
 handle_method(#'queue.purge'{nowait = NoWait} = Method,
               _, State = #ch{conn_pid = ConnPid,
+                             source   = ChSrc,
                              user     = User,
                              queue_collector_pid = CollectorPid,
                              virtual_host = VHostPath}) ->
-    {ok, PurgedMessageCount} = handle_method(Method, ConnPid, CollectorPid,
-                                             VHostPath, User),
-    return_ok(State, NoWait,
-              #'queue.purge_ok'{message_count = PurgedMessageCount});
+    case handle_method(Method, ConnPid, ChSrc, CollectorPid,
+                       VHostPath, User) of
+        {ok, PurgedMessageCount} ->
+            return_ok(State, NoWait,
+                      #'queue.purge_ok'{message_count = PurgedMessageCount})
+    end;
 
 handle_method(#'tx.select'{}, _, #ch{confirm_enabled = true}) ->
     precondition_failed("cannot switch from confirm to tx mode");
@@ -1573,9 +1635,9 @@ handle_publishing_queue_down(QPid, Reason, State = #ch{unconfirmed = UC,
     State1 = State#ch{mandatory = Mand1},
     case rabbit_misc:is_abnormal_exit(Reason) of
         true  -> {MXs, UC1} = dtree:take_all(QPid, UC),
-                 send_nacks(MXs, State1#ch{unconfirmed = UC1});
+                 record_rejects(MXs, State1#ch{unconfirmed = UC1});
         false -> {MXs, UC1} = dtree:take(QPid, UC),
-                              record_confirms(MXs, State1#ch{unconfirmed = UC1})
+                 record_confirms(MXs, State1#ch{unconfirmed = UC1})
 
     end.
 
@@ -1630,7 +1692,7 @@ handle_delivering_queue_down(QPid, State = #ch{delivering_queues = DQ}) ->
     State#ch{delivering_queues = sets:del_element(QPid, DQ)}.
 
 binding_action(Fun, SourceNameBin0, DestinationType, DestinationNameBin0,
-               RoutingKey, Arguments, VHostPath, ConnPid,
+               RoutingKey, Arguments, VHostPath, ConnPid, ChSrc,
                #user{username = Username} = User) ->
     ExchangeNameBin = strip_cr_lf(SourceNameBin0),
     DestinationNameBin = strip_cr_lf(DestinationNameBin0),
@@ -1639,14 +1701,11 @@ binding_action(Fun, SourceNameBin0, DestinationType, DestinationNameBin0,
     ExchangeName = rabbit_misc:r(VHostPath, exchange, ExchangeNameBin),
     [check_not_default_exchange(N) || N <- [DestinationName, ExchangeName]],
     check_read_permitted(ExchangeName, User),
-    ExchangeLookup = rabbit_exchange:lookup(ExchangeName),
-    case ExchangeLookup of
+    case rabbit_exchange:lookup(ExchangeName) of
         {error, not_found} ->
-            %% no-op
-            ExchangeLookup;
+            ok;
         {ok, Exchange}     ->
-            check_read_permitted_on_topic(Exchange, User, ConnPid, RoutingKey),
-            ExchangeLookup
+            check_read_permitted_on_topic(Exchange, User, ConnPid, RoutingKey, ChSrc)
     end,
     case Fun(#binding{source      = ExchangeName,
                       destination = DestinationName,
@@ -1905,37 +1964,29 @@ process_routing_confirm(true, QPids,  MsgSeqNo,  XName, State) ->
     State#ch{unconfirmed = dtree:insert(MsgSeqNo, QPids, XName,
                                         State#ch.unconfirmed)}.
 
-send_nacks([], State) ->
-    State;
-send_nacks(_MXs, State = #ch{state = closing,
-                             tx    = none}) -> %% optimisation
-    State;
-send_nacks(MXs, State = #ch{tx = none}) ->
-    coalesce_and_send([MsgSeqNo || {MsgSeqNo, _} <- MXs],
-                      fun(MsgSeqNo, Multiple) ->
-                              #'basic.nack'{delivery_tag = MsgSeqNo,
-                                            multiple     = Multiple}
-                      end, State);
-send_nacks(_MXs, State = #ch{state = closing}) -> %% optimisation
-    State#ch{tx = failed};
-send_nacks(_, State) ->
-    maybe_complete_tx(State#ch{tx = failed}).
-
 send_confirms_and_nacks(State = #ch{tx = none, confirmed = [], rejected = []}) ->
     State;
 send_confirms_and_nacks(State = #ch{tx = none, confirmed = C, rejected = R}) ->
     case rabbit_node_monitor:pause_partition_guard() of
-        ok      -> ConfirmMsgSeqNos =
-                       lists:foldl(
-                         fun ({MsgSeqNo, XName}, MSNs) ->
-                                 ?INCR_STATS(exchange_stats, XName, 1,
-                                             confirm, State),
-                                 [MsgSeqNo | MSNs]
-                         end, [], lists:append(C)),
-                   State1 = send_confirms(ConfirmMsgSeqNos, State#ch{confirmed = []}),
-                   %% TODO: msg seq nos, same as for confirms. Need to implement
-                   %% nack rates first.
-                   send_nacks(lists:append(R), State1#ch{rejected = []});
+        ok      ->
+            Confirms = lists:append(C),
+            Rejects = lists:append(R),
+            ConfirmMsgSeqNos =
+                lists:foldl(
+                    fun ({MsgSeqNo, XName}, MSNs) ->
+                        ?INCR_STATS(exchange_stats, XName, 1, confirm, State),
+                        [MsgSeqNo | MSNs]
+                    end, [], Confirms),
+            RejectMsgSeqNos = [MsgSeqNo || {MsgSeqNo, _} <- Rejects],
+
+            State1 = send_confirms(ConfirmMsgSeqNos,
+                                   RejectMsgSeqNos,
+                                   State#ch{confirmed = []}),
+            %% TODO: msg seq nos, same as for confirms. Need to implement
+            %% nack rates first.
+            send_nacks(RejectMsgSeqNos,
+                       ConfirmMsgSeqNos,
+                       State1#ch{rejected = []});
         pausing -> State
     end;
 send_confirms_and_nacks(State) ->
@@ -1944,26 +1995,44 @@ send_confirms_and_nacks(State) ->
         pausing -> State
     end.
 
-send_confirms([], State) ->
+send_nacks([], _, State) ->
     State;
-send_confirms(_Cs, State = #ch{state = closing}) -> %% optimisation
+send_nacks(_Rs, _, State = #ch{state = closing,
+                                tx    = none}) -> %% optimisation
     State;
-send_confirms([MsgSeqNo], State) ->
+send_nacks(Rs, Cs, State = #ch{tx = none}) ->
+    coalesce_and_send(Rs, Cs,
+                      fun(MsgSeqNo, Multiple) ->
+                              #'basic.nack'{delivery_tag = MsgSeqNo,
+                                            multiple     = Multiple}
+                      end, State);
+send_nacks(_MXs, _, State = #ch{state = closing}) -> %% optimisation
+    State#ch{tx = failed};
+send_nacks(_, _, State) ->
+    maybe_complete_tx(State#ch{tx = failed}).
+
+send_confirms([], _, State) ->
+    State;
+send_confirms(_Cs, _, State = #ch{state = closing}) -> %% optimisation
+    State;
+send_confirms([MsgSeqNo], _, State) ->
     ok = send(#'basic.ack'{delivery_tag = MsgSeqNo}, State),
     State;
-send_confirms(Cs, State) ->
-    coalesce_and_send(Cs, fun(MsgSeqNo, Multiple) ->
+send_confirms(Cs, Rs, State) ->
+    coalesce_and_send(Cs, Rs,
+                      fun(MsgSeqNo, Multiple) ->
                                   #'basic.ack'{delivery_tag = MsgSeqNo,
                                                multiple     = Multiple}
-                          end, State).
+                      end, State).
 
-coalesce_and_send(MsgSeqNos, MkMsgFun, State = #ch{unconfirmed = UC}) ->
+coalesce_and_send(MsgSeqNos, NegativeMsgSeqNos, MkMsgFun, State = #ch{unconfirmed = UC}) ->
     SMsgSeqNos = lists:usort(MsgSeqNos),
-    CutOff = case dtree:is_empty(UC) of
+    UnconfirmedCutoff = case dtree:is_empty(UC) of
                  true  -> lists:last(SMsgSeqNos) + 1;
                  false -> {SeqNo, _XName} = dtree:smallest(UC), SeqNo
              end,
-    {Ms, Ss} = lists:splitwith(fun(X) -> X < CutOff end, SMsgSeqNos),
+    Cutoff = lists:min([UnconfirmedCutoff | NegativeMsgSeqNos]),
+    {Ms, Ss} = lists:splitwith(fun(X) -> X < Cutoff end, SMsgSeqNos),
     case Ms of
         [] -> ok;
         _  -> ok = send(MkMsgFun(lists:last(Ms), true), State)
@@ -1997,6 +2066,17 @@ complete_tx(State = #ch{tx = failed}) ->
 
 infos(Items, State) -> [{Item, i(Item, State)} || Item <- Items].
 
+infos(Items, Deadline, State) ->
+    [begin
+         Now = now_millis(),
+         if
+             Now > Deadline ->
+                 throw(timeout);
+             true ->
+                {Item, i(Item, State)}
+         end
+     end || Item <- Items].
+
 i(pid,            _)                               -> self();
 i(connection,     #ch{conn_pid         = ConnPid}) -> ConnPid;
 i(number,         #ch{channel          = Channel}) -> Channel;
@@ -2005,6 +2085,7 @@ i(user_who_performed_action, Ch) -> i(user, Ch);
 i(vhost,          #ch{virtual_host     = VHost})   -> VHost;
 i(transactional,  #ch{tx               = Tx})      -> Tx =/= none;
 i(confirm,        #ch{confirm_enabled  = CE})      -> CE;
+i(source,         #ch{source           = ChSrc})   -> ChSrc;
 i(name,           State)                           -> name(State);
 i(consumer_count,          #ch{consumer_mapping = CM})    -> maps:size(CM);
 i(messages_unconfirmed,    #ch{unconfirmed = UC})         -> dtree:size(UC);
@@ -2076,39 +2157,39 @@ handle_method(#'exchange.bind'{destination = DestinationNameBin,
                                source      = SourceNameBin,
                                routing_key = RoutingKey,
                                arguments   = Arguments},
-              ConnPid, _CollectorId, VHostPath, User) ->
+              ConnPid, ChSrc, _CollectorId, VHostPath, User) ->
     binding_action(fun rabbit_binding:add/3,
                    SourceNameBin, exchange, DestinationNameBin,
-                   RoutingKey, Arguments, VHostPath, ConnPid, User);
+                   RoutingKey, Arguments, VHostPath, ConnPid, ChSrc, User);
 handle_method(#'exchange.unbind'{destination = DestinationNameBin,
                                  source      = SourceNameBin,
                                  routing_key = RoutingKey,
                                  arguments   = Arguments},
-             ConnPid, _CollectorId, VHostPath, User) ->
+             ConnPid, ChSrc, _CollectorId, VHostPath, User) ->
     binding_action(fun rabbit_binding:remove/3,
                        SourceNameBin, exchange, DestinationNameBin,
-                       RoutingKey, Arguments, VHostPath, ConnPid, User);
+                       RoutingKey, Arguments, VHostPath, ConnPid, ChSrc, User);
 handle_method(#'queue.unbind'{queue       = QueueNameBin,
                               exchange    = ExchangeNameBin,
                               routing_key = RoutingKey,
                               arguments   = Arguments},
-              ConnPid, _CollectorId, VHostPath, User) ->
+              ConnPid, ChSrc, _CollectorId, VHostPath, User) ->
     binding_action(fun rabbit_binding:remove/3,
                    ExchangeNameBin, queue, QueueNameBin,
-                   RoutingKey, Arguments, VHostPath, ConnPid, User);
+                   RoutingKey, Arguments, VHostPath, ConnPid, ChSrc, User);
 handle_method(#'queue.bind'{queue       = QueueNameBin,
                             exchange    = ExchangeNameBin,
                             routing_key = RoutingKey,
                             arguments   = Arguments},
-             ConnPid, _CollectorId, VHostPath, User) ->
+             ConnPid, ChSrc, _CollectorId, VHostPath, User) ->
     binding_action(fun rabbit_binding:add/3,
                    ExchangeNameBin, queue, QueueNameBin,
-                   RoutingKey, Arguments, VHostPath, ConnPid, User);
+                   RoutingKey, Arguments, VHostPath, ConnPid, ChSrc, User);
 %% Note that all declares to these are effectively passive. If it
 %% exists it by definition has one consumer.
 handle_method(#'queue.declare'{queue   = <<"amq.rabbitmq.reply-to",
                                            _/binary>> = QueueNameBin},
-              _ConnPid, _CollectorPid, VHost, _User) ->
+              _ConnPid, _ChSrc, _CollectorPid, VHost, _User) ->
     StrippedQueueNameBin = strip_cr_lf(QueueNameBin),
     QueueName = rabbit_misc:r(VHost, queue, StrippedQueueNameBin),
     case declare_fast_reply_to(StrippedQueueNameBin) of
@@ -2122,7 +2203,8 @@ handle_method(#'queue.declare'{queue       = QueueNameBin,
                                auto_delete = AutoDelete,
                                nowait      = NoWait,
                                arguments   = Args} = Declare,
-              ConnPid, CollectorPid, VHostPath, #user{username = Username} = User) ->
+              ConnPid, ChSrc, CollectorPid, VHostPath,
+              #user{username = Username} = User) ->
     Owner = case ExclusiveDeclare of
                 true  -> ConnPid;
                 false -> none
@@ -2136,6 +2218,7 @@ handle_method(#'queue.declare'{queue       = QueueNameBin,
                     end,
     QueueName = rabbit_misc:r(VHostPath, queue, ActualNameBin),
     check_configure_permitted(QueueName, User),
+    rabbit_core_metrics:queue_declared(QueueName),
     case rabbit_amqqueue:with(
            QueueName,
            fun (Q) -> ok = rabbit_amqqueue:assert_equivalence(
@@ -2173,11 +2256,13 @@ handle_method(#'queue.declare'{queue       = QueueNameBin,
                              _    -> rabbit_queue_collector:register(
                                        CollectorPid, QPid)
                          end,
+                    rabbit_core_metrics:queue_created(QueueName),
                     {ok, QueueName, 0, 0};
                 {existing, _Q} ->
                     %% must have been created between the stat and the
                     %% declare. Loop around again.
-                    handle_method(Declare, ConnPid, CollectorPid, VHostPath, User);
+                    handle_method(Declare, ConnPid, ChSrc, CollectorPid, VHostPath,
+                                  User);
                 {absent, Q, Reason} ->
                     rabbit_misc:absent(Q, Reason);
                 {owner_died, _Q} ->
@@ -2192,7 +2277,7 @@ handle_method(#'queue.declare'{queue       = QueueNameBin,
 handle_method(#'queue.declare'{queue   = QueueNameBin,
                                nowait  = NoWait,
                                passive = true},
-              ConnPid, _CollectorPid, VHostPath, _User) ->
+              ConnPid, _ChSrc, _CollectorPid, VHostPath, _User) ->
     StrippedQueueNameBin = strip_cr_lf(QueueNameBin),
     QueueName = rabbit_misc:r(VHostPath, queue, StrippedQueueNameBin),
     {{ok, MessageCount, ConsumerCount}, #amqqueue{} = Q} =
@@ -2203,7 +2288,8 @@ handle_method(#'queue.declare'{queue   = QueueNameBin,
 handle_method(#'queue.delete'{queue     = QueueNameBin,
                               if_unused = IfUnused,
                               if_empty  = IfEmpty},
-              ConnPid, _CollectorPid, VHostPath, User = #user{username = Username}) ->
+              ConnPid, _ChSrc, _CollectorPid, VHostPath,
+              User = #user{username = Username}) ->
     StrippedQueueNameBin = strip_cr_lf(QueueNameBin),
     QueueName = qbin_to_resource(StrippedQueueNameBin, VHostPath),
 
@@ -2230,7 +2316,8 @@ handle_method(#'queue.delete'{queue     = QueueNameBin,
     end;
 handle_method(#'exchange.delete'{exchange  = ExchangeNameBin,
                                  if_unused = IfUnused},
-              _ConnPid, _CollectorPid, VHostPath, User = #user{username = Username}) ->
+              _ConnPid, _ChSrc, _CollectorPid, VHostPath,
+              User = #user{username = Username}) ->
     StrippedExchangeNameBin = strip_cr_lf(ExchangeNameBin),
     ExchangeName = rabbit_misc:r(VHostPath, exchange, StrippedExchangeNameBin),
     check_not_default_exchange(ExchangeName),
@@ -2245,7 +2332,7 @@ handle_method(#'exchange.delete'{exchange  = ExchangeNameBin,
             ok
     end;
 handle_method(#'queue.purge'{queue = QueueNameBin},
-              ConnPid, _CollectorPid, VHostPath, User) ->
+              ConnPid, _ChSrc, _CollectorPid, VHostPath, User) ->
     QueueName = qbin_to_resource(QueueNameBin, VHostPath),
     check_read_permitted(QueueName, User),
     rabbit_amqqueue:with_exclusive_access_or_die(
@@ -2258,7 +2345,8 @@ handle_method(#'exchange.declare'{exchange    = ExchangeNameBin,
                                   auto_delete = AutoDelete,
                                   internal    = Internal,
                                   arguments   = Args},
-              _ConnPid, _CollectorPid, VHostPath, #user{username = Username} = User) ->
+              _ConnPid, _ChSrc, _CollectorPid, VHostPath,
+              #user{username = Username} = User) ->
     CheckedType = rabbit_exchange:check_type(TypeNameBin),
     ExchangeName = rabbit_misc:r(VHostPath, exchange, strip_cr_lf(ExchangeNameBin)),
     check_not_default_exchange(ExchangeName),
@@ -2290,7 +2378,17 @@ handle_method(#'exchange.declare'{exchange    = ExchangeNameBin,
                                             AutoDelete, Internal, Args);
 handle_method(#'exchange.declare'{exchange    = ExchangeNameBin,
                                   passive     = true},
-              _ConnPid, _CollectorPid, VHostPath, _User) ->
+              _ConnPid, _ChSrc, _CollectorPid, VHostPath, _User) ->
     ExchangeName = rabbit_misc:r(VHostPath, exchange, strip_cr_lf(ExchangeNameBin)),
     check_not_default_exchange(ExchangeName),
     _ = rabbit_exchange:lookup_or_die(ExchangeName).
+
+now_millis() ->
+    erlang:monotonic_time(millisecond).
+
+get_operation_timeout_and_deadline() ->
+    % NB: can't use get_operation_timeout because
+    % this code may not be running via the channel Pid
+    Timeout = ?CHANNEL_OPERATION_TIMEOUT,
+    Deadline =  now_millis() + Timeout,
+    {Timeout, Deadline}.

@@ -40,11 +40,13 @@
          attach_receiver_link/3,
          attach_receiver_link/4,
          attach_receiver_link/5,
+         attach_receiver_link/6,
          attach_link/2,
          detach_link/1,
          send_msg/2,
          accept_msg/2,
          flow_link_credit/3,
+         flow_link_credit/4,
          link_handle/1,
          get_msg/1,
          get_msg/2,
@@ -63,6 +65,7 @@
 
 -type attach_role() :: amqp10_client_session:attach_role().
 -type attach_args() :: amqp10_client_session:attach_args().
+-type filter() :: amqp10_client_session:filter().
 
 -type connection_config() :: amqp10_client_connection:connection_config().
 
@@ -244,11 +247,22 @@ attach_receiver_link(Session, Name, Source, SettleMode) ->
                            snd_settle_mode(), terminus_durability()) ->
     {ok, link_ref()}.
 attach_receiver_link(Session, Name, Source, SettleMode, Durability) ->
+    attach_receiver_link(Session, Name, Source, SettleMode, Durability, #{}).
+
+%% @doc Attaches a receiver link to a source.
+%% This is asynchronous and will notify completion of the attach request to the
+%% caller using an amqp10_event of the following format:
+%% {amqp10_event, {link, LinkRef, attached | {detached, Why}}}
+-spec attach_receiver_link(pid(), binary(), binary(),
+                           snd_settle_mode(), terminus_durability(), filter()) ->
+    {ok, link_ref()}.
+attach_receiver_link(Session, Name, Source, SettleMode, Durability, Filter) ->
     AttachArgs = #{name => Name,
                    role => {receiver, #{address => Source,
                                         durable => Durability}, self()},
                    snd_settle_mode => SettleMode,
-                   rcv_settle_mode => first},
+                   rcv_settle_mode => first,
+                   filter => Filter},
     amqp10_client_session:attach(Session, AttachArgs).
 
 -spec attach_link(pid(), attach_args()) -> {ok, link_ref()}.
@@ -270,12 +284,20 @@ detach_link(#link_ref{link_handle = Handle, session = Session}) ->
 %% the caller will be notified when the link_credit reaches 0 with an
 %% amqp10_event of the following format:
 %% {amqp10_event, {link, LinkRef, credit_exhausted}}
--spec flow_link_credit(link_ref(), non_neg_integer(), never | non_neg_integer()) -> ok.
-flow_link_credit(#link_ref{role = receiver, session = Session,
-                           link_handle = Handle}, Credit, RenewWhenBelow) ->
-    Flow = #'v1_0.flow'{link_credit = {uint, Credit}},
-    ok = amqp10_client_session:flow(Session, Handle, Flow, RenewWhenBelow).
+-spec flow_link_credit(link_ref(), Credit :: non_neg_integer(),
+                       RenewWhenBelow :: never | non_neg_integer()) -> ok.
+flow_link_credit(Ref, Credit, RenewWhenBelow) ->
+    flow_link_credit(Ref, Credit, RenewWhenBelow, false).
 
+-spec flow_link_credit(link_ref(), Credit :: non_neg_integer(),
+                       RenewWhenBelow :: never | non_neg_integer(),
+                       Drain :: boolean()) -> ok.
+flow_link_credit(#link_ref{role = receiver, session = Session,
+                           link_handle = Handle},
+                 Credit, RenewWhenBelow, Drain) ->
+    Flow = #'v1_0.flow'{link_credit = {uint, Credit},
+                        drain = Drain},
+    ok = amqp10_client_session:flow(Session, Handle, Flow, RenewWhenBelow).
 
 %%% messages
 
@@ -324,7 +346,9 @@ link_handle(#link_ref{link_handle = Handle}) -> Handle.
 -spec parse_uri(string()) ->
     {ok, connection_config()} | {error, term()}.
 parse_uri(Uri) ->
-    case http_uri:parse(Uri) of
+    case http_uri:parse(Uri, [{scheme_defaults,
+                               [{amqp, 5672},
+                                {amqps, 5671}]}]) of
         {ok, Result} ->
             try
                 {ok, parse_result(Result)}
@@ -342,14 +366,15 @@ parse_result({Scheme, UserInfo, Host, Port, "/", Query0}) ->
                         string:tokens(safe_substr(Query0, 2), "&")),
     Sasl = case Query of
                #{"sasl" := "anon"} -> anon;
-               #{"sasl" := "plain"} ->
+               #{"sasl" := "plain"} when length(UserInfo) =:= 0 ->
+                   throw(plain_sasl_missing_userinfo);
+               _ ->
                    case UserInfo of
-                       [] -> throw(plain_sasl_missing_userinfo);
+                       [] ->
+                           none;
                        U ->
-                           [User, Pass] = string:tokens(U, ":"),
-                           {plain, to_binary(User), to_binary(Pass)}
-                   end;
-               _ -> none
+                           parse_usertoken(U)
+                   end
            end,
     Ret0 = maps:fold(fun("idle_time_out", V, Acc) ->
                              Acc#{idle_time_out => list_to_integer(V)};
@@ -357,10 +382,13 @@ parse_result({Scheme, UserInfo, Host, Port, "/", Query0}) ->
                              Acc#{max_frame_size => list_to_integer(V)};
                         ("hostname", V, Acc) ->
                              Acc#{hostname => list_to_binary(V)};
+                        ("container_id", V, Acc) ->
+                             Acc#{container_id => list_to_binary(V)};
                         ("transfer_limit_margin", V, Acc) ->
                              Acc#{transfer_limit_margin => list_to_integer(V)};
                         (_, _, Acc) -> Acc
                      end, #{address => Host,
+                            hostname => to_binary(Host),
                             port => Port,
                             sasl => Sasl}, Query),
     case Scheme of
@@ -368,7 +396,16 @@ parse_result({Scheme, UserInfo, Host, Port, "/", Query0}) ->
         amqps ->
             TlsOpts = parse_tls_opts(Query),
             Ret0#{tls_opts => {secure_port, TlsOpts}}
-    end.
+    end;
+parse_result({_Scheme, _UserInfo, _Host, _Port, _Path, _Query0}) ->
+    throw(path_segment_not_supported).
+
+
+parse_usertoken(U) ->
+    [User, Pass] = string:tokens(U, ":"),
+    {plain,
+     to_binary(http_uri:decode(User)),
+     to_binary(http_uri:decode(Pass))}.
 
 
 safe_substr(Str, Start) when length(Str) >= Start ->
@@ -389,6 +426,10 @@ parse_tls_opt("verify", V, Acc)
     [{verify, to_atom(V)} | Acc];
 parse_tls_opt("verify", _V, _Acc) ->
     throw({invalid_option, verify});
+parse_tls_opt("versions", V, Acc) ->
+    Parts = string:tokens(V, ","),
+    Versions = [try_to_existing_atom(P) || P <- Parts],
+    [{versions, Versions} | Acc];
 parse_tls_opt("fail_if_no_peer_cert", V, Acc)
   when V =:= "true" orelse
        V =:= "false" ->
@@ -405,38 +446,75 @@ parse_tls_opt(_K, _V, Acc) ->
 to_atom(X) when is_list(X) -> list_to_atom(X).
 to_binary(X) when is_list(X) -> list_to_binary(X).
 
+try_to_existing_atom(L) when is_list(L) ->
+    try list_to_existing_atom(L) of
+        A -> A
+    catch
+        _:badarg ->
+            throw({non_existent_atom, L})
+    end.
+
+
 -ifdef(TEST).
 -include_lib("eunit/include/eunit.hrl").
 
 parse_uri_test_() ->
-    [?_assertEqual({ok, #{address => "my_host", port => 9876,
+    [?_assertEqual({ok, #{address => "my_host",
+                          port => 9876,
+                          hostname => <<"my_host">>,
                           sasl => none}}, parse_uri("amqp://my_host:9876")),
+     %% port defaults
+     ?_assertMatch({ok, #{port := 5671}}, parse_uri("amqps://my_host")),
+     ?_assertMatch({ok, #{port := 5672}}, parse_uri("amqp://my_host")),
      ?_assertEqual({ok, #{address => "my_proxy",
                           port => 9876,
                           hostname => <<"my_host">>,
+                          container_id => <<"my_container">>,
                           idle_time_out => 60000,
                           max_frame_size => 512,
                           tls_opts => {secure_port, []},
                           sasl => {plain, <<"fred">>, <<"passw">>}}},
-                   parse_uri("amqps://fred:passw@my_proxy:9876?sasl=plain&" ++
-                             "hostname=my_host&max_frame_size=512&idle_time_out=60000")),
+                   parse_uri("amqps://fred:passw@my_proxy:9876?sasl=plain&"
+                             "hostname=my_host&container_id=my_container&"
+                             "max_frame_size=512&idle_time_out=60000")),
+     %% ensure URI encoded usernames and passwords are decodeded
+     ?_assertEqual({ok, #{address => "my_proxy",
+                          port => 9876,
+                          hostname => <<"my_proxy">>,
+                          sasl => {plain, <<"fr/ed">>, <<"pa/ssw">>}}},
+                   parse_uri("amqp://fr%2Fed:pa%2Fssw@my_proxy:9876")),
+     %% make sasl plain implicit when username and password is present
+     ?_assertEqual({ok, #{address => "my_proxy",
+                          port => 9876,
+                          hostname => <<"my_proxy">>,
+                          sasl => {plain, <<"fred">>, <<"passw">>}}},
+                   parse_uri("amqp://fred:passw@my_proxy:9876")),
      ?_assertEqual(
         {ok, #{address => "my_proxy", port => 9876,
+               hostname => <<"my_proxy">>,
                tls_opts => {secure_port, [{cacertfile, "/etc/cacertfile.pem"},
                                           {certfile, "/etc/certfile.pem"},
                                           {fail_if_no_peer_cert, true},
                                           {keyfile, "/etc/keyfile.key"},
                                           {server_name_indication, "frazzle"},
-                                          {verify, verify_none}
+                                          {verify, verify_none},
+                                          {versions, ['tlsv1.1', 'tlsv1.2']}
                                          ]},
                sasl => {plain, <<"fred">>, <<"passw">>}}},
         parse_uri("amqps://fred:passw@my_proxy:9876?sasl=plain"
                   "&cacertfile=/etc/cacertfile.pem&certfile=/etc/certfile.pem"
                   "&keyfile=/etc/keyfile.key&verify=verify_none"
                   "&fail_if_no_peer_cert=true"
-                  "&server_name_indication=frazzle")),
+                  "&server_name_indication=frazzle"
+                  "&versions=tlsv1.1,tlsv1.2")),
+     %% invalid tls version
+     ?_assertEqual({error, {non_existent_atom, "tlsv1.9999999"}},
+                   parse_uri("amqps://fred:passw@my_proxy:9876?sasl=plain&" ++
+                  "versions=tlsv1.1,tlsv1.9999999")),
      ?_assertEqual(
-        {ok, #{address => "my_proxy", port => 9876,
+        {ok, #{address => "my_proxy",
+               port => 9876,
+               hostname => <<"my_proxy">>,
                tls_opts => {secure_port, [{server_name_indication, disable}]},
                sasl => {plain, <<"fred">>, <<"passw">>}}},
         parse_uri("amqps://fred:passw@my_proxy:9876?sasl=plain"
@@ -450,7 +528,9 @@ parse_uri_test_() ->
                   "cacertfile=/etc/cacertfile.pem&certfile=/etc/certfile.pem&" ++
                   "keyfile=/etc/keyfile.key&fail_if_no_peer_cert=banana&")),
      ?_assertEqual({error, plain_sasl_missing_userinfo},
-                   parse_uri("amqp://my_host:9876?sasl=plain"))
+                   parse_uri("amqp://my_host:9876?sasl=plain")),
+     ?_assertEqual({error, path_segment_not_supported},
+                   parse_uri("amqp://my_host/my_path_segment:9876"))
     ].
 
 -endif.

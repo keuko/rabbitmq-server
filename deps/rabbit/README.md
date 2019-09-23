@@ -16,15 +16,17 @@
 ## Tutorials & Documentation
 
  * [RabbitMQ tutorials](https://rabbitmq.com/getstarted.html)
- * [Documentation guides](https://rabbitmq.com/documentation.html)
- * [Documentation Source Code](https://github.com/rabbitmq/rabbitmq-website/)
+ * [All documentation guides](https://rabbitmq.com/documentation.html)
+ * [Documentation source](https://github.com/rabbitmq/rabbitmq-website/)
  * [Client libraries and tools](https://rabbitmq.com/devtools.html)
- * [Tutorials Source Code](https://github.com/rabbitmq/rabbitmq-tutorials/)
+ * [Monitoring guide](https://rabbitmq.com/monitoring.html)
+ * [Production checklist](https://rabbitmq.com/production-checklist.html)
+ * [Runnable tutorials](https://github.com/rabbitmq/rabbitmq-tutorials/)
 
 ## Getting Help
 
  * [RabbitMQ mailing list](https://groups.google.com/forum/#!forum/rabbitmq-users)
- * [Commercial support](https://rabbitmq.com/services.html) from [Pivotal](http://pivotal.io) for open source RabbitMQ
+ * [Commercial support](https://rabbitmq.com/services.html) from [Pivotal](https://pivotal.io) for open source RabbitMQ
  * [Community Slack](https://rabbitmq-slack.herokuapp.com/)
  * `#rabbitmq` on Freenode
 
@@ -32,6 +34,8 @@
 ## Contributing
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) and our [development process overview](https://rabbitmq.com/github.html).
+
+Questions about contributing, internals and so on are very welcome on the [mailing list](https://groups.google.com/forum/#!forum/rabbitmq-users).
 
 
 ## Licensing

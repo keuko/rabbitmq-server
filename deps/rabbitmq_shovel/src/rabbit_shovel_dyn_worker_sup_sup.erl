@@ -11,7 +11,7 @@
 %%  The Original Code is RabbitMQ.
 %%
 %%  The Initial Developer of the Original Code is GoPivotal, Inc.
-%%  Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%%  Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_shovel_dyn_worker_sup_sup).
@@ -26,9 +26,12 @@
 -define(SUPERVISOR, ?MODULE).
 
 start_link() ->
-    {ok, Pid} = mirrored_supervisor:start_link(
+    Pid = case mirrored_supervisor:start_link(
                   {local, ?SUPERVISOR}, ?SUPERVISOR,
-                  fun rabbit_misc:execute_mnesia_transaction/1, ?MODULE, []),
+                  fun rabbit_misc:execute_mnesia_transaction/1, ?MODULE, []) of
+            {ok, Pid0}                       -> Pid0;
+            {error, {already_started, Pid0}} -> Pid0
+          end,
     Shovels = rabbit_runtime_parameters:list_component(<<"shovel">>),
     [start_child({pget(vhost, Shovel), pget(name, Shovel)},
                  pget(value, Shovel)) || Shovel <- Shovels],

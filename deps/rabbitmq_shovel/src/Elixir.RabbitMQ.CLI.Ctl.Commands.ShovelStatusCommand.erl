@@ -11,15 +11,18 @@
 %%  The Original Code is RabbitMQ.
 %%
 %%  The Initial Developer of the Original Code is GoPivotal, Inc.
-%%  Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
+%%  Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module('Elixir.RabbitMQ.CLI.Ctl.Commands.ShovelStatusCommand').
+
+-include("rabbit_shovel.hrl").
 
 -behaviour('Elixir.RabbitMQ.CLI.CommandBehaviour').
 
 -export([
          usage/0,
+         usage_doc_guides/0,
          flags/0,
          validate/2,
          merge_defaults/2,
@@ -29,7 +32,9 @@
          aliases/0,
          output/2,
          scopes/0,
-         formatter/0
+         formatter/0,
+         help_section/0,
+         description/0
         ]).
 
 
@@ -37,7 +42,16 @@
 %% Callbacks
 %%----------------------------------------------------------------------------
 usage() ->
-     <<"shovel_status">>.
+    <<"shovel_status">>.
+
+usage_doc_guides() ->
+    [?SHOVEL_GUIDE_URL].
+
+help_section() ->
+    {plugin, shovel}.
+
+description() ->
+    <<"Displays status of Shovel on a node">>.
 
 flags() ->
     [].

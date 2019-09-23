@@ -16,6 +16,10 @@
 
 -module(rabbit_amqp1_0_reader).
 
+%% Transitional step until we can require Erlang/OTP 21 and
+%% use the now recommended try/catch syntax for obtaining the stack trace.
+-compile(nowarn_deprecated_function).
+
 -include_lib("rabbit_common/include/rabbit.hrl").
 -include_lib("rabbit_common/include/rabbit_framing.hrl").
 -include_lib("kernel/include/inet.hrl").
@@ -631,7 +635,7 @@ auth_mechanism_to_module(TypeBin, Sock) ->
     end.
 
 auth_mechanisms(Sock) ->
-    {ok, Configured} = application:get_env(auth_mechanisms),
+    {ok, Configured} = application:get_env(rabbit, auth_mechanisms),
     [Name || {Name, Module} <- rabbit_registry:lookup_all(auth_mechanism),
              Module:should_offer(Sock), lists:member(Name, Configured)].
 
@@ -683,27 +687,33 @@ send_to_new_1_0_session(Channel, Frame, State) ->
                                     hostname  = Hostname,
                                     user      = User},
         proxy_socket = ProxySocket} = State,
-    {ok, ChSupPid, ChFrPid} =
-        %% Note: the equivalent, start_channel is in channel_sup_sup
-        rabbit_amqp1_0_session_sup_sup:start_session(
-          %% NB subtract fixed frame header size
-          ChanSupSup, {amqp10_framing, Sock, Channel,
-                       case FrameMax of
-                           unlimited -> unlimited;
-                           _         -> FrameMax - 8
-                       end,
-                       self(), User, vhost(Hostname), Collector, ProxySocket}),
-    erlang:monitor(process, ChFrPid),
-    put({channel, Channel}, {ch_fr_pid, ChFrPid}),
-    put({ch_sup_pid, ChSupPid}, {{channel, Channel}, {ch_fr_pid, ChFrPid}}),
-    put({ch_fr_pid, ChFrPid}, {channel, Channel}),
-    ok = rabbit_amqp1_0_session:process_frame(ChFrPid, Frame).
+    %% Note: the equivalent, start_channel is in channel_sup_sup
+    case rabbit_amqp1_0_session_sup_sup:start_session(
+           %% NB subtract fixed frame header size
+           ChanSupSup, {amqp10_framing, Sock, Channel,
+                        case FrameMax of
+                            unlimited -> unlimited;
+                            _         -> FrameMax - 8
+                        end,
+                        self(), User, vhost(Hostname), Collector, ProxySocket}) of
+        {ok, ChSupPid, ChFrPid} ->
+            erlang:monitor(process, ChFrPid),
+            put({channel, Channel}, {ch_fr_pid, ChFrPid}),
+            put({ch_sup_pid, ChSupPid}, {{channel, Channel}, {ch_fr_pid, ChFrPid}}),
+            put({ch_fr_pid, ChFrPid}, {channel, Channel}),
+            ok = rabbit_amqp1_0_session:process_frame(ChFrPid, Frame);
+        {error, {not_allowed, _}} ->
+            %% Let's skip the supervisor trace, this is an expected error
+            throw({error, {not_allowed, User#user.username}});
+        {error, _} = E ->
+            throw(E)
+    end.
 
 vhost({utf8, <<"vhost:", VHost/binary>>}) ->
     VHost;
 vhost(_) ->
-    {ok, DefaultVHost} = application:get_env(default_vhost),
-    DefaultVHost.
+    application:get_env(rabbitmq_amqp1_0, default_vhost,
+                        application:get_env(rabbit, default_vhost, <<"/">>)).
 
 %% End 1-0
 

@@ -1,17 +1,17 @@
-%%   The contents of this file are subject to the Mozilla Public License
-%%   Version 1.1 (the "License"); you may not use this file except in
-%%   compliance with the License. You may obtain a copy of the License at
-%%   http://www.mozilla.org/MPL/
+%% The contents of this file are subject to the Mozilla Public License
+%% Version 1.1 (the "License"); you may not use this file except in
+%% compliance with the License. You may obtain a copy of the License at
+%% https://www.mozilla.org/MPL/
 %%
-%%   Software distributed under the License is distributed on an "AS IS"
-%%   basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%   License for the specific language governing rights and limitations
-%%   under the License.
+%% Software distributed under the License is distributed on an "AS IS"
+%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
+%% License for the specific language governing rights and limitations
+%% under the License.
 %%
-%%   The Original Code is RabbitMQ Management Plugin.
+%% The Original Code is RabbitMQ Management Plugin.
 %%
-%%   The Initial Developer of the Original Code is GoPivotal, Inc.
-%%   Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% The Initial Developer of the Original Code is GoPivotal, Inc.
+%% Copyright (c) 2007-2018 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_mgmt_wm_definitions).
@@ -21,7 +21,7 @@
 -export([accept_multipart/2]).
 -export([variances/2]).
 
--export([apply_defs/4]).
+-export([apply_defs/4, apply_defs/5]).
 
 -import(rabbit_misc, [pget/2]).
 
@@ -32,7 +32,7 @@
 %%--------------------------------------------------------------------
 
 init(Req, _State) ->
-    {cowboy_rest, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
+    {cowboy_rest, rabbit_mgmt_headers:set_common_permission_headers(Req, ?MODULE), #context{}}.
 
 variances(Req, Context) ->
     {[<<"accept-encoding">>, <<"origin">>], Req, Context}.
@@ -41,7 +41,7 @@ content_types_provided(ReqData, Context) ->
    {rabbit_mgmt_util:responder_map(to_json), ReqData, Context}.
 
 content_types_accepted(ReqData, Context) ->
-   {[{<<"application/json">>, accept_json},
+   {[{{<<"application">>, <<"json">>, '*'}, accept_json},
      {{<<"multipart">>, <<"form-data">>, '*'}, accept_multipart}], ReqData, Context}.
 
 allowed_methods(ReqData, Context) ->
@@ -54,8 +54,8 @@ to_json(ReqData, Context) ->
         not_found ->
             rabbit_mgmt_util:bad_request(rabbit_data_coercion:to_binary("vhost_not_found"),
                                          ReqData, Context);
-        _VHost ->
-            vhost_definitions(ReqData, Context)
+        VHost ->
+            vhost_definitions(ReqData, VHost, Context)
     end.
 
 all_definitions(ReqData, Context) ->
@@ -90,10 +90,10 @@ all_definitions(ReqData, Context) ->
       Context).
 
 accept_json(ReqData0, Context) ->
-    {ok, Body, ReqData} = cowboy_req:read_body(ReqData0),
+    {ok, Body, ReqData} = rabbit_mgmt_util:read_complete_body(ReqData0),
     accept(Body, ReqData, Context).
 
-vhost_definitions(ReqData, Context) ->
+vhost_definitions(ReqData, VHost, Context) ->
     %% rabbit_mgmt_wm_<>:basic/1 filters by VHost if it is available
     Xs = [strip_vhost(X) || X <- rabbit_mgmt_wm_exchanges:basic(ReqData),
                export_exchange(X)],
@@ -103,10 +103,14 @@ vhost_definitions(ReqData, Context) ->
     Bs = [strip_vhost(B) || B <- rabbit_mgmt_wm_bindings:basic(ReqData),
                             export_binding(B, QNames)],
     {ok, Vsn} = application:get_key(rabbit, vsn),
+    Parameters = [rabbit_mgmt_format:parameter(
+                    rabbit_mgmt_wm_parameters:fix_shovel_publish_properties(P))
+                  || P <- rabbit_runtime_parameters:list(VHost)],
     rabbit_mgmt_util:reply(
       [{rabbit_version, rabbit_data_coercion:to_binary(Vsn)}] ++
           filter(
-            [{policies,    rabbit_mgmt_wm_policies:basic(ReqData)},
+            [{parameters,  Parameters},
+             {policies,    rabbit_mgmt_wm_policies:basic(ReqData)},
              {queues,      Qs},
              {exchanges,   Xs},
              {bindings,    Bs}]),
@@ -148,21 +152,33 @@ is_authorized_qs(ReqData, Context, Auth) ->
 %%--------------------------------------------------------------------
 
 accept(Body, ReqData, Context = #context{user = #user{username = Username}}) ->
+    %% At this point the request was fully received.
+    %% There is no point in the idle_timeout anymore.
+    disable_idle_timeout(ReqData),
+    SuccessFun =
+        fun() ->
+            {true, ReqData, Context}
+        end,
+    ErrorFun =
+        fun(E) ->
+            rabbit_log:error("Encountered an error when importing definitions: ~p", [E]),
+            rabbit_mgmt_util:bad_request(E, ReqData, Context)
+        end,
     case rabbit_mgmt_util:vhost(ReqData) of
         none ->
-            apply_defs(Body, Username, fun() -> {true, ReqData, Context} end,
-                       fun(E) -> rabbit_mgmt_util:bad_request(E, ReqData, Context) end);
+            apply_defs(Body, Username, SuccessFun, ErrorFun);
         not_found ->
             rabbit_mgmt_util:bad_request(rabbit_data_coercion:to_binary("vhost_not_found"),
                                          ReqData, Context);
         VHost ->
-            apply_defs(Body, Username, fun() -> {true, ReqData, Context} end,
-                       fun(E) -> rabbit_mgmt_util:bad_request(E, ReqData, Context) end,
-                       VHost)
+            apply_defs(Body, Username, SuccessFun, ErrorFun, VHost)
     end.
 
+disable_idle_timeout(#{pid := Pid, streamid := StreamID}) ->
+    Pid ! {{Pid, StreamID}, {set_options, #{idle_timeout => infinity}}}.
+
 apply_defs(Body, ActingUser, SuccessFun, ErrorFun) ->
-    rabbit_log:info("Asked to import definitions. Acting user: ~p", [ActingUser]),
+    rabbit_log:info("Asked to import definitions. Acting user: ~s", [rabbit_data_coercion:to_binary(ActingUser)]),
     case rabbit_mgmt_util:decode([], Body) of
         {error, E} ->
             ErrorFun(E);
@@ -203,13 +219,16 @@ apply_defs(Body, ActingUser, SuccessFun, ErrorFun) ->
     end.
 
 apply_defs(Body, ActingUser, SuccessFun, ErrorFun, VHost) ->
-    rabbit_log:info("Asked to import definitions. Acting user: ~p", [ActingUser]),
+    rabbit_log:info("Asked to import definitions for a virtual host. Virtual host: ~p, acting user: ~p",
+                    [VHost, ActingUser]),
     case rabbit_mgmt_util:decode([], Body) of
         {error, E} ->
             ErrorFun(E);
         {ok, _, All} ->
             try
                 validate_limits(All, VHost),
+                rabbit_log:info("Importing parameters..."),
+                for_all(parameters,  ActingUser, All, VHost, fun add_parameter/3),
                 rabbit_log:info("Importing policies..."),
                 for_all(policies,    ActingUser, All, VHost, fun add_policy/3),
                 rabbit_log:info("Importing queues..."),
@@ -332,6 +351,9 @@ atomise_name(N) -> rabbit_data_coercion:to_atom(N).
 
 add_parameter(Param, Username) ->
     VHost = maps:get(vhost,     Param, undefined),
+    add_parameter(VHost, Param, Username).
+
+add_parameter(VHost, Param, Username) ->
     Comp  = maps:get(component, Param, undefined),
     Key   = maps:get(name,      Param, undefined),
     Term  = maps:get(value,     Param, undefined),

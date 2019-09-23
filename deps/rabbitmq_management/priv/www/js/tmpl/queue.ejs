@@ -1,4 +1,4 @@
-<h1>Queue <b><%= fmt_string(queue.name) %></b><%= fmt_maybe_vhost(queue.vhost) %></h1>
+<h1>Queue <b><%= fmt_string(highlight_extra_whitespace(queue.name)) %></b><%= fmt_maybe_vhost(queue.vhost) %></h1>
 
 <div class="section">
   <h2>Overview</h2>
@@ -22,6 +22,12 @@
         <th>Operator policy</th>
         <td><%= fmt_string(queue.operator_policy, '') %></td>
       </tr>
+      <% if (queue.owner_pid_details != undefined) { %>
+        <tr>
+          <th>Exclusive owner</th>
+          <td><%= link_conn(queue.owner_pid_details.name) %></td>
+        </tr>
+      <% } %>
       <tr>
         <th>Effective policy definition</th>
         <td><%= fmt_table_short(queue.effective_policy_definition) %></td>

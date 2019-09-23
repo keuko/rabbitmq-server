@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -56,7 +56,7 @@
 -export([pid_to_string/1, string_to_pid/1,
          pid_change_node/2, node_to_fake_pid/1]).
 -export([version_compare/2, version_compare/3]).
--export([version_minor_equivalent/2]).
+-export([version_minor_equivalent/2, strict_version_minor_equivalent/2]).
 -export([dict_cons/3, orddict_cons/3, maps_cons/3, gb_trees_cons/3]).
 -export([gb_trees_fold/3, gb_trees_foreach/2]).
 -export([all_module_attributes/1, build_acyclic_graph/3]).
@@ -69,7 +69,8 @@
 -export([os_cmd/1]).
 -export([is_os_process_alive/1]).
 -export([gb_sets_difference/2]).
--export([version/0, otp_release/0, platform_and_version/0, otp_system_version/0, which_applications/0]).
+-export([version/0, otp_release/0, platform_and_version/0, otp_system_version/0,
+         rabbitmq_and_erlang_versions/0, which_applications/0]).
 -export([sequence_error/1]).
 -export([check_expiry/1]).
 -export([base64url/1]).
@@ -206,8 +207,9 @@
 -spec node_to_fake_pid(atom()) -> pid().
 -spec version_compare(string(), string()) -> 'lt' | 'eq' | 'gt'.
 -spec version_compare
-        (string(), string(), ('lt' | 'lte' | 'eq' | 'gte' | 'gt')) -> boolean().
--spec version_minor_equivalent(string(), string()) -> boolean().
+        (rabbit_semver:version_string(), rabbit_semver:version_string(),
+         ('lt' | 'lte' | 'eq' | 'gte' | 'gt')) -> boolean().
+-spec version_minor_equivalent(rabbit_semver:version_string(), rabbit_semver:version_string()) -> boolean().
 -spec dict_cons(any(), any(), dict:dict()) -> dict:dict().
 -spec orddict_cons(any(), any(), orddict:orddict()) -> orddict:orddict().
 -spec gb_trees_cons(any(), any(), gb_trees:tree()) -> gb_trees:tree().
@@ -241,6 +243,7 @@
 -spec otp_release() -> string().
 -spec otp_system_version() -> string().
 -spec platform_and_version() -> string().
+-spec rabbitmq_and_erlang_versions() -> {string(), string()}.
 -spec which_applications() -> [{atom(), string(), string()}].
 -spec sequence_error([({'error', any()} | any())]) ->
           {'error', any()} | any().
@@ -596,7 +599,7 @@ format_inet_error0(timeout) -> "timed out";
 format_inet_error0(Error)   -> inet:format_error(Error).
 
 %% This is a modified version of Luke Gorrie's pmap -
-%% http://lukego.livejournal.com/6753.html - that doesn't care about
+%% https://lukego.livejournal.com/6753.html - that doesn't care about
 %% the order in which results are received.
 %%
 %% WARNING: This is is deliberately lightweight rather than robust -- if F
@@ -736,15 +739,23 @@ decompose_pid(Pid) when is_pid(Pid) ->
     %% see http://erlang.org/doc/apps/erts/erl_ext_dist.html (8.10 and
     %% 8.7)
     Node = node(Pid),
-    BinPid = term_to_binary(Pid),
-    ByteSize = byte_size(BinPid),
-    NodeByteSize = (ByteSize - 11),
-    <<131, 103, _NodePrefix:NodeByteSize/binary, Id:32, Ser:32, Cre:8>> = BinPid,
-    {Node, Cre, Id, Ser}.
+    BinPid0 = term_to_binary(Pid),
+    case BinPid0 of
+        %% NEW_PID_EXT
+        <<131, 88, BinPid/bits>> ->
+            NodeByteSize = byte_size(BinPid0) - 14,
+            <<_NodePrefix:NodeByteSize/binary, Id:32, Ser:32, Cre:32>> = BinPid,
+            {Node, Cre, Id, Ser};
+        %% PID_EXT
+        <<131, 103, BinPid/bits>> ->
+            NodeByteSize = byte_size(BinPid0) - 11,
+            <<_NodePrefix:NodeByteSize/binary, Id:32, Ser:32, Cre:8>> = BinPid,
+            {Node, Cre, Id, Ser}
+    end.
 
 compose_pid(Node, Cre, Id, Ser) ->
     <<131,NodeEnc/binary>> = term_to_binary(Node),
-    binary_to_term(<<131,103,NodeEnc/binary,Id:32,Ser:32,Cre:8>>).
+    binary_to_term(<<131,88,NodeEnc/binary,Id:32,Ser:32,Cre:32>>).
 
 version_compare(A, B, eq)  -> rabbit_semver:eql(A, B);
 version_compare(A, B, lt)  -> rabbit_semver:lt(A, B);
@@ -761,6 +772,12 @@ version_compare(A, B) ->
                  end
     end.
 
+%% For versions starting from 3.7.x:
+%% Versions are considered compatible (except for special cases; see
+%% below). The feature flags will determine if they are actually
+%% compatible.
+%%
+%% For versions up-to 3.7.x:
 %% a.b.c and a.b.d match, but a.b.c and a.d.e don't. If
 %% versions do not match that pattern, just compare them.
 %%
@@ -768,6 +785,36 @@ version_compare(A, B) ->
 %% e.g. 3.6.6 is not compatible with 3.6.5
 %% This special case can be removed once 3.6.x reaches EOL
 version_minor_equivalent(A, B) ->
+    {{MajA, MinA, PatchA, _}, _} = rabbit_semver:normalize(rabbit_semver:parse(A)),
+    {{MajB, MinB, PatchB, _}, _} = rabbit_semver:normalize(rabbit_semver:parse(B)),
+
+    case {MajA, MinA, MajB, MinB} of
+        {3, 6, 3, 6} ->
+            if
+                PatchA >= 6 -> PatchB >= 6;
+                PatchA < 6  -> PatchB < 6;
+                true -> false
+            end;
+        _
+          when (MajA < 3 orelse (MajA =:= 3 andalso MinA =< 6))
+               orelse
+               (MajB < 3 orelse (MajB =:= 3 andalso MinB =< 6)) ->
+            MajA =:= MajB andalso MinA =:= MinB;
+        _ ->
+            %% Starting with RabbitMQ 3.7.x, we consider this
+            %% minor release series and all subsequent series to
+            %% be possibly compatible, based on just the version.
+            %% The real compatibility check is deferred to the
+            %% rabbit_feature_flags module in rabbitmq-server.
+            true
+    end.
+
+%% This is the same as above except that e.g. 3.7.x and 3.8.x are
+%% considered incompatible (as if there were no feature flags). This is
+%% useful to check plugin compatibility (`broker_versions_requirement`
+%% field in plugins).
+
+strict_version_minor_equivalent(A, B) ->
     {{MajA, MinA, PatchA, _}, _} = rabbit_semver:normalize(rabbit_semver:parse(A)),
     {{MajB, MinB, PatchB, _}, _} = rabbit_semver:normalize(rabbit_semver:parse(B)),
 
@@ -996,7 +1043,7 @@ os_cmd(Command) ->
     case os:type() of
         {win32, _} ->
             %% Clink workaround; see
-            %% http://code.google.com/p/clink/issues/detail?id=141
+            %% https://code.google.com/p/clink/issues/detail?id=141
             os:cmd(" " ++ Command);
         _ ->
             %% Don't just return "/bin/sh: <cmd>: not found" if not found
@@ -1048,7 +1095,7 @@ version() ->
     {ok, VSN} = application:get_key(rabbit, vsn),
     VSN.
 
-%% See http://www.erlang.org/doc/system_principles/versions.html
+%% See https://www.erlang.org/doc/system_principles/versions.html
 otp_release() ->
     File = filename:join([code:root_dir(), "releases",
                           erlang:system_info(otp_release), "OTP_VERSION"]),
@@ -1067,6 +1114,9 @@ platform_and_version() ->
 
 otp_system_version() ->
     string:strip(erlang:system_info(system_version), both, $\n).
+
+rabbitmq_and_erlang_versions() ->
+  {version(), otp_release()}.
 
 %% application:which_applications(infinity) is dangerous, since it can
 %% cause deadlocks on shutdown. So we have to use a timeout variant,
@@ -1206,14 +1256,13 @@ rpc_call(Node, Mod, Fun, Args, Timeout) ->
             rpc:call(Node, Mod, Fun, Args, Timeout)
     end.
 
-guess_number_of_cpu_cores() ->
-    case erlang:system_info(logical_processors_available) of
-        unknown -> % Happens on Mac OS X.
-            erlang:system_info(schedulers);
-        N -> N
-    end.
+get_gc_info(Pid) ->
+    rabbit_runtime:get_gc_info(Pid).
 
-%% Discussion of choosen values is at
+guess_number_of_cpu_cores() ->
+    rabbit_runtime:guess_number_of_cpu_cores().
+
+%% Discussion of chosen values is at
 %% https://github.com/rabbitmq/rabbitmq-server/issues/151
 guess_default_thread_pool_size() ->
     PoolSize = 16 * guess_number_of_cpu_cores(),
@@ -1222,18 +1271,6 @@ guess_default_thread_pool_size() ->
 report_default_thread_pool_size() ->
     io:format("~b", [guess_default_thread_pool_size()]),
     erlang:halt(0).
-
-get_gc_info(Pid) ->
-    {garbage_collection, GC} = erlang:process_info(Pid, garbage_collection),
-    case proplists:get_value(max_heap_size, GC) of
-        I when is_integer(I) ->
-            GC;
-        undefined ->
-            GC;
-        Map ->
-            lists:keyreplace(max_heap_size, 1, GC,
-                             {max_heap_size, maps:get(size, Map)})
-    end.
 
 %% -------------------------------------------------------------------------
 %% Begin copypasta from gen_server2.erl
@@ -1248,7 +1285,7 @@ get_parent() ->
 name_to_pid(Name) ->
     case whereis(Name) of
         undefined -> case whereis_name(Name) of
-                         undefined -> exit(could_not_find_registerd_name);
+                         undefined -> exit(could_not_find_registered_name);
                          Pid       -> Pid
                      end;
         Pid       -> Pid

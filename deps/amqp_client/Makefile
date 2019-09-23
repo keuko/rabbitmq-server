@@ -12,10 +12,6 @@ endef
 
 define PROJECT_APP_EXTRA_KEYS
 %% Hex.pm package informations.
-	{maintainers, [
-	    "RabbitMQ Team <info@rabbitmq.com>",
-	    "Jean-Sebastien Pedron <jean-sebastien@rabbitmq.com>"
-	  ]},
 	{licenses, ["MPL 1.1"]},
 	{links, [
 	    {"Website", "http://www.rabbitmq.com/"},
@@ -42,6 +38,8 @@ DEP_PLUGINS = rabbit_common/mk/rabbitmq-build.mk \
 	      rabbit_common/mk/rabbitmq-run.mk \
 	      rabbit_common/mk/rabbitmq-test.mk \
 	      rabbit_common/mk/rabbitmq-tools.mk
+
+PLT_APPS = ssl public_key
 
 # FIXME: Use erlang.mk patched for RabbitMQ, while waiting for PRs to be
 # reviewed and merged.

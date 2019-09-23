@@ -1,17 +1,17 @@
-%%   The contents of this file are subject to the Mozilla Public License
-%%   Version 1.1 (the "License"); you may not use this file except in
-%%   compliance with the License. You may obtain a copy of the License at
-%%   http://www.mozilla.org/MPL/
+%% The contents of this file are subject to the Mozilla Public License
+%% Version 1.1 (the "License"); you may not use this file except in
+%% compliance with the License. You may obtain a copy of the License at
+%% https://www.mozilla.org/MPL/
 %%
-%%   Software distributed under the License is distributed on an "AS IS"
-%%   basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%   License for the specific language governing rights and limitations
-%%   under the License.
+%% Software distributed under the License is distributed on an "AS IS"
+%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
+%% License for the specific language governing rights and limitations
+%% under the License.
 %%
-%%   The Original Code is RabbitMQ Management Plugin.
+%% The Original Code is RabbitMQ Management Plugin.
 %%
-%%   The Initial Developer of the Original Code is GoPivotal, Inc.
-%%   Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% The Initial Developer of the Original Code is GoPivotal, Inc.
+%% Copyright (c) 2007-2018 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_mgmt_db).
@@ -301,10 +301,8 @@ overview(User, Ranges, Interval) ->
                  all -> rabbit_vhost:list();
                  _   -> rabbit_mgmt_util:list_visible_vhosts(User)
              end,
-
     DataLookup = get_data_from_nodes({rabbit_mgmt_data, overview_data,
                                       [User, Ranges, VHosts]}),
-
     MessageStats = lists:append(
              [format_range(DataLookup, vhost_stats_fine_stats,
                            pick_range(fine_stats, Ranges), Interval),
@@ -313,6 +311,8 @@ overview(User, Ranges, Interval) ->
               format_range(DataLookup, vhost_stats_deliver_stats,
                            pick_range(deliver_get, Ranges), Interval)]),
 
+    ChurnRates = format_range(DataLookup, connection_churn_rates,
+                              pick_range(queue_msg_counts, Ranges), Interval),
     QueueStats = format_range(DataLookup, vhost_msg_stats,
                               pick_range(queue_msg_counts, Ranges), Interval),
     %% Filtering out the user's consumers would be rather expensive so let's
@@ -328,6 +328,7 @@ overview(User, Ranges, Interval) ->
          {channels, maps:get(channels_count, DataLookup)}],
 
     [{message_stats, MessageStats},
+     {churn_rates, ChurnRates},
      {queue_totals,  QueueStats},
      {object_totals, ObjectTotals},
      {statistics_db_event_queue, event_queue()}]. % TODO: event queue?
@@ -385,7 +386,8 @@ detail_queue_stats(Ranges, Objs, Interval) ->
                  {incoming,
                   detail_stats(QueueData, queue_exchange_stats_publish,
                                fine_stats, first(Id), Ranges, Interval)}],
-       {Pid, combine(Props, Obj) ++ Stats ++ StatsD ++ Consumers}
+       Details = augment_details(Obj, []),
+       {Pid, combine(Props, Obj) ++ Stats ++ StatsD ++ Consumers ++ Details}
        end || Obj <- Objs]),
 
    % patch up missing channel details
@@ -598,8 +600,9 @@ node_stats(Ranges, Objs, Interval) ->
      Stats = format_range(NData, node_coarse_stats,
                           pick_range(coarse_node_stats, Ranges), Interval) ++
              format_range(NData, node_persister_stats,
-                          pick_range(coarse_node_stats, Ranges), Interval),
-
+                          pick_range(coarse_node_stats, Ranges), Interval) ++
+             format_range(NData, connection_churn_rates,
+                          pick_range(churn_rates, Ranges), Interval),
      NodeNodeStats = node_node_stats(NData, Id, Ranges, Interval),
      StatsD = [{cluster_links, NodeNodeStats}],
      MgmtStats = maps:get(mgmt_stats, NData),
@@ -643,9 +646,8 @@ maps_merge(Fun, M1, M2) ->
 
 -spec merge_data(atom(), any(), any()) -> any().
 merge_data(_, A, B) when is_integer(A), is_integer(B) -> A + B;
-merge_data(_, [], [_|_] = B) -> B;
-merge_data(_, [_|_] = A, []) -> A;
-merge_data(_, [], []) -> [];
+merge_data(_, A, B) when is_list(A), is_list(B) ->
+    A ++ B;
 merge_data(_, {A1, B1}, {[_|_] = A2, [_|_] = B2}) ->
     {[A1 | A2], [B1 | B2]};
 merge_data(_, {A1, B1}, {A2, B2}) -> % first slide

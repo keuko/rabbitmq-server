@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -16,7 +16,7 @@
 
 -module(rabbit_amqqueue_common).
 
--export([notify_sent/2, notify_sent_queue_down/1]).
+-export([notify_sent/2, notify_sent_queue_down/1, delete_exclusive/2]).
 
 -define(MORE_CONSUMER_CREDIT_AFTER, 50).
 
@@ -39,4 +39,10 @@ notify_sent(QPid, ChPid) ->
 
 notify_sent_queue_down(QPid) ->
     erase({consumer_credit_to, QPid}),
+    ok.
+
+-spec delete_exclusive([pid()], pid()) -> 'ok'.
+
+delete_exclusive(QPids, ConnId) ->
+    [gen_server2:cast(QPid, {delete_exclusive, ConnId}) || QPid <- QPids],
     ok.

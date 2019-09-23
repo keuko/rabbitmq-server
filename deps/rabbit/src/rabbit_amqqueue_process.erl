@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_amqqueue_process).
@@ -287,6 +287,14 @@ terminate({shutdown, missing_owner} = Reason, State) ->
 terminate({shutdown, _} = R, State = #q{backing_queue = BQ}) ->
     rabbit_core_metrics:queue_deleted(qname(State)),
     terminate_shutdown(fun (BQS) -> BQ:terminate(R, BQS) end, State);
+terminate(normal, State = #q{status = {terminated_by, auto_delete}}) ->
+    %% auto_delete case
+    %% To increase performance we want to avoid a mnesia_sync:sync call
+    %% after every transaction, as we could be deleting simultaneously
+    %% thousands of queues. A optimisation introduced by server#1513
+    %% needs to be reverted by this case, avoiding to guard the delete
+    %% operation on `rabbit_durable_queue`
+    terminate_shutdown(terminate_delete(true, auto_delete, State), State);
 terminate(normal,            State) -> %% delete case
     terminate_shutdown(terminate_delete(true, normal, State), State);
 %% If we crashed don't try to clean up the BQS, probably best to leave it.
@@ -300,12 +308,16 @@ terminate(_Reason,           State = #q{q = Q}) ->
                                BQS
                        end, State).
 
-terminate_delete(EmitStats, Reason,
+terminate_delete(EmitStats, Reason0,
                  State = #q{q = #amqqueue{name          = QName},
                             backing_queue = BQ,
                             status = Status}) ->
     ActingUser = terminated_by(Status),
     fun (BQS) ->
+        Reason = case Reason0 of
+                     auto_delete -> normal;
+                     Any -> Any
+                 end,
         BQS1 = BQ:delete_and_terminate(Reason, BQS),
         if EmitStats -> rabbit_event:if_enabled(State, #q.stats_timer,
                                                 fun() -> emit_stats(State) end);
@@ -315,13 +327,15 @@ terminate_delete(EmitStats, Reason,
         %% logged.
         try
             %% don't care if the internal delete doesn't return 'ok'.
-            rabbit_amqqueue:internal_delete(QName, ActingUser)
+            rabbit_amqqueue:internal_delete(QName, ActingUser, Reason0)
         catch
-            {error, Reason} -> error(Reason)
+            {error, ReasonE} -> error(ReasonE)
         end,
         BQS1
     end.
 
+terminated_by({terminated_by, auto_delete}) ->
+    ?INTERNAL_USER;
 terminated_by({terminated_by, ActingUser}) ->
     ActingUser;
 terminated_by(_) ->
@@ -341,7 +355,7 @@ terminate_shutdown(Fun, #q{status = Status} = State) ->
                      QName = qname(State),
                      notify_decorators(shutdown, State),
                      [emit_consumer_deleted(Ch, CTag, QName, ActingUser) ||
-                         {Ch, CTag, _, _, _} <-
+                         {Ch, CTag, _, _, _, _} <-
                              rabbit_queue_consumers:all(Consumers)],
                      State1#q{backing_queue_state = Fun(BQS)}
     end.
@@ -432,8 +446,12 @@ init_max_bytes(MaxBytes, State) ->
     {_Dropped, State1} = maybe_drop_head(State#q{max_bytes = MaxBytes}),
     State1.
 
-init_overflow(undefined, State) ->
+%% Reset overflow to default 'drop-head' value if it's undefined.
+init_overflow(undefined, #q{overflow = 'drop-head'} = State) ->
     State;
+init_overflow(undefined, State) ->
+    {_Dropped, State1} = maybe_drop_head(State#q{overflow = 'drop-head'}),
+    State1;
 init_overflow(Overflow, State) ->
     OverflowVal = binary_to_existing_atom(Overflow, utf8),
     case OverflowVal of
@@ -721,14 +739,21 @@ maybe_drop_head(AlreadyDropped, State = #q{backing_queue       = BQ,
     end.
 
 send_reject_publish(#delivery{confirm = true,
-                                sender = SenderPid,
-                                msg_seq_no = MsgSeqNo} = Delivery,
+                              sender = SenderPid,
+                              flow = Flow,
+                              msg_seq_no = MsgSeqNo,
+                              message = #basic_message{id = MsgId}},
                       _Delivered,
                       State = #q{ backing_queue = BQ,
                                   backing_queue_state = BQS,
                                   msg_id_to_channel   = MTC}) ->
-    {BQS1, MTC1} = discard(Delivery, BQ, BQS, MTC),
     gen_server2:cast(SenderPid, {reject_publish, MsgSeqNo, self()}),
+
+    MTC1 = case gb_trees:is_defined(MsgId, MTC) of
+        true  -> gb_trees:delete(MsgId, MTC);
+        false -> MTC
+    end,
+    BQS1 = BQ:discard(MsgId, SenderPid, Flow, BQS),
     State#q{ backing_queue_state = BQS1, msg_id_to_channel = MTC1 };
 send_reject_publish(#delivery{confirm = false},
                       _Delivered, State) ->
@@ -1107,7 +1132,7 @@ prioritise_cast(Msg, _Len, State) ->
 %% will be rate limited by how fast consumers receive messages -
 %% i.e. by notify_sent. We prioritise ack and resume to discourage
 %% starvation caused by prioritising notify_sent. We don't vary their
-%% prioritiy since acks should stay in order (some parts of the queue
+%% priority since acks should stay in order (some parts of the queue
 %% stack are optimised for that) and to make things easier to reason
 %% about. Finally, we prioritise ack over resume since it should
 %% always reduce memory use.
@@ -1167,7 +1192,7 @@ handle_call({notify_down, ChPid}, _From, State) ->
     %% gen_server2 *before* the reply is sent.
     case handle_ch_down(ChPid, State) of
         {ok, State1}   -> reply(ok, State1);
-        {stop, State1} -> stop(ok, State1)
+        {stop, State1} -> stop(ok, State1#q{status = {terminated_by, auto_delete}})
     end;
 
 handle_call({basic_get, ChPid, NoAck, LimiterPid}, _From,
@@ -1410,6 +1435,9 @@ handle_cast({credit, ChPid, CTag, Credit, Drain},
                                      run_message_queue(true, State1)
       end);
 
+% Note: https://www.pivotaltracker.com/story/show/166962656
+% This event is necessary for the stats timer to be initialized with
+% the correct values once the management agent has started
 handle_cast({force_event_refresh, Ref},
             State = #q{consumers          = Consumers,
                        exclusive_consumer = Exclusive}) ->

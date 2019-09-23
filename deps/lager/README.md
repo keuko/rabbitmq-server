@@ -54,9 +54,8 @@ We review PRs and issues at least once a month as described below.
 OTP Support Policy
 ------------------
 The lager maintainers intend to support the past three OTP releases from
-current on the main 3.x branch of the project. As of 3.4.0 that includes 19, 18
-and 17. As a special case, until OTP 20 is released, we will continue to accept
-PRs for and support R16.
+current on the main 3.x branch of the project. As of December 2018 that includes
+21, 20, 19.
 
 Lager may or may not run on older OTP releases but it will only be guaranteed
 tested on the previous three OTP releases. If you need a version of lager
@@ -295,9 +294,17 @@ the lager application variable `error_logger_redirect` to `false`.
 You can also disable reformatting for OTP and Cowboy messages by setting variable
 `error_logger_format_raw` to `true`.
 
+If you installed your own handler(s) into `error_logger`, you can tell
+lager to leave it alone by using the `error_logger_whitelist` environment
+variable with a list of handlers to allow.
+
+```
+{error_logger_whitelist, [my_handler]}
+```
+
 The `error_logger` handler will also log more complete error messages (protected
 with use of `trunc_io`) to a "crash log" which can be referred to for further
-information. The location of the crash log can be specified by the crash_log
+information. The location of the crash log can be specified by the `crash_log`
 application variable. If set to `false` it is not written at all.
 
 Messages in the crash log are subject to a maximum message size which can be
@@ -356,6 +363,40 @@ related processes crash, you can set a limit:
 ```
 
 It is probably best to keep this number small.
+
+### Event queue flushing
+
+When the high-water mark is exceeded, lager can be configured to flush all
+event notifications in the message queue. This can have unintended consequences
+for other handlers in the same event manager (in e.g. the `error_logger`), as
+events they rely on may be wrongly discarded. By default, this behavior is enabled,
+but can be controlled, for the `error_logger` via:
+
+```erlang
+{error_logger_flush_queue, true | false}
+```
+
+or for a specific sink, using the option:
+
+```erlang
+{flush_queue, true | false}
+```
+
+If `flush_queue` is true, a message queue length threshold can be set, at which
+messages will start being discarded. The default threshold is `0`, meaning that
+if `flush_queue` is true, messages will be discarded if the high-water mark is
+exceeded, regardless of the length of the message queue. The option to control
+the threshold is, for `error_logger`:
+
+```erlang
+{error_logger_flush_threshold, 1000}
+```
+
+and for sinks:
+
+```erlang
+{flush_threshold, 1000}
+```
 
 ### Sink Killer
 
@@ -489,13 +530,58 @@ Some examples:
           6:00 hr
 ```
 
+On top of the day, week and month time format from newsyslog,
+hour specification is added from PR [#420](https://github.com/erlang-lager/lager/pull/420)
+
+```
+Format of hour specification is : [Hmm]
+The range for minute specification is:
+
+  mm      minutes, range 0 ... 59
+
+Some examples:
+
+  $H00    rotate every hour at HH:00
+  $D12H30 rotate every day at 12:30
+  $W0D0H0 rotate every week on Sunday at 00:00
+```
+
 To configure the crash log rotation, the following application variables are
 used:
 * `crash_log_size`
 * `crash_log_date`
 * `crash_log_count`
+* `crash_log_rotator`
 
 See the `.app.src` file for further details.
+
+Custom Log Rotation
+-------------------
+Custom log rotator could be configured with option for `lager_file_backend`
+```erlang
+{rotator, lager_rotator_default}
+```
+
+The module should provide the following callbacks as `lager_rotator_behaviour`
+
+```erlang
+%% @doc Create a log file
+-callback(create_logfile(Name::list(), Buffer::{integer(), integer()} | any()) ->
+    {ok, {FD::file:io_device(), Inode::integer(), Size::integer()}} | {error, any()}).
+
+%% @doc Open a log file
+-callback(open_logfile(Name::list(), Buffer::{integer(), integer()} | any()) ->
+    {ok, {FD::file:io_device(), Inode::integer(), Size::integer()}} | {error, any()}).
+
+%% @doc Ensure reference to current target, could be rotated
+-callback(ensure_logfile(Name::list(), FD::file:io_device(), Inode::integer(),
+                         Buffer::{integer(), integer()} | any()) ->
+    {ok, {FD::file:io_device(), Inode::integer(), Size::integer()}} | {error, any()}).
+
+%% @doc Rotate the log file
+-callback(rotate_logfile(Name::list(), Count::integer()) ->
+    ok).
+```
 
 Syslog Support
 --------------
@@ -504,14 +590,18 @@ Lager syslog output is provided as a separate application:
 separate application so lager itself doesn't have an indirect dependency on a
 port driver. Please see the `lager_syslog` README for configuration information.
 
-Older Backends
+Other Backends
 --------------
-Lager 2.0 changed the backend API, there are various 3rd party backends for
-lager available, but they may not have been updated to the new API. As they
-are updated, links to them can be re-added here.
+There are lots of them! Some connect log messages to AMQP, various logging
+analytic services ([bunyan](https://github.com/Vagabond/lager_bunyan_formatter),
+[loggly](https://github.com/kivra/lager_loggly), etc), and more. [Looking on
+hex](https://hex.pm/packages?_utf8=✓&search=lager&sort=recent_downloads) or
+using "lager BACKEND" where "BACKEND" is your preferred log solution
+on your favorite search engine is a good starting point.
 
 Exception Pretty Printing
 ----------------------
+Up to OTP 20:
 
 ```erlang
 try
@@ -521,6 +611,19 @@ catch
         lager:error(
             "~nStacktrace:~s",
             [lager:pr_stacktrace(erlang:get_stacktrace(), {Class, Reason})])
+end.
+```
+
+On OTP 21+:
+
+```erlang
+try
+    foo()
+catch
+    Class:Reason:Stacktrace ->
+        lager:error(
+            "~nStacktrace:~s",
+            [lager:pr_stacktrace(Stacktrace, {Class, Reason})])
 end.
 ```
 
@@ -854,8 +957,6 @@ will be impacted by what the functions you call do and how much latency they
 may introduce. This impact will even greater with `on_log` since the calls
 are injected at the point a message is logged.
 
-
-
 Setting the truncation limit at compile-time
 --------------------------------------------
 Lager defaults to truncating messages at 4096 bytes, you can alter this by
@@ -882,6 +983,71 @@ level of your application, you can use these configs to turn it off:
          {suppress_supervisor_start_stop, true}]}
 ```
 
+Sys debug functions
+--------------------
+
+Lager provides an integrated way to use sys 'debug functions'. You can install a debug
+function in a target process by doing
+
+```erlang
+lager:install_trace(Pid, notice).
+```
+
+You can also customize the tracing somewhat:
+
+```erlang
+lager:install_trace(Pid, notice, [{count, 100}, {timeout, 5000}, {format_string, "my trace event ~p ~p"]}).
+```
+
+The trace options are currently:
+
+* timeout - how long the trace stays installed: `infinity` (the default) or a millisecond timeout
+* count - how many trace events to log: `infinity` (default) or a positive number
+* format_string - the format string to log the event with. *Must* have 2 format specifiers for the 2 parameters supplied.
+
+This will, on every 'system event' for an OTP process (usually inbound messages, replies
+and state changes) generate a lager message at the specified log level.
+
+You can remove the trace when you're done by doing:
+
+```erlang
+lager:remove_trace(Pid).
+```
+
+If you want to start an OTP process with tracing enabled from the very beginning, you can do something like this:
+
+```erlang
+gen_server:start_link(mymodule, [], [{debug, [{install, {fun lager:trace_func/3, lager:trace_state(undefined, notice, [])}}]}]).
+```
+
+The third argument to the trace_state function is the Option list documented above.
+
+Console output to another group leader process
+----------------------------------------------
+
+If you want to send your console output to another group_leader (typically on
+another node) you can provide a `{group_leader, Pid}` argument to the console
+backend. This can be combined with another console config option, `id` and
+gen_event's `{Module, ID}` to allow remote tracing of a node to standard out via
+nodetool:
+
+```erlang
+    GL = erlang:group_leader(),
+    Node = node(GL),
+    lager_app:start_handler(lager_event, {lager_console_backend, Node},
+         [{group_leader, GL}, {level, none}, {id, {lager_console_backend, Node}}]),
+    case lager:trace({lager_console_backend, Node}, Filter, Level) of
+         ...
+```
+
+In the above example, the code is assumed to be running via a `nodetool rpc`
+invocation so that the code is executing on the Erlang node, but the
+group_leader is that of the reltool node (eg. appname_maint_12345@127.0.0.1).
+
+If you intend to use tracing with this feature, make sure the second parameter
+to start_handler and the `id` parameter match. Thus when the custom group_leader
+process exits, lager will remove any associated traces for that handler.
+
 Elixir Support
 --------------
 
@@ -901,10 +1067,10 @@ This approach will benefit from the fact that most elixir libs and frameworks
 are likely to use the elixir Logger and as such logging will all flow via the
 same logging mechanism.
 
-In [elixir 2.0 support for parse transforms will be deprecated](https://github.com/elixir-lang/elixir/issues/5762).
+In [elixir 1.5 support for parse transforms was deprecated](https://github.com/elixir-lang/elixir/issues/5762).
 Taking the "Lager as a Logger Backend" approach is likely bypass any related 
 regression issues that would be introduced into a project which is using lager 
-directly when updating to elixir 2.0.
+directly when updating to elixir 1.5.
 
 There are open source elixir Logger backends for Lager available:
 - [LagerLogger](https://github.com/PSPDFKit-labs/lager_logger)
@@ -912,10 +1078,10 @@ There are open source elixir Logger backends for Lager available:
 
 ### Directly
 
-It is fully possible prior to elixir 2.0 to use lager and all its features
+It is fully possible prior to elixir 1.5 to use lager and all its features
 directly.
 
-After elixir 2.0 there will be no support for parse transforms, and it would be
+After elixir 1.5 there is no support for parse transforms, and it is
 recommended to use an elixir wrapper for the lager api that provides compile time
 log level exclusion via elixir macros when opting for direct use of lager.
 
@@ -974,6 +1140,106 @@ Example Usage:
 
 3.x Changelog
 -------------
+
+3.8.0 - 9 August 2019
+
+    * Breaking API change: Modify the `lager_rotator_behaviour` to pass in a
+      file's creation time to `ensure_logfile/5` to be used to determine if
+      file has changed on systems where inodes are not available (i.e.
+      `win32`). The return value from `create_logfile/2`, `open_logfile/2` and
+      `ensure_logfile/5` now requires ctime to be returned (#509)
+    * Bugfix: ensure log file rotation works on `win32` (#509)
+    * Bugfix: ensure test suite passes on `win32` (#509)
+    * Bugfix: ensure file paths with Unicode are formatted properly (#510)
+
+3.7.0 - 24 May 2019
+
+    * Policy: Officially ending support for OTP 19 (Support OTP 20, 21, 22)
+    * Cleanup: Fix all dialyzer errors
+    * Bugfix: Minor changes to FSM/statem exits in OTP 22.
+
+3.6.10 - 30 April 2019
+
+    * Documentation: Fix pr_stacktrace invocation example (#494)
+    * Bugfix: Do not count suppressed messages for message drop counts (#499)
+
+3.6.9 - 13 March 2019
+
+    * Bugfix: Fix file rotation on windows (#493)
+
+3.6.8 - 21 December 2018
+
+    * Documentation: Document the error_logger_whitelist environment variable. (#489)
+    * Bugfix: Remove the built in handler inside of OTP 21 `logger` system. (#488)
+    * Bugfix: Cleanup unneeded check for is_map (#486)
+    * Bugfix: Cleanup ranch errors treated as cowboy errors (#485)
+    * Testing: Remove OTP 18 from TravisCI testing matrix
+
+3.6.7 - 14 October 2018
+
+    * Bugfix: fix tracing to work with OTP21 #480
+
+3.6.6 - 24 September 2018
+
+    * Bugfix: When printing records, handle an improper list correctly. #478
+    * Bugfix: Fix various tests and make some rotation code more explicit. #476
+    * Bugfix: Make sure not to miscount messages during high-water mark check. #475
+
+3.6.5 - 3 September 2018
+
+    * Feature: Allow the console backend to redirect output to a remote node #469
+    * Feature: is_loggble - support for severity as atom #472
+    * Bugfix: Prevent silent dropping of messages when hwm is exceeded #467
+    * Bugfix: rotation - default log file not deleted #474
+    * Bugfix: Handle strange crash report from gen_statem #473
+    * Documentation: Various markup fixes: #468 #470
+
+3.6.4 - 11 July 2018
+
+    * Bugfix: Reinstall handlers after a sink is killed #459
+    * Bugfix: Fix platform_define matching not to break on OSX Mojave #461
+    * Feature: Add support for installing a sys trace function #462
+
+3.6.3 - 6 June 2018
+
+    * OTP 21 support
+
+3.6.2 - 26 April 2018
+
+    * Bugfix: flush_threshold not working (#449)
+    * Feature: Add `node` as a formatting option (#447)
+    * Documentation: Update Elixir section with information about parse_transform (#446)
+    * Bugfix: Correct default console configuation to use "[{level,info}]" instead (#445)
+    * Feature: Pretty print lists of records at top level and field values with lager:pr (#442)
+    * Bugfix: Ignore return value of lager:dispatch_log in lager.hrl (#441)
+
+3.6.1 - 1 February 2018
+
+    * Bugfix: Make a few corrections to the recent mailbox flushing changes (#436)
+    * Bugfix: add flush options to proplist validation (#439)
+    * Bugfix: Don't log when we dropped 0 messages (#440)
+
+3.6.0 - 16 January 2018
+
+    * Feature: Support logging with macros per level (#419)
+    * Feature: Support custom file rotation handler; support hourly file
+               rotation (#420)
+    * Feature: Optionally reverse pretty stacktraces (so errors are
+               at the top and the failed function call is at the bottom.)
+               (#424)
+    * Bugfix:  Handle OTP 20 gen_server failure where client pid
+               is dead. (#426)
+    * Feature: Optionally don't flush notify messages at
+               high water mark. (#427)
+    * Bugfix:  Handle another stacktrace format (#429)
+    * Bugfix:  Fix test failure using macros on OTP 18 (#430)
+    * Policy:  Remove all code which supports R15 (#432)
+
+3.5.2 - 19 October 2017
+
+    * Bugfix: Properly check for unicode characters in potentially deep
+              character list. (#417)
+
 3.5.1 - 15 June 2017
 
     * Doc fix: Missed a curly brace in an example. (#412)

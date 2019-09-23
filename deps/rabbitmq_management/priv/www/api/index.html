@@ -28,7 +28,7 @@
     <p>Many URIs require the name of a virtual host as part of the
     path, since names only uniquely identify objects within a virtual
     host. As the default virtual host is called "<code>/</code>", this
-    will need to be encoded as "<code>%2f</code>".</p>
+    will need to be encoded as "<code>%2F</code>".</p>
 
     <p>PUTing a resource creates it. The JSON object you upload must
     have certain mandatory keys (documented below) and may have
@@ -125,12 +125,12 @@ Content-Length: 0</pre>
 <pre>:: Windows
 C:\&gt; curl -i -u guest:guest -H "content-type:application/json" ^
        -XPUT -d"{""type"":""direct"",""durable"":true}" ^
-       http://localhost:15672/api/exchanges/%2f/my-new-exchange
+       http://localhost:15672/api/exchanges/%2F/my-new-exchange
 
 # Unix
 $ curl -i -u guest:guest -H "content-type:application/json" \
     -XPUT -d'{"type":"direct","durable":true}' \
-    http://localhost:15672/api/exchanges/%2f/my-new-exchange
+    http://localhost:15672/api/exchanges/%2F/my-new-exchange
 
 HTTP/1.1 204 No Content
 Server: MochiWeb/1.1 WebMachine/1.10.0 (never breaks eye contact)
@@ -144,11 +144,11 @@ Content-Length: 0</pre>
         And delete it again:
 <pre>:: Windows
 C:\&gt; curl -i -u guest:guest -H "content-type:application/json" ^
-       -XDELETE http://localhost:15672/api/exchanges/%2f/my-new-exchange
+       -XDELETE http://localhost:15672/api/exchanges/%2F/my-new-exchange
 
 # Unix
 $ curl -i -u guest:guest -H "content-type:application/json" \
-    -XDELETE http://localhost:15672/api/exchanges/%2f/my-new-exchange
+    -XDELETE http://localhost:15672/api/exchanges/%2F/my-new-exchange
 
 HTTP/1.1 204 No Content
 Server: MochiWeb/1.1 WebMachine/1.10.0 (never breaks eye contact)
@@ -716,12 +716,17 @@ or:
 <pre>{"password_hash":"2lmoth8l4H0DViLaK9Fxi6l9ds8=", "tags":"administrator"}</pre>
         The <code>tags</code> key is mandatory. Either
         <code>password</code> or <code>password_hash</code>
-        must be set. Setting <code>password_hash</code> to <code>""</code> will ensure the
+        can be set. If neither are set the user will not be able to log in with a password,
+        but other mechanisms like client certificates may be used.
+        Setting <code>password_hash</code> to <code>""</code> will ensure the
         user cannot use a password to log in. <code>tags</code> is a
         comma-separated list of tags for the user. Currently recognised tags
         are <code>administrator</code>, <code>monitoring</code> and <code>management</code>.
         <code>password_hash</code> must be generated using the algorithm described
-        <a href="http://rabbitmq.com/passwords.html#computing-password-hash">here</a>.
+        <a href="https://rabbitmq.com/passwords.html#computing-password-hash">here</a>.
+        You may also specify the hash function being used by adding the <code>hashing_algorithm</code>
+        key to the body. Currently recognised algorithms are <code>rabbit_password_hashing_sha256</code>, 
+        <code>rabbit_password_hashing_sha512</code>, and <code>rabbit_password_hashing_md5</code>.
         </td>
       </tr>
       <tr>
@@ -869,7 +874,7 @@ or:
         <td></td>
         <td></td>
         <td class="path">/api/operator-policies</td>
-        <td>A list of all operator policiy overrides.</td>
+        <td>A list of all operator policy overrides.</td>
       </tr>
       <tr>
         <td>X</td>
@@ -877,7 +882,7 @@ or:
         <td></td>
         <td></td>
         <td class="path">/api/operator-policies/<i>vhost</i></td>
-        <td>A list of all operator policiy overrides in a given virtual host.</td>
+        <td>A list of all operator policy overrides in a given virtual host.</td>
       </tr>
       <tr>
         <td>X</td>
@@ -963,9 +968,11 @@ or:
         <td></td>
         <td class="path">/api/vhost-limits/<i>vhost</i>/<i>name</i></td>
         <td>
-            Set or delete per-vost limit for <code>vhost</code> with <code>name</code>.
-            Limits are set using a JSON document in the body:
-            <pre>{"max-connections": 100, "max-queues": 200}</pre>
+          Set or delete per-vhost limit for <code>vhost</code>. The <code>name</code> URL path element
+          refers to the name of the limit (<code>max-connections</code>, <code>max-queues</code>).
+          Limits are set using a JSON document in the body: <pre>{"value": 100}</pre>. Example
+          request:</br>
+          <pre>curl -4u 'guest:guest' -H 'content-type:application/json' -X PUT localhost:15672/api/vhost-limits/my-vhost/max-connections -d '{"value": 50}'</pre>
         </td>
       </tr>
     </table>

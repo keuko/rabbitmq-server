@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_networking).
@@ -35,8 +35,8 @@
          connection_info/1, connection_info/2,
          connection_info_all/0, connection_info_all/1,
          emit_connection_info_all/4, emit_connection_info_local/3,
-         close_connection/2, force_connection_event_refresh/1, accept_ack/2,
-         tcp_host/1]).
+         close_connection/2, force_connection_event_refresh/1,
+         handshake/2, tcp_host/1]).
 
 %% Used by TCP-based transports, e.g. STOMP adapter
 -export([tcp_listener_addresses/1, tcp_listener_spec/9,
@@ -68,9 +68,10 @@
 -type protocol() :: atom().
 -type label() :: string().
 
--spec start_tcp_listener(listener_config(), integer()) -> 'ok'.
--spec start_ssl_listener
-        (listener_config(), rabbit_types:infos(), integer()) -> 'ok'.
+-spec start_tcp_listener(
+        listener_config(), integer()) -> 'ok' | {'error', term()}.
+-spec start_ssl_listener(
+        listener_config(), rabbit_types:infos(), integer()) -> 'ok' | {'error', term()}.
 -spec stop_tcp_listener(listener_config()) -> 'ok'.
 -spec active_listeners() -> [rabbit_types:listener()].
 -spec node_listeners(node()) -> [rabbit_types:listener()].
@@ -87,13 +88,12 @@
           [rabbit_types:infos()].
 -spec close_connection(pid(), string()) -> 'ok'.
 -spec force_connection_event_refresh(reference()) -> 'ok'.
--spec accept_ack(any(), rabbit_net:socket()) -> ok.
 
 -spec on_node_down(node()) -> 'ok'.
 -spec tcp_listener_addresses(listener_config()) -> [address()].
 -spec tcp_listener_spec
         (name_prefix(), address(), [gen_tcp:listen_option()], module(), module(),
-         protocol(), any(), non_neg_integer(), label()) ->
+         any(), protocol(), non_neg_integer(), label()) ->
             supervisor:child_spec().
 -spec ensure_ssl() -> rabbit_types:infos().
 -spec poodle_check(atom()) -> 'ok' | 'danger'.
@@ -113,22 +113,44 @@
          _) ->
             'ok'.
 
+%% @todo Remove once Dialyzer only runs on Erlang/OTP 21.3 or above.
+-dialyzer({nowarn_function, boot/0}).
+-dialyzer({nowarn_function, boot_listeners/3}).
+-dialyzer({nowarn_function, record_distribution_listener/0}).
+
 %%----------------------------------------------------------------------------
 
 boot() ->
     ok = record_distribution_listener(),
     _ = application:start(ranch),
-    ok = boot_tcp(application:get_env(rabbit, num_tcp_acceptors, 10)),
-    ok = boot_ssl(application:get_env(rabbit, num_ssl_acceptors, 1)),
-    _ = maybe_start_proxy_protocol(),
+    %% Failures will throw exceptions
+    _ = boot_listeners(fun boot_tcp/1, application:get_env(rabbit, num_tcp_acceptors, 10), "TCP"),
+    _ = boot_listeners(fun boot_tls/1, application:get_env(rabbit, num_ssl_acceptors, 10), "TLS"),
     ok.
+
+boot_listeners(Fun, NumAcceptors, Type) ->
+    case Fun(NumAcceptors) of
+        ok                                                                  ->
+            ok;
+        {error, {could_not_start_listener, Address, Port, Details}} = Error ->
+            rabbit_log:error("Failed to start ~s listener [~s]:~p, error: ~p",
+                             [Type, Address, Port, Details]),
+            throw(Error)
+    end.
 
 boot_tcp(NumAcceptors) ->
     {ok, TcpListeners} = application:get_env(tcp_listeners),
-    [ok = start_tcp_listener(Listener, NumAcceptors) || Listener <- TcpListeners],
-    ok.
+    case lists:foldl(fun(Listener, ok) ->
+                             start_tcp_listener(Listener, NumAcceptors);
+                        (_Listener, Error) ->
+                             Error
+                     end,
+                     ok, TcpListeners) of
+        ok                 -> ok;
+        {error, _} = Error -> Error
+    end.
 
-boot_ssl(NumAcceptors) ->
+boot_tls(NumAcceptors) ->
     case application:get_env(ssl_listeners) of
         {ok, []} ->
             ok;
@@ -172,12 +194,6 @@ log_poodle_fail(Context) ->
       "'rabbit' section of your configuration file.~n",
       [rabbit_misc:otp_release(), Context]).
 
-maybe_start_proxy_protocol() ->
-    case application:get_env(rabbit, proxy_protocol, false) of
-        false -> ok;
-        true  -> application:start(ranch_proxy_protocol)
-    end.
-
 fix_ssl_options(Config) ->
     rabbit_ssl_options:fix(Config).
 
@@ -212,15 +228,20 @@ tcp_listener_spec(NamePrefix, {IPAddress, Port, Family}, SocketOpts,
      transient, infinity, supervisor, [tcp_listener_sup]}.
 
 start_tcp_listener(Listener, NumAcceptors) ->
-    start_listener(Listener, NumAcceptors, amqp, "TCP Listener", tcp_opts()).
+    start_listener(Listener, NumAcceptors, amqp, "TCP listener", tcp_opts()).
 
 start_ssl_listener(Listener, SslOpts, NumAcceptors) ->
-    start_listener(Listener, NumAcceptors, 'amqp/ssl', "SSL Listener", tcp_opts() ++ SslOpts).
+    start_listener(Listener, NumAcceptors, 'amqp/ssl', "TLS (SSL) listener", tcp_opts() ++ SslOpts).
 
+
+-spec start_listener(
+        listener_config(), integer(), protocol(), label(), list()) -> 'ok' | {'error', term()}.
 start_listener(Listener, NumAcceptors, Protocol, Label, Opts) ->
-    [start_listener0(Address, NumAcceptors, Protocol, Label, Opts) ||
-        Address <- tcp_listener_addresses(Listener)],
-    ok.
+    lists:foldl(fun (Address, ok) ->
+                        start_listener0(Address, NumAcceptors, Protocol, Label, Opts);
+                    (_Address, {error, _} = Error) ->
+                        Error
+                end, ok, tcp_listener_addresses(Listener)).
 
 start_listener0(Address, NumAcceptors, Protocol, Label, Opts) ->
     Transport = transport(Protocol),
@@ -228,19 +249,21 @@ start_listener0(Address, NumAcceptors, Protocol, Label, Opts) ->
                              Transport, rabbit_connection_sup, [], Protocol,
                              NumAcceptors, Label),
     case supervisor:start_child(rabbit_sup, Spec) of
-        {ok, _}                -> ok;
-        {error, {shutdown, _}} -> {IPAddress, Port, _Family} = Address,
-                                  exit({could_not_start_tcp_listener,
-                                        {rabbit_misc:ntoa(IPAddress), Port}})
+        {ok, _}          -> ok;
+        {error, {{shutdown, {failed_to_start_child, _,
+                             {shutdown, {failed_to_start_child, _,
+                                         {listen_error, _, PosixError}}}}}, _}} ->
+            {IPAddress, Port, _Family} = Address,
+            {error, {could_not_start_listener, rabbit_misc:ntoa(IPAddress), Port, PosixError}};
+        {error, Other} ->
+            {IPAddress, Port, _Family} = Address,
+            {error, {could_not_start_listener, rabbit_misc:ntoa(IPAddress), Port, Other}}
     end.
 
 transport(Protocol) ->
-    ProxyProtocol = application:get_env(rabbit, proxy_protocol, false),
-    case {Protocol, ProxyProtocol} of
-        {amqp, false}       -> ranch_tcp;
-        {amqp, true}        -> ranch_proxy;
-        {'amqp/ssl', false} -> ranch_ssl;
-        {'amqp/ssl', true}  -> ranch_proxy_ssl
+    case Protocol of
+        amqp       -> ranch_tcp;
+        'amqp/ssl' -> ranch_ssl
     end.
 
 
@@ -344,16 +367,48 @@ force_connection_event_refresh(Ref) ->
     [rabbit_reader:force_event_refresh(C, Ref) || C <- connections()],
     ok.
 
-accept_ack(Ref, Sock) ->
-    ok = ranch:accept_ack(Ref),
-    case tune_buffer_size(Sock) of
-        ok         -> ok;
-        {error, _} -> rabbit_net:fast_close(Sock),
-                      exit(normal)
+-spec failed_to_recv_proxy_header(_, _) -> no_return().
+failed_to_recv_proxy_header(Ref, Error) ->
+    Msg = case Error of
+        closed -> "error when receiving proxy header: TCP socket was ~p prematurely";
+        _Other -> "error when receiving proxy header: ~p"
     end,
+    rabbit_log:error(Msg, [Error]),
+    % The following call will clean up resources then exit
+    _ = ranch:handshake(Ref),
+    exit({shutdown, failed_to_recv_proxy_header}).
+
+handshake(Ref, ProxyProtocolEnabled) ->
+    case ProxyProtocolEnabled of
+        true ->
+            case ranch:recv_proxy_header(Ref, 3000) of
+                {error, Error} ->
+                    failed_to_recv_proxy_header(Ref, Error);
+                {error, protocol_error, Error} ->
+                    failed_to_recv_proxy_header(Ref, Error);
+                {ok, ProxyInfo} ->
+                    {ok, Sock} = ranch:handshake(Ref),
+                    setup_socket(Sock),
+                    {ok, {rabbit_proxy_socket, Sock, ProxyInfo}}
+            end;
+        false ->
+            {ok, Sock} = ranch:handshake(Ref),
+            setup_socket(Sock),
+            {ok, Sock}
+    end.
+
+setup_socket(Sock) ->
+    ok = tune_buffer_size(Sock),
     ok = file_handle_cache:obtain().
 
 tune_buffer_size(Sock) ->
+    case tune_buffer_size1(Sock) of
+        ok         -> ok;
+        {error, _} -> rabbit_net:fast_close(Sock),
+                      exit(normal)
+    end.
+
+tune_buffer_size1(Sock) ->
     case rabbit_net:getopts(Sock, [sndbuf, recbuf, buffer]) of
         {ok, BufSizes} -> BufSz = lists:max([Sz || {_Opt, Sz} <- BufSizes]),
                           rabbit_net:setopts(Sock, [{buffer, BufSz}]);
@@ -394,6 +449,7 @@ gethostaddr(Host, Family) ->
         {error, Reason} -> host_lookup_error(Host, Reason)
     end.
 
+-spec host_lookup_error(_, _) -> no_return().
 host_lookup_error(Host, Reason) ->
     rabbit_log:error("invalid host ~p - ~p~n", [Host, Reason]),
     throw({error, {invalid_host, Host, Reason}}).

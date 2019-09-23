@@ -166,10 +166,22 @@ sync-gitremote: $(READY_DEPS:%=$(DEPS_DIR)/%+sync-gitremote)
 		git remote set-url --push origin \
 		'$(call dep_rmq_repo,$(RABBITMQ_CURRENT_PUSH_URL),$(notdir $*))'
 
+ifeq ($(origin, RMQ_GIT_GLOBAL_USER_NAME),undefined)
 RMQ_GIT_GLOBAL_USER_NAME := $(shell git config --global user.name)
+export RMQ_GIT_GLOBAL_USER_NAME
+endif
+ifeq ($(origin RMQ_GIT_GLOBAL_USER_EMAIL),undefined)
 RMQ_GIT_GLOBAL_USER_EMAIL := $(shell git config --global user.email)
+export RMQ_GIT_GLOBAL_USER_EMAIL
+endif
+ifeq ($(origin RMQ_GIT_USER_NAME),undefined)
 RMQ_GIT_USER_NAME := $(shell git config user.name)
+export RMQ_GIT_USER_NAME
+endif
+ifeq ($(origin RMQ_GIT_USER_EMAIL),undefined)
 RMQ_GIT_USER_EMAIL := $(shell git config user.email)
+export RMQ_GIT_USER_EMAIL
+endif
 
 sync-gituser: $(READY_DEPS:%=$(DEPS_DIR)/%+sync-gituser)
 	@:
@@ -210,31 +222,48 @@ else \
 fi; \
 case "$(SINCE_TAG)" in \
 last-release) \
-	ref=$$(git $$git_dir describe --abbrev=0 --tags \
-		--exclude "*-beta*" \
-		--exclude "*_milestone*" \
-		--exclude "*[-_]rc*"); \
-	;; \
-last-prerelease) \
-	ref=$$(git $$git_dir describe --abbrev=0 --tags); \
+	tags_count=$$(git $$git_dir tag -l 2>/dev/null | grep -E -v '(-beta|_milestone|[-_]rc)' | wc -l); \
 	;; \
 *) \
-	git $$git_dir rev-parse "$(SINCE_TAG)" -- >/dev/null; \
-	ref=$(SINCE_TAG); \
+	tags_count=$$(git $$git_dir tag -l 2>/dev/null | wc -l); \
 	;; \
 esac; \
-commits_count=$$(git $$git_dir log --oneline "$$ref.." | wc -l); \
-if test "$$commits_count" -gt 0; then \
+if test "$$tags_count" -gt 0; then \
+	case "$(SINCE_TAG)" in \
+	last-release) \
+		ref=$$(git $$git_dir describe --abbrev=0 --tags \
+			--exclude "*-beta*" \
+			--exclude "*_milestone*" \
+			--exclude "*[-_]rc*"); \
+		;; \
+	last-prerelease) \
+		ref=$$(git $$git_dir describe --abbrev=0 --tags); \
+		;; \
+	*) \
+		git $$git_dir rev-parse "$(SINCE_TAG)" -- >/dev/null; \
+		ref=$(SINCE_TAG); \
+		;; \
+	esac; \
+	commits_count=$$(git $$git_dir log --oneline "$$ref.." | wc -l); \
+	if test "$$commits_count" -gt 0; then \
+		if test "$(MARKDOWN)" = yes; then \
+			printf "\n## [\`$$repository\`](https://github.com/rabbitmq/$$repository)\n\nCommits since \`$$ref\`:\n\n"; \
+			git $$git_dir --no-pager log $(COMMITS_LOG_OPTS) \
+				--format="format:* %s ([\`%h\`](https://github.com/rabbitmq/$$repository/commit/%H))" \
+				"$$ref.."; \
+			echo; \
+		else \
+			echo; \
+			echo "# $$repository - Commits since $$ref"; \
+			git $$git_dir log $(COMMITS_LOG_OPTS) "$$ref.."; \
+		fi; \
+	fi; \
+else \
 	if test "$(MARKDOWN)" = yes; then \
-		printf "\n## [\`$$repository\`](https://github.com/rabbitmq/$$repository)\n\nCommits since \`$$ref\`:\n\n"; \
-		git $$git_dir --no-pager log $(COMMITS_LOG_OPTS) \
-			--format="format:* %s ([\`%h\`](https://github.com/rabbitmq/$$repository/commit/%H))" \
-			"$$ref.."; \
-		echo; \
+		printf "\n## [\`$$repository\`](https://github.com/rabbitmq/$$repository)\n\n**New** since the last release!\n"; \
 	else \
 		echo; \
-		echo "# $$repository - Commits since $$ref"; \
-		git $$git_dir log $(COMMITS_LOG_OPTS) "$$ref.."; \
+		echo "# $$repository - New since the last release!"; \
 	fi; \
 fi
 endef
@@ -249,24 +278,36 @@ commits-since-release-title:
 	$(verbose) set -e; \
 	case "$(SINCE_TAG)" in \
 	last-release) \
-		ref=$$(git $$git_dir describe --abbrev=0 --tags \
-			--exclude "*-beta*" \
-			--exclude "*_milestone*" \
-			--exclude "*[-_]rc*"); \
-		;; \
-	last-prerelease) \
-		ref=$$(git $$git_dir describe --abbrev=0 --tags); \
+		tags_count=$$(git $$git_dir tag -l 2>/dev/null | grep -E -v '(-beta|_milestone|[-_]rc)' | wc -l); \
 		;; \
 	*) \
-		ref=$(SINCE_TAG); \
+		tags_count=$$(git $$git_dir tag -l 2>/dev/null | wc -l); \
 		;; \
 	esac; \
-	version=$$(echo "$$ref" | sed -E \
-		-e 's/rabbitmq_v([0-9]+)_([0-9]+)_([0-9]+)/v\1.\2.\3/' \
-		-e 's/_milestone/-beta./' \
-		-e 's/_rc/-rc./' \
-		-e 's/^v//'); \
-	echo "# Changes since RabbitMQ $$version"; \
+	if test "$$tags_count" -gt 0; then \
+		case "$(SINCE_TAG)" in \
+		last-release) \
+			ref=$$(git $$git_dir describe --abbrev=0 --tags \
+				--exclude "*-beta*" \
+				--exclude "*_milestone*" \
+				--exclude "*[-_]rc*"); \
+			;; \
+		last-prerelease) \
+			ref=$$(git $$git_dir describe --abbrev=0 --tags); \
+			;; \
+		*) \
+			ref=$(SINCE_TAG); \
+			;; \
+		esac; \
+		version=$$(echo "$$ref" | sed -E \
+			-e 's/rabbitmq_v([0-9]+)_([0-9]+)_([0-9]+)/v\1.\2.\3/' \
+			-e 's/_milestone/-beta./' \
+			-e 's/_rc/-rc./' \
+			-e 's/^v//'); \
+		echo "# Changes since RabbitMQ $$version"; \
+	else \
+		echo "# Changes since the beginning of time"; \
+	fi
 
 %+commits-since-release:
 	$(verbose) $(call show_commits_since_tag,$*)

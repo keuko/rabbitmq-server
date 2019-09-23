@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,10 +11,14 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_reader).
+
+%% Transitional step until we can require Erlang/OTP 21 and
+%% use the now recommended try/catch syntax for obtaining the stack trace.
+-compile(nowarn_deprecated_function).
 
 %% This is an AMQP 0-9-1 connection implementation. If AMQP 1.0 plugin is enabled,
 %% this module passes control of incoming AMQP 1.0 connections to it.
@@ -53,12 +57,12 @@
 -include("rabbit_framing.hrl").
 -include("rabbit.hrl").
 
--export([start_link/3, info_keys/0, info/1, info/2, force_event_refresh/2,
+-export([start_link/2, info_keys/0, info/1, info/2, force_event_refresh/2,
          shutdown/2]).
 
 -export([system_continue/3, system_terminate/4, system_code_change/4]).
 
--export([init/4, mainloop/4, recvloop/4]).
+-export([init/3, mainloop/4, recvloop/4]).
 
 -export([conserve_resources/3, server_properties/1]).
 
@@ -153,7 +157,7 @@
 
 %%--------------------------------------------------------------------------
 
--spec start_link(pid(), any(), rabbit_net:socket()) -> rabbit_types:ok(pid()).
+-spec start_link(pid(), any()) -> rabbit_types:ok(pid()).
 -spec info_keys() -> rabbit_types:info_keys().
 -spec info(pid()) -> rabbit_types:infos().
 -spec info(pid(), rabbit_types:info_keys()) -> rabbit_types:infos().
@@ -167,28 +171,29 @@
           rabbit_framing:amqp_table().
 
 %% These specs only exists to add no_return() to keep dialyzer happy
--spec init(pid(), pid(), any(), rabbit_net:socket()) -> no_return().
+-spec init(pid(), pid(), any()) -> no_return().
 -spec start_connection(pid(), pid(), any(), rabbit_net:socket()) ->
           no_return().
 
 -spec mainloop(_,[binary()], non_neg_integer(), #v1{}) -> any().
 -spec system_code_change(_,_,_,_) -> {'ok',_}.
 -spec system_continue(_,_,{[binary()], non_neg_integer(), #v1{}}) -> any().
--spec system_terminate(_,_,_,_) -> none().
+-spec system_terminate(_,_,_,_) -> no_return().
 
 %%--------------------------------------------------------------------------
 
-start_link(HelperSup, Ref, Sock) ->
-    Pid = proc_lib:spawn_link(?MODULE, init, [self(), HelperSup, Ref, Sock]),
+start_link(HelperSup, Ref) ->
+    Pid = proc_lib:spawn_link(?MODULE, init, [self(), HelperSup, Ref]),
 
     {ok, Pid}.
 
 shutdown(Pid, Explanation) ->
     gen_server:call(Pid, {shutdown, Explanation}, infinity).
 
-init(Parent, HelperSup, Ref, Sock) ->
-    RealSocket = rabbit_net:unwrap_socket(Sock),
-    rabbit_networking:accept_ack(Ref, RealSocket),
+init(Parent, HelperSup, Ref) ->
+    ?LG_PROCESS_TYPE(reader),
+    {ok, Sock} = rabbit_networking:handshake(Ref,
+        application:get_env(rabbit, proxy_protocol, false)),
     Deb = sys:debug_options([]),
     start_connection(Parent, HelperSup, Deb, Sock).
 
@@ -212,6 +217,9 @@ info(Pid, Items) ->
         {error, Error} -> throw(Error)
     end.
 
+% Note: https://www.pivotaltracker.com/story/show/166962656
+% This event is necessary for the stats timer to be initialized with
+% the correct values once the management agent has started
 force_event_refresh(Pid, Ref) ->
     gen_server:cast(Pid, {force_event_refresh, Ref}).
 
@@ -227,7 +235,7 @@ server_properties(Protocol) ->
     {ok, RawConfigServerProps} = application:get_env(rabbit,
                                                      server_properties),
 
-    %% Normalize the simplifed (2-tuple) and unsimplified (3-tuple) forms
+    %% Normalize the simplified (2-tuple) and unsimplified (3-tuple) forms
     %% from the config and merge them with the generated built-in properties
     NormalizedConfigServerProps =
         [{<<"capabilities">>, table, server_capabilities(Protocol)} |
@@ -425,6 +433,13 @@ log_connection_exception(Severity, Name, {connection_closed_abruptly, _}) ->
     log_connection_exception_with_severity(Severity,
         "closing AMQP connection ~p (~s):~nclient unexpectedly closed TCP connection~n",
         [self(), Name]);
+%% failed connection.tune negotiations
+log_connection_exception(Severity, Name, {handshake_error, tuning, _Channel,
+                                          {exit, #amqp_error{explanation = Explanation},
+                                           _Method, _Stacktrace}}) ->
+    log_connection_exception_with_severity(Severity,
+        "closing AMQP connection ~p (~s):~nfailed to negotiate connection parameters: ~s~n",
+        [self(), Name, Explanation]);
 %% old exception structure
 log_connection_exception(Severity, Name, connection_closed_abruptly) ->
     log_connection_exception_with_severity(Severity,
@@ -439,9 +454,8 @@ log_connection_exception(Severity, Name, Ex) ->
 log_connection_exception_with_severity(Severity, Fmt, Args) ->
     case Severity of
         debug   -> rabbit_log_connection:debug(Fmt, Args);
-        info    -> rabbit_log_connection:info(Fmt, Args);
         warning -> rabbit_log_connection:warning(Fmt, Args);
-        error   -> rabbit_log_connection:warning(Fmt, Args)
+        error   -> rabbit_log_connection:error(Fmt, Args)
     end.
 
 run({M, F, A}) ->
@@ -527,6 +541,7 @@ mainloop(Deb, Buf, BufLen, State = #v1{sock = Sock,
             end
     end.
 
+-spec stop(_, #v1{}) -> no_return().
 stop(tcp_healthcheck, State) ->
     %% The connection was closed before any packet was received. It's
     %% probably a load-balancer healthcheck: don't consider this a
@@ -561,7 +576,7 @@ handle_other({'EXIT', Parent, Reason}, State = #v1{parent = Parent}) ->
     Msg = io_lib:format("broker forced connection closure with reason '~w'", [Reason]),
     terminate(Msg, State),
     %% this is what we are expected to do according to
-    %% http://www.erlang.org/doc/man/sys.html
+    %% https://www.erlang.org/doc/man/sys.html
     %%
     %% If we wanted to be *really* nice we should wait for a while for
     %% clients to close the socket at their end, just as we do in the
@@ -827,7 +842,7 @@ handle_exception(State = #v1{connection = #connection{protocol = Protocol},
     respond_and_close(State, Channel, Protocol, Reason,
                       {handshake_error, CS, Reason});
 %% when negotiation fails, e.g. due to channel_max being higher than the
-%% maxiumum allowed limit
+%% maximum allowed limit
 handle_exception(State = #v1{connection = #connection{protocol = Protocol,
                                                       log_name = ConnName,
                                                       user = User},
@@ -847,6 +862,7 @@ handle_exception(State, Channel, Reason) ->
 
 %% we've "lost sync" with the client and hence must not accept any
 %% more input
+-spec fatal_frame_error(_, _, _, _, _) -> no_return().
 fatal_frame_error(Error, Type, Channel, Payload, State) ->
     frame_error(Error, Type, Channel, Payload, State),
     %% grace period to allow transmission of error
@@ -898,6 +914,7 @@ create_channel(Channel,
         rabbit_channel_sup_sup:start_channel(
           ChanSupSup, {tcp, Sock, Channel, FrameMax, self(), Name,
                        Protocol, User, VHost, Capabilities, Collector}),
+    _ = rabbit_channel:source(ChPid, ?MODULE),
     MRef = erlang:monitor(process, ChPid),
     put({ch_pid, ChPid}, {Channel, MRef}),
     put({channel, Channel}, {ChPid, AState}),
@@ -1085,6 +1102,7 @@ start_connection({ProtocolMajor, ProtocolMinor, _ProtocolRevision},
                              connection_state = starting},
                     frame_header, 7).
 
+-spec refuse_connection(_, _, _) -> no_return().
 refuse_connection(Sock, Exception, {A, B, C, D}) ->
     ok = inet_op(fun () -> rabbit_net:send(Sock, <<"AMQP",A,B,C,D>>) end),
     throw(Exception).
@@ -1293,9 +1311,10 @@ fail_negotiation(Field, MinOrMax, ServerValue, ClientValue) ->
                    min -> {lower,  minimum};
                    max -> {higher, maximum}
                end,
+    ClientValueDetail = get_client_value_detail(Field, ClientValue),
     rabbit_misc:protocol_error(
-      not_allowed, "negotiated ~w = ~w is ~w than the ~w allowed value (~w)",
-      [Field, ClientValue, S1, S2, ServerValue], 'connection.tune').
+      not_allowed, "negotiated ~w = ~w~s is ~w than the ~w allowed value (~w)",
+      [Field, ClientValue, ClientValueDetail, S1, S2, ServerValue], 'connection.tune').
 
 get_env(Key) ->
     {ok, Value} = application:get_env(rabbit, Key),
@@ -1717,3 +1736,9 @@ dynamic_connection_name(Default) ->
 handle_uncontrolled_channel_close(ChPid) ->
     rabbit_core_metrics:channel_closed(ChPid),
     rabbit_event:notify(channel_closed, [{pid, ChPid}]).
+
+-spec get_client_value_detail(atom(), integer()) -> string().
+get_client_value_detail(channel_max, 0) ->
+    " (no limit)";
+get_client_value_detail(_Field, _ClientValue) ->
+    "".

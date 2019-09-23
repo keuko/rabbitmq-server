@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,12 +11,13 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_prelaunch).
 
 -export([start/0, stop/0]).
+-export([config_file_check/0]).
 
 -import(rabbit_misc, [pget/2, pget/3]).
 
@@ -25,6 +26,7 @@
 -define(SET_DIST_PORT, 0).
 -define(ERROR_CODE, 1).
 -define(DO_NOT_SET_DIST_PORT, 2).
+-define(EX_USAGE, 64).
 
 %%----------------------------------------------------------------------------
 %% Specs
@@ -43,7 +45,8 @@ start() ->
             ok = duplicate_node_check(NodeName, NodeHost),
             ok = dist_port_set_check(),
             ok = dist_port_range_check(),
-            ok = dist_port_use_check(NodeHost);
+            ok = dist_port_use_check(NodeHost),
+            ok = config_file_check();
         [] ->
             %% Ignore running node while installing windows service
             ok = dist_port_set_check(),
@@ -56,6 +59,17 @@ stop() ->
     ok.
 
 %%----------------------------------------------------------------------------
+
+config_file_check() ->
+    case rabbit_config:validate_config_files() of
+        ok -> ok;
+        {error, {ErrFmt, ErrArgs}} ->
+            ErrMsg = io_lib:format(ErrFmt, ErrArgs),
+            {{Year, Month, Day}, {Hour, Minute, Second, Milli}} = lager_util:localtime_ms(),
+            io:format(standard_error, "~b-~2..0b-~2..0b ~2..0b:~2..0b:~2..0b.~b [error] ~s",
+                      [Year, Month, Day, Hour, Minute, Second, Milli, ErrMsg]),
+            rabbit_misc:quit(?EX_USAGE)
+    end.
 
 %% Check whether a node with the same name is already running
 duplicate_node_check(NodeName, NodeHost) ->
@@ -75,7 +89,7 @@ duplicate_node_check(NodeName, NodeHost) ->
     end.
 
 dist_port_set_check() ->
-    case get_config(os:getenv("RABBITMQ_CONFIG_FILE")) of
+    case get_config(os:getenv("RABBITMQ_CONFIG_ARG_FILE")) of
         {ok, [Config]} ->
             Kernel = pget(kernel, Config, []),
             case {pget(inet_dist_listen_min, Kernel, none),
@@ -89,14 +103,11 @@ dist_port_set_check() ->
             ok
     end.
 
+get_config("") -> {error, nofile};
 get_config(File)  ->
     case consult_file(File) of
         {ok, Contents} -> {ok, Contents};
-        {error, _}     ->
-            case rabbit_config:get_advanced_config() of
-                none     -> {error, enoent};
-                FileName -> file:consult(FileName)
-            end
+        {error, _} = E -> E
     end.
 
 consult_file(false) -> {error, nofile};

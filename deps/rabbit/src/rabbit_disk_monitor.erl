@@ -1,7 +1,7 @@
 % The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_disk_monitor).
@@ -39,7 +39,7 @@
 -export([get_disk_free_limit/0, set_disk_free_limit/1,
          get_min_check_interval/0, set_min_check_interval/1,
          get_max_check_interval/0, set_max_check_interval/1,
-         get_disk_free/0]).
+         get_disk_free/0, set_enabled/1]).
 
 -define(SERVER, ?MODULE).
 -define(DEFAULT_MIN_DISK_CHECK_INTERVAL, 100).
@@ -110,6 +110,10 @@ set_max_check_interval(Interval) ->
 get_disk_free() ->
     gen_server:call(?MODULE, get_disk_free, infinity).
 
+-spec set_enabled(string()) -> 'ok'.
+set_enabled(Enabled) ->
+    gen_server:call(?MODULE, {set_enabled, Enabled}, infinity).
+
 %%----------------------------------------------------------------------------
 %% gen_server callbacks
 %%----------------------------------------------------------------------------
@@ -156,6 +160,15 @@ handle_call({set_max_check_interval, MaxInterval}, _From, State) ->
 
 handle_call(get_disk_free, _From, State = #state { actual = Actual }) ->
     {reply, Actual, State};
+
+handle_call({set_enabled, _Enabled = true}, _From, State) ->
+    start_timer(set_disk_limits(State, State#state.limit)),
+    rabbit_log:info("Free disk space monitor was enabled"),
+    {reply, ok, State#state{enabled = true}};
+handle_call({set_enabled, _Enabled = false}, _From, State) ->
+    erlang:cancel_timer(State#state.timer),
+    rabbit_log:info("Free disk space monitor was manually disabled"),
+    {reply, ok, State#state{enabled = false}};
 
 handle_call(_Request, _From, State) ->
     {noreply, State}.
@@ -219,7 +232,28 @@ get_disk_free(Dir, {unix, _}) ->
     Df = os:find_executable("df"),
     parse_free_unix(rabbit_misc:os_cmd(Df ++ " -kP " ++ Dir));
 get_disk_free(Dir, {win32, _}) ->
-    parse_free_win32(rabbit_misc:os_cmd("dir /-C /W \"" ++ Dir ++ "\"")).
+    %% On Windows, the Win32 API enforces a limit of 260 characters
+    %% (MAX_PATH). If we call `dir` with a path longer than that, it
+    %% fails with "File not found". Starting with Windows 10 version
+    %% 1607, this limit was removed, but the administrator has to
+    %% configure that.
+    %%
+    %% NTFS supports paths up to 32767 characters. Therefore, paths
+    %% longer than 260 characters exist but they are "inaccessible" to
+    %% `dir`.
+    %%
+    %% A workaround is to tell the Win32 API to not parse a path and
+    %% just pass it raw to the underlying filesystem. To do this, the
+    %% path must be prepended with "\\?\". That's what we do here.
+    %%
+    %% However, the underlying filesystem may not support forward
+    %% slashes transparently, as the Win32 API does. Therefore, we
+    %% convert all forward slashes to backslashes.
+    %%
+    %% See the following page to learn more about this:
+    %% https://ss64.com/nt/syntax-filenames.html
+    RawDir = "\\\\?\\" ++ string:replace(Dir, "/", "\\", all),
+    parse_free_win32(rabbit_misc:os_cmd("dir /-C /W \"" ++ RawDir ++ "\"")).
 
 parse_free_unix(Str) ->
     case string:tokens(Str, "\n") of
@@ -236,14 +270,14 @@ parse_free_win32(CommandResult) ->
                              [{capture, all_but_first, list}]),
     list_to_integer(lists:reverse(Free)).
 
-interpret_limit({mem_relative, Relative}) 
+interpret_limit({mem_relative, Relative})
     when is_number(Relative) ->
     round(Relative * vm_memory_monitor:get_total_memory());
-interpret_limit(Absolute) -> 
+interpret_limit(Absolute) ->
     case rabbit_resource_monitor_misc:parse_information_unit(Absolute) of
         {ok, ParsedAbsolute} -> ParsedAbsolute;
         {error, parse_error} ->
-            rabbit_log:error("Unable to parse disk_free_limit value ~p", 
+            rabbit_log:error("Unable to parse disk_free_limit value ~p",
                              [Absolute]),
             ?DEFAULT_DISK_FREE_LIMIT
     end.
@@ -277,8 +311,8 @@ enable(#state{dir = Dir, interval = Interval, limit = Limit, retries = Retries}
             start_timer(set_disk_limits(State, Limit));
         Err ->
             rabbit_log:info("Free disk space monitor encountered an error "
-                            "(e.g. failed to parse output from OS tools): ~p, retries left: ~s~n",
+                            "(e.g. failed to parse output from OS tools): ~p, retries left: ~b~n",
                             [Err, Retries]),
-            timer:send_after(Interval, self(), try_enable),
+            erlang:send_after(Interval, self(), try_enable),
             State#state{enabled = false}
     end.

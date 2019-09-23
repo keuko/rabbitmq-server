@@ -22,17 +22,25 @@ mechanism that supports 3.6.x, see [rabbitmq-autocluster](https://github.com/rab
 
 ## Installation
 
-This plugin ships with RabbitMQ as of 3.7.0. There is no need to install it separately.
-Enable the plugin in offline mode before the node is first started:
+This plugin ships with [supported RabbitMQ versions](https://www.rabbitmq.com/versions.html).
+There is no need to install it separately.
+
+As with any [plugin](https://rabbitmq.com/plugins.html), it must be enabled before it
+can be used. For peer discovery plugins it means they must be [enabled](https://rabbitmq.com//plugins.html#basics) or [preconfigured](https://rabbitmq.com//plugins.html#enabled-plugins-file)
+before first node boot:
 
 ```
 rabbitmq-plugins --offline enable rabbitmq_peer_discovery_k8s
 ```
 
-
 ## Documentation
 
-See [RabbitMQ Cluster Formation guide](http://www.rabbitmq.com/cluster-formation.html).
+See [RabbitMQ Cluster Formation guide](http://www.rabbitmq.com/cluster-formation.html) for an overview
+of the peer discovery subsystem, general and Kubernetes-specific configurable values and troubleshooting tips.
+
+Example deployments that use this plugin can be found under [examples](./examples). Note that they
+are just that, examples, and won't be optimal for every use case or cover a lot of important production
+system concerns such as monitoring and sizing.
 
 
 ## Contributing
@@ -47,4 +55,4 @@ See [CONTRIBUTING.md](./CONTRIBUTING.md) and our [development process overview](
 
 ## Copyright
 
-(c) Pivotal Software Inc., 2007-2018.
+(c) Pivotal Software Inc., 2007-2019.

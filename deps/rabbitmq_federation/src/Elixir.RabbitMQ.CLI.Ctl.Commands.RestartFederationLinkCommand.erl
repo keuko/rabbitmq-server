@@ -11,22 +11,28 @@
 %%  The Original Code is RabbitMQ.
 %%
 %%  The Initial Developer of the Original Code is GoPivotal, Inc.
-%%  Copyright (c) 2007-2016 Pivotal Software, Inc.  All rights reserved.
+%%  Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module('Elixir.RabbitMQ.CLI.Ctl.Commands.RestartFederationLinkCommand').
+
+-include("rabbit_federation.hrl").
 
 -behaviour('Elixir.RabbitMQ.CLI.CommandBehaviour').
 
 -export([
          usage/0,
+         usage_additional/0,
+         usage_doc_guides/0,
          flags/0,
          validate/2,
          merge_defaults/2,
          banner/2,
          run/2,
          aliases/0,
-         output/2
+         output/2,
+         help_section/0,
+         description/0
         ]).
 
 
@@ -35,6 +41,20 @@
 %%----------------------------------------------------------------------------
 usage() ->
      <<"restart_federation_link <link_id>">>.
+
+usage_additional() ->
+   [
+      {<<"<link_id>">>, <<"ID of the link to restart">>}
+   ].
+
+usage_doc_guides() ->
+    [?FEDERATION_GUIDE_URL].
+
+help_section() ->
+   {plugin, federation}.
+
+description() ->
+   <<"Restarts a running federation link">>.
 
 flags() ->
     [].

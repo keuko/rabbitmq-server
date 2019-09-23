@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_vhost).
@@ -21,7 +21,7 @@
 %%----------------------------------------------------------------------------
 
 -export([recover/0, recover/1]).
--export([add/2, delete/2, exists/1, list/0, with/2, with_user_and_vhost/3, assert/1, update/2,
+-export([add/2, delete/2, exists/1, list/0, count/0, with/2, with_user_and_vhost/3, assert/1, update/2,
          set_limits/2, limits_of/1, vhost_cluster_state/1, is_running_on_all_nodes/1, await_running_on_all_nodes/2]).
 -export([info/1, info/2, info_all/0, info_all/1, info_all/2, info_all/3]).
 -export([dir/1, msg_store_dir_path/1, msg_store_dir_wildcard/0]).
@@ -30,10 +30,9 @@
 
 -spec add(rabbit_types:vhost(), rabbit_types:username()) -> rabbit_types:ok_or_error(any()).
 -spec delete(rabbit_types:vhost(), rabbit_types:username()) -> rabbit_types:ok_or_error(any()).
--spec update(rabbit_types:vhost(), rabbit_misc:thunk(A)) -> A.
+-spec update(rabbit_types:vhost(), fun((#vhost{}) -> #vhost{})) -> #vhost{}.
 -spec exists(rabbit_types:vhost()) -> boolean().
 -spec list() -> [rabbit_types:vhost()].
--spec with(rabbit_types:vhost(), rabbit_misc:thunk(A)) -> A.
 -spec with_user_and_vhost
         (rabbit_types:username(), rabbit_types:vhost(), rabbit_misc:thunk(A)) -> A.
 -spec assert(rabbit_types:vhost()) -> 'ok'.
@@ -52,25 +51,30 @@ recover() ->
     rabbit_amqqueue:on_node_down(node()),
 
     rabbit_amqqueue:warn_file_limit(),
+
+    %% Prepare rabbit_semi_durable_route table
+    rabbit_binding:recover(),
+
     %% rabbit_vhost_sup_sup will start the actual recovery.
     %% So recovery will be run every time a vhost supervisor is restarted.
     ok = rabbit_vhost_sup_sup:start(),
 
-    [ ok = rabbit_vhost_sup_sup:init_vhost(VHost)
-      || VHost <- rabbit_vhost:list()],
+    [ok = rabbit_vhost_sup_sup:init_vhost(VHost) || VHost <- rabbit_vhost:list()],
     ok.
 
 recover(VHost) ->
     VHostDir = rabbit_vhost:msg_store_dir_path(VHost),
-    rabbit_log:info("Making sure data directory '~s' for vhost '~s' exists~n",
+    rabbit_log:info("Making sure data directory '~ts' for vhost '~s' exists~n",
                     [VHostDir, VHost]),
     VHostStubFile = filename:join(VHostDir, ".vhost"),
     ok = rabbit_file:ensure_dir(VHostStubFile),
     ok = file:write_file(VHostStubFile, VHost),
-    Qs = rabbit_amqqueue:recover(VHost),
-    ok = rabbit_binding:recover(rabbit_exchange:recover(VHost),
-                                [QName || #amqqueue{name = QName} <- Qs]),
-    ok = rabbit_amqqueue:start(Qs),
+    {RecoveredQs, FailedQs} = rabbit_amqqueue:recover(VHost),
+    AllQs = RecoveredQs ++ FailedQs,
+    ok = rabbit_binding:recover(
+            rabbit_exchange:recover(VHost),
+            [QName || #amqqueue{name = QName} <- AllQs]),
+    ok = rabbit_amqqueue:start(RecoveredQs),
     %% Start queue mirrors.
     ok = rabbit_mirror_queue_misc:on_vhost_up(VHost),
     ok.
@@ -79,7 +83,13 @@ recover(VHost) ->
 
 -define(INFO_KEYS, [name, tracing, cluster_state]).
 
-add(VHostPath, ActingUser) ->
+add(VHost, ActingUser) ->
+    case exists(VHost) of
+        true  -> ok;
+        false -> do_add(VHost, ActingUser)
+    end.
+
+do_add(VHostPath, ActingUser) ->
     rabbit_log:info("Adding vhost '~s'~n", [VHostPath]),
     R = rabbit_misc:execute_mnesia_transaction(
           fun () ->
@@ -87,7 +97,8 @@ add(VHostPath, ActingUser) ->
                       []  -> ok = mnesia:write(rabbit_vhost,
                                                #vhost{virtual_host = VHostPath},
                                                write);
-                      [_] -> mnesia:abort({vhost_already_exists, VHostPath})
+                      %% the vhost already exists
+                      [_] -> ok
                   end
           end,
           fun (ok, true) ->
@@ -113,10 +124,6 @@ add(VHostPath, ActingUser) ->
             rabbit_event:notify(vhost_created, info(VHostPath)
                                 ++ [{user_who_performed_action, ActingUser}]),
             R;
-        {error, {no_such_vhost, VHostPath}} ->
-            Msg = rabbit_misc:format("failed to set up vhost '~s': it was concurrently deleted!",
-                                     [VHostPath]),
-            {error, Msg};
         {error, Reason} ->
             Msg = rabbit_misc:format("failed to set up vhost '~s': ~p",
                                      [VHostPath, Reason]),
@@ -205,10 +212,7 @@ assert_benign({error, not_found}, _) -> ok;
 assert_benign({error, {absent, Q, _}}, ActingUser) ->
     %% Removing the mnesia entries here is safe. If/when the down node
     %% restarts, it will clear out the on-disk storage of the queue.
-    case rabbit_amqqueue:internal_delete(Q#amqqueue.name, ActingUser) of
-        ok                 -> ok;
-        {error, not_found} -> ok
-    end.
+    rabbit_amqqueue:internal_delete(Q#amqqueue.name, ActingUser).
 
 internal_delete(VHostPath, ActingUser) ->
     [ok = rabbit_auth_backend_internal:clear_permissions(
@@ -233,6 +237,12 @@ exists(VHostPath) ->
 
 list() ->
     mnesia:dirty_all_keys(rabbit_vhost).
+
+-spec count() -> non_neg_integer().
+count() ->
+    length(list()).
+
+-spec with(rabbit_types:vhost(), rabbit_misc:thunk(A)) -> A.
 
 with(VHostPath, Thunk) ->
     fun () ->
@@ -285,7 +295,7 @@ dir(Vhost) ->
     rabbit_misc:format("~.36B", [Num]).
 
 msg_store_dir_path(VHost) ->
-    EncodedName = list_to_binary(dir(VHost)),
+    EncodedName = dir(VHost),
     rabbit_data_coercion:to_list(filename:join([msg_store_dir_base(),
                                                 EncodedName])).
 
@@ -315,4 +325,3 @@ info_all(Ref, AggregatorPid)        -> info_all(?INFO_KEYS, Ref, AggregatorPid).
 info_all(Items, Ref, AggregatorPid) ->
     rabbit_control_misc:emitting_map(
        AggregatorPid, Ref, fun(VHost) -> info(VHost, Items) end, list()).
-

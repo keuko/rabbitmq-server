@@ -46,14 +46,17 @@ info_all(Pid) ->
 
 %%----------------------------------------------------------------------------
 
-init(Args) ->
+init(Args0) ->
     process_flag(trap_exit, true),
+    Args = filter_optional_user_pass(Args0),
     Name = pget(name, Args),
     VHost = pget(vhost, Args),
-    Username = rabbit_tracing_util:coerce_env_value(username,
-        rabbit_misc:get_env(rabbitmq_tracing, username, ?DEFAULT_USERNAME)),
-    Password = rabbit_tracing_util:coerce_env_value(password,
-        rabbit_misc:get_env(rabbitmq_tracing, password, ?DEFAULT_PASSWORD)),
+    Username = pget(tracer_connection_username, Args,
+                    rabbit_misc:get_env(rabbitmq_tracing, username, ?DEFAULT_USERNAME)),
+    Password = pget(tracer_connection_password, Args,
+                    rabbit_misc:get_env(rabbitmq_tracing, password, ?DEFAULT_PASSWORD)),
+    Username = rabbit_tracing_util:coerce_env_value(username, Username),
+    Password = rabbit_tracing_util:coerce_env_value(password, Password),
     MaxPayload = pget(max_payload_bytes, Args, unlimited),
     {ok, Conn} = amqp_connection:start(
                    #amqp_params_direct{virtual_host = VHost,
@@ -238,4 +241,16 @@ truncate(Payload, #state{max_payload = Max}) ->
         true  -> Payload;
         false -> <<Trunc:Max/binary, _/binary>> = Payload,
                  Trunc
+    end.
+
+filter_optional_user_pass(Args) ->
+    case lists:member({tracer_connection_username,<<>>}, Args) of
+        true ->
+            [{K, V} || {K, V} <- Args,
+                       not lists:member(K, [tracer_connection_username,
+                                            tracer_connection_password,
+                                            <<"tracer_connection_username">>,
+                                            <<"tracer_connection_password">>])];
+        _ ->
+            Args
     end.

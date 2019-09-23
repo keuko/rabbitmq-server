@@ -106,6 +106,8 @@ rel:: $(ESCRIPTS)
 tests:: $(ESCRIPTS)
 	$(gen_verbose) $(MIX_TEST) $(TEST_FILE)
 
+.PHONY: test
+
 test:: $(ESCRIPTS)
 ifdef TEST_FILE
 	$(gen_verbose) $(MIX_TEST) $(TEST_FILE)
@@ -136,6 +138,9 @@ clean:: clean-mix
 clean-mix:
 	$(gen_verbose) rm -f $(ESCRIPTS)
 	$(verbose) echo y | mix clean
+
+format:
+	$(verbose) mix format lib/**/*.ex
 
 repl:
 	$(verbose) iex -S mix

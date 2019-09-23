@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(tcp_listener_sup).
@@ -50,12 +50,18 @@ init({IPAddress, Port, Transport, SocketOpts, ProtoSup, ProtoOpts, OnStartup, On
       ConcurrentAcceptorCount, Label}) ->
     {ok, AckTimeout} = application:get_env(rabbit, ssl_handshake_timeout),
     MaxConnections = rabbit_misc:get_env(rabbit, connection_max, infinity),
+    RanchListenerOpts = #{
+      num_acceptors => ConcurrentAcceptorCount,
+      max_connections => MaxConnections,
+      handshake_timeout => AckTimeout,
+      connection_type => supervisor,
+      socket_opts => [{ip, IPAddress},
+                      {port, Port} |
+                      SocketOpts]
+     },
     {ok, {{one_for_all, 10, 10}, [
-        ranch:child_spec({acceptor, IPAddress, Port}, ConcurrentAcceptorCount,
-            Transport, [{port, Port}, {ip, IPAddress},
-                {max_connections, MaxConnections},
-                {ack_timeout, AckTimeout},
-                {connection_type, supervisor}|SocketOpts],
+        ranch:child_spec({acceptor, IPAddress, Port},
+            Transport, RanchListenerOpts,
             ProtoSup, ProtoOpts),
         {tcp_listener, {tcp_listener, start_link,
                         [IPAddress, Port,

@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -28,7 +28,7 @@
 %% is itself blocked - thus the only processes that need to check
 %% blocked/0 are ones that read from network sockets.
 %%
-%% Credit flows left to right when process send messags down the
+%% Credit flows left to right when process send messages down the
 %% chain, starting at the rabbit_reader, ending at the msg_store:
 %%  reader -> channel -> queue_process -> msg_store.
 %%

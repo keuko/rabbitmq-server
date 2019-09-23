@@ -63,6 +63,8 @@ format_queue_stats({slave_pids, Pids}) ->
     [{slave_nodes, [node(Pid) || Pid <- Pids]}];
 format_queue_stats({synchronised_slave_pids, ''}) ->
     [];
+format_queue_stats({effective_policy_definition, []}) ->
+    [{effective_policy_definition, #{}}];
 format_queue_stats({synchronised_slave_pids, Pids}) ->
     [{synchronised_slave_nodes, [node(Pid) || Pid <- Pids]}];
 format_queue_stats({backing_queue_status, Value}) ->
@@ -174,6 +176,9 @@ amqp_table(Table)     -> maps:from_list([{Name, amqp_value(Type, Value)} ||
 
 amqp_value(array, Vs)                  -> [amqp_value(T, V) || {T, V} <- Vs];
 amqp_value(table, V)                   -> amqp_table(V);
+amqp_value(decimal, {Before, After})   ->
+    erlang:list_to_float(
+      lists:flatten(io_lib:format("~p.~p", [Before, After])));
 amqp_value(_Type, V) when is_binary(V) -> utf8_safe(V);
 amqp_value(_Type, V)                   -> V.
 
@@ -391,6 +396,9 @@ queue(#amqqueue{name            = Name,
 
 queue_state({syncing, Msgs}) -> [{state,         syncing},
                                  {sync_messages, Msgs}];
+queue_state({terminated_by, Name}) ->
+                                [{state, terminated},
+                                 {terminated_by, Name}];
 queue_state(Status)          -> [{state,         Status}].
 
 %% We get bindings using rabbit_binding:list_*/1 rather than :info_all/1 since
@@ -456,8 +464,12 @@ strip_queue_pids(Item) ->
 
 strip_queue_pids([{_, unknown} | T], Acc) ->
     strip_queue_pids(T, Acc);
-strip_queue_pids([{pid, Pid} | T], Acc) when is_pid(Pid) ->
-    strip_queue_pids(T, [{node, node(Pid)} | Acc]);
+strip_queue_pids([{pid, Pid} | T], Acc0) when is_pid(Pid) ->
+    Acc = case proplists:is_defined(node, Acc0) of
+              false -> [{node, node(Pid)} | Acc0];
+              true  -> Acc0
+          end,
+    strip_queue_pids(T, Acc);
 strip_queue_pids([{pid, _} | T], Acc) ->
     strip_queue_pids(T, Acc);
 strip_queue_pids([{owner_pid, _} | T], Acc) ->
@@ -470,9 +482,9 @@ strip_queue_pids([], Acc) ->
 %% Items can be connections, channels, consumers or queues, hence remove takes
 %% various items.
 strip_pids(Item = [T | _]) when is_tuple(T) ->
-    strip_pids(Item, []);
+    lists:usort(strip_pids(Item, []));
 
-strip_pids(Items) -> [strip_pids(I) || I <- Items].
+strip_pids(Items) -> [lists:usort(strip_pids(I)) || I <- Items].
 
 strip_pids([{_, unknown} | T], Acc) ->
     strip_pids(T, Acc);

@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_mnesia).
@@ -40,7 +40,10 @@
          ensure_mnesia_dir/0,
 
          on_node_up/1,
-         on_node_down/1
+         on_node_down/1,
+
+         %% Helpers for diagnostics commands
+         schema_info/1
         ]).
 
 %% Used internally in rpc calls
@@ -103,7 +106,7 @@ init() ->
     ensure_mnesia_dir(),
     case is_virgin_node() of
         true  ->
-            rabbit_log:info("Node database directory at ~s is empty. "
+            rabbit_log:info("Node database directory at ~ts is empty. "
                             "Assuming we need to join an existing cluster or initialise from scratch...~n",
                             [dir()]),
             rabbit_peer_discovery:log_configured_backend(),
@@ -163,20 +166,14 @@ init_from_config() ->
     {DiscoveredNodes, NodeType} =
         case rabbit_peer_discovery:discover_cluster_nodes() of
             {ok, {Nodes, Type} = Config}
-            when is_list(Nodes) andalso (Type == disc orelse Type == disk orelse Type == ram) ->
+              when is_list(Nodes) andalso
+                   (Type == disc orelse Type == disk orelse Type == ram) ->
                 case lists:foldr(FindBadNodeNames, [], Nodes) of
                     []       -> Config;
                     BadNames -> e({invalid_cluster_node_names, BadNames})
                 end;
             {ok, {_, BadType}} when BadType /= disc andalso BadType /= ram ->
                 e({invalid_cluster_node_type, BadType});
-            {ok, Nodes} when is_list(Nodes) ->
-                %% The legacy syntax (a nodes list without the node
-                %% type) is unsupported.
-                case lists:foldr(FindBadNodeNames, [], Nodes) of
-                    [] -> e(cluster_node_type_mandatory);
-                    _  -> e(invalid_cluster_nodes_conf)
-                end;
             {ok, _} ->
                 e(invalid_cluster_nodes_conf)
         end,
@@ -516,6 +513,7 @@ dir() -> mnesia:system_info(directory).
 %% nodes in the cluster already. It also updates the cluster status
 %% file.
 init_db(ClusterNodes, NodeType, CheckOtherNodes) ->
+    NodeIsVirgin = is_virgin_node(),
     Nodes = change_extra_db_nodes(ClusterNodes, CheckOtherNodes),
     %% Note that we use `system_info' here and not the cluster status
     %% since when we start rabbit for the first time the cluster
@@ -539,6 +537,7 @@ init_db(ClusterNodes, NodeType, CheckOtherNodes) ->
             ok = rabbit_table:wait_for_replicated(_Retry = true),
             ok = rabbit_table:create_local_copy(NodeType)
     end,
+    ensure_feature_flags_are_in_sync(Nodes, NodeIsVirgin),
     ensure_schema_integrity(),
     rabbit_node_monitor:update_cluster_status(),
     ok.
@@ -602,6 +601,14 @@ ensure_mnesia_not_running() ->
             ensure_mnesia_not_running();
         Reason when Reason =:= yes; Reason =:= starting ->
             throw({error, mnesia_unexpectedly_running})
+    end.
+
+ensure_feature_flags_are_in_sync(Nodes, NodeIsVirgin) ->
+    Ret = rabbit_feature_flags:sync_feature_flags_with_cluster(
+            Nodes, NodeIsVirgin),
+    case Ret of
+        ok              -> ok;
+        {error, Reason} -> throw({error, {incompatible_feature_flags, Reason}})
     end.
 
 ensure_schema_integrity() ->
@@ -716,6 +723,18 @@ running_disc_nodes() ->
     {_AllNodes, DiscNodes, RunningNodes} = cluster_status(status),
     ordsets:to_list(ordsets:intersection(ordsets:from_list(DiscNodes),
                                          ordsets:from_list(RunningNodes))).
+
+%%--------------------------------------------------------------------
+%% Helpers for diagnostics commands
+%%--------------------------------------------------------------------
+
+schema_info(Items) ->
+    Tables = mnesia:system_info(tables),
+    [info(Table, Items) || Table <- Tables].
+
+info(Table, Items) ->
+    All = [{name, Table} | mnesia:table_info(Table, all)],
+    [{Item, proplists:get_value(Item, All)} || Item <- Items].
 
 %%--------------------------------------------------------------------
 %% Internal helpers
@@ -849,12 +868,12 @@ change_extra_db_nodes(ClusterNodes0, CheckOtherNodes) ->
 check_consistency(Node, OTP, Rabbit, ProtocolVersion) ->
     rabbit_misc:sequence_error(
       [check_mnesia_or_otp_consistency(Node, ProtocolVersion, OTP),
-       check_rabbit_consistency(Rabbit)]).
+       check_rabbit_consistency(Node, Rabbit)]).
 
 check_consistency(Node, OTP, Rabbit, ProtocolVersion, Status) ->
     rabbit_misc:sequence_error(
       [check_mnesia_or_otp_consistency(Node, ProtocolVersion, OTP),
-       check_rabbit_consistency(Rabbit),
+       check_rabbit_consistency(Node, Rabbit),
        check_nodes_consistency(Node, Status)]).
 
 check_nodes_consistency(Node, RemoteStatus = {RemoteAllNodes, _, _}) ->
@@ -908,17 +927,22 @@ with_running_or_clean_mnesia(Fun) ->
         false ->
             SavedMnesiaDir = dir(),
             application:unset_env(mnesia, dir),
+            SchemaLoc = application:get_env(mnesia, schema_location, opt_disc),
+            application:set_env(mnesia, schema_location, ram),
             mnesia:start(),
             Result = Fun(),
             application:stop(mnesia),
             application:set_env(mnesia, dir, SavedMnesiaDir),
+            application:set_env(mnesia, schema_location, SchemaLoc),
             Result
     end.
 
-check_rabbit_consistency(Remote) ->
-    rabbit_version:check_version_consistency(
-      rabbit_misc:version(), Remote, "Rabbit",
-      fun rabbit_misc:version_minor_equivalent/2).
+check_rabbit_consistency(RemoteNode, RemoteVersion) ->
+    rabbit_misc:sequence_error(
+      [rabbit_version:check_version_consistency(
+         rabbit_misc:version(), RemoteVersion, "Rabbit",
+         fun rabbit_misc:version_minor_equivalent/2),
+       rabbit_feature_flags:check_node_compatibility(RemoteNode)]).
 
 %% This is fairly tricky.  We want to know if the node is in the state
 %% that a `reset' would leave it in.  We cannot simply check if the
@@ -978,6 +1002,8 @@ nodes_incl_me(Nodes) -> lists:usort([node()|Nodes]).
 
 nodes_excl_me(Nodes) -> Nodes -- [node()].
 
+-spec e(any()) -> no_return().
+
 e(Tag) -> throw({error, {Tag, error_description(Tag)}}).
 
 error_description({invalid_cluster_node_names, BadNames}) ->
@@ -987,9 +1013,6 @@ error_description({invalid_cluster_node_type, BadType}) ->
     "In the 'cluster_nodes' configuration key, the node type is invalid "
         "(expected 'disc' or 'ram'): " ++
         lists:flatten(io_lib:format("~p", [BadType]));
-error_description(cluster_node_type_mandatory) ->
-    "The 'cluster_nodes' configuration key must indicate the node type: "
-        "either {[...], disc} or {[...], ram}";
 error_description(invalid_cluster_nodes_conf) ->
     "The 'cluster_nodes' configuration key is invalid, it must be of the "
         "form {[Nodes], Type}, where Nodes is a list of node names and "

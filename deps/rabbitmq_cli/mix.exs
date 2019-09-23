@@ -1,7 +1,7 @@
 ## The contents of this file are subject to the Mozilla Public License
 ## Version 1.1 (the "License"); you may not use this file except in
 ## compliance with the License. You may obtain a copy of the License
-## at http://www.mozilla.org/MPL/
+## at https://www.mozilla.org/MPL/
 ##
 ## Software distributed under the License is distributed on an "AS IS"
 ## basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -19,8 +19,8 @@ defmodule RabbitMQCtl.MixfileBase do
   def project do
     [
       app: :rabbitmqctl,
-      version: "3.7.5",
-      elixir: "~> 1.6.0",
+      version: "3.7.17",
+      elixir: ">= 1.7.0 and < 1.10.0",
       build_embedded: Mix.env == :prod,
       start_permanent: Mix.env == :prod,
       escript: [main_module: RabbitMQCtl,
@@ -83,15 +83,26 @@ defmodule RabbitMQCtl.MixfileBase do
   #   {:mydep, git: "https://github.com/elixir-lang/mydep.git", tag: "0.1.0"}
   #
   # Type "mix help deps" for more examples and options
+  #
+  # CAUTION: Dependencies which are shipped with RabbitMQ *MUST* com
+  # from Hex.pm! Therefore it's ok to fetch dependencies from Git if
+  # they are test dependencies or it is temporary while testing a patch.
+  # But that's about it. If in doubt, use Hex.pm!
+  #
+  # The reason is that we have some Makefile code to put dependencies
+  # from Hex.pm in RabbitMQ source archive (the source archive must be
+  # self-contained and RabbitMQ must be buildable offline). However, we
+  # don't have the equivalent for other methods.
   defp deps() do
     elixir_deps = [
-      {:json, "~> 1.0.0"},
+      {:json, "~> 1.2.0"},
       {:csv, "~> 2.0.0"},
-      {:simetric, "~> 0.2.0"},
+      {:stdout_formatter, "~> 0.2.3"},
+      {:observer_cli, "~> 1.5.0"},
 
-      {:amqp, "~> 0.2.2", only: :test},
+      {:amqp, "~> 1.2.0", only: :test},
       {:dialyxir, "~> 0.5", only: :test, runtime: false},
-      {:temp, "~> 0.4", only: :test},
+      {:temp, "~> 0.4", only: :test}
     ]
 
     rabbitmq_deps = case System.get_env("DEPS_DIR") do
@@ -99,7 +110,7 @@ defmodule RabbitMQCtl.MixfileBase do
         # rabbitmq_cli is built as a standalone Elixir application.
         [
           {:rabbit_common, "~> 3.7.0"},
-          {:amqp_client, "~> 3.7.0", only: :test},
+          {:amqp_client, "~> 3.7.0", only: :test}
         ]
       deps_dir ->
         # rabbitmq_cli is built as part of RabbitMQ.

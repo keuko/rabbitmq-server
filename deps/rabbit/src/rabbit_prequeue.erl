@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License at
-%% http://www.mozilla.org/MPL/
+%% https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
@@ -92,9 +92,14 @@ crash_restart(Q = #amqqueue{name = QueueName}) ->
 
 %% This gen_server2 always hands over to some other module at the end
 %% of init/1.
+-spec handle_call(_, _, _) -> no_return().
 handle_call(_Msg, _From, _State)     -> exit(unreachable).
+-spec handle_cast(_, _) -> no_return().
 handle_cast(_Msg, _State)            -> exit(unreachable).
+-spec handle_info(_, _) -> no_return().
 handle_info(_Msg, _State)            -> exit(unreachable).
+-spec terminate(_, _) -> no_return().
 terminate(_Reason, _State)           -> exit(unreachable).
+-spec code_change(_, _, _) -> no_return().
 code_change(_OldVsn, _State, _Extra) -> exit(unreachable).
 

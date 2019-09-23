@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License at
-%% http://www.mozilla.org/MPL/
+%% https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
@@ -360,7 +360,7 @@ handle_cast({gm_deaths, DeadGMPids},
             %% Different slave is now master, stop current coordinator normally.
             %% Initiating queue is now slave and the least we could do is report
             %% deaths which we 'think' we saw.
-            %% NOTE: Reported deaths here, could be inconsistant.
+            %% NOTE: Reported deaths here, could be inconsistent.
             rabbit_mirror_queue_misc:report_deaths(MPid, false, QueueName,
                                                    DeadPids),
             {stop, shutdown, State};

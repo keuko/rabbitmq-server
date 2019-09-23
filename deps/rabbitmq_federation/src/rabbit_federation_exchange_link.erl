@@ -75,7 +75,9 @@ init({Upstream, XName}) ->
     %% before we got here. So check if we still exist.
     case rabbit_exchange:lookup(XName) of
         {ok, X} ->
-            UParams = rabbit_federation_upstream:to_params(Upstream, X),
+            DeobfuscatedUpstream = rabbit_federation_util:deobfuscate_upstream(Upstream),
+            DeobfuscatedUParams = rabbit_federation_upstream:to_params(DeobfuscatedUpstream, X),
+            UParams = rabbit_federation_util:obfuscate_upstream_params(DeobfuscatedUParams),
             rabbit_federation_status:report(Upstream, UParams, XName, starting),
             join(rabbit_federation_exchanges),
             join({rabbit_federation_exchange, XName}),
@@ -202,11 +204,14 @@ terminate(Reason, #state{downstream_connection = DConn,
                          internal_exchange     = IntExchange,
                          queue                 = Queue}) ->
     timer:cancel(TRef),
+
+    %% Terminate the direct connection
+    rabbit_federation_link_util:ensure_connection_closed(DConn),
+
     %% Cleanup of internal queue and exchange
     delete_upstream_queue(Conn, Queue),
     delete_upstream_exchange(Conn, IntExchange),
 
-    rabbit_federation_link_util:ensure_connection_closed(DConn),
     rabbit_federation_link_util:ensure_connection_closed(Conn),
     rabbit_federation_link_util:log_terminate(Reason, Upstream, UParams, XName),
     ok.
@@ -477,28 +482,24 @@ consume_from_upstream_queue(
                 queue        = Q}.
 
 ensure_upstream_bindings(State = #state{upstream            = Upstream,
-                                        upstream_params     = UParams,
                                         connection          = Conn,
                                         channel             = Ch,
                                         downstream_exchange = DownXName,
                                         queue               = Q}, Bindings) ->
-    #upstream_params{x_or_q = X, params = Params} = UParams,
     OldSuffix = rabbit_federation_db:get_active_suffix(
                   DownXName, Upstream, <<"A">>),
     Suffix = case OldSuffix of
                  <<"A">> -> <<"B">>;
                  <<"B">> -> <<"A">>
              end,
-    IntXNameBin = upstream_exchange_name(name(X), vhost(Params),
-                                         DownXName, Suffix),
+    IntXNameBin = upstream_exchange_name(Q, Suffix),
     ensure_upstream_exchange(State),
     ensure_internal_exchange(IntXNameBin, State),
     amqp_channel:call(Ch, #'queue.bind'{exchange = IntXNameBin, queue = Q}),
     State1 = State#state{internal_exchange = IntXNameBin},
     rabbit_federation_db:set_active_suffix(DownXName, Upstream, Suffix),
     State2 = lists:foldl(fun add_binding/2, State1, Bindings),
-    OldIntXNameBin = upstream_exchange_name(
-                       name(X), vhost(Params), DownXName, OldSuffix),
+    OldIntXNameBin = upstream_exchange_name(Q, OldSuffix),
     delete_upstream_exchange(Conn, OldIntXNameBin),
     State2.
 
@@ -528,7 +529,7 @@ ensure_internal_exchange(IntXNameBin,
                                 upstream_params = UParams,
                                 connection      = Conn,
                                 channel         = Ch}) ->
-    #upstream_params{params = Params} = UParams,
+    #upstream_params{params = Params} = rabbit_federation_util:deobfuscate_upstream_params(UParams),
     delete_upstream_exchange(Conn, IntXNameBin),
     Base = #'exchange.declare'{exchange    = IntXNameBin,
                                durable     = true,
@@ -551,7 +552,8 @@ check_internal_exchange(IntXNameBin,
                          #state{upstream        = #upstream{max_hops = MaxHops},
                                 upstream_params = UParams,
                                 downstream_exchange = XName}) ->
-    #upstream_params{params = Params} = UParams,
+    #upstream_params{params = Params} =
+        rabbit_federation_util:deobfuscate_upstream_params(UParams),
     Base = #'exchange.declare'{exchange    = IntXNameBin,
                                passive     = true,
                                durable     = true,
@@ -589,9 +591,8 @@ upstream_queue_name(XNameBin, VHost, #resource{name         = DownXNameBin,
                end,
     <<"federation: ", XNameBin/binary, " -> ", Node/binary, DownPart/binary>>.
 
-upstream_exchange_name(XNameBin, VHost, DownXName, Suffix) ->
-    Name = upstream_queue_name(XNameBin, VHost, DownXName),
-    <<Name/binary, " ", Suffix/binary>>.
+upstream_exchange_name(UpstreamQName, Suffix) ->
+    <<UpstreamQName/binary, " ", Suffix/binary>>.
 
 delete_upstream_exchange(Conn, XNameBin) ->
     rabbit_federation_link_util:disposable_channel_call(

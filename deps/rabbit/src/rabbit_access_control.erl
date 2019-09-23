@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_access_control).
@@ -64,6 +64,7 @@ check_user_login(Username, AuthProps) ->
                   %% passwordless (i.e pre-authenticated) login with authZ.
                   case try_authenticate(ModN, Username, AuthProps) of
                       {ok, ModNUser = #auth_user{username = Username2}} ->
+                          rabbit_log:debug("User '~s' authenticated successfully by backend ~s", [Username2, ModN]),
                           user(ModNUser, try_authorize(ModZs, Username2));
                       Else ->
                           Else
@@ -72,7 +73,8 @@ check_user_login(Username, AuthProps) ->
                   %% Same module for authN and authZ. Just take the result
                   %% it gives us
                   case try_authenticate(Mod, Username, AuthProps) of
-                      {ok, ModNUser = #auth_user{impl = Impl}} ->
+                      {ok, ModNUser = #auth_user{username = Username2, impl = Impl}} ->
+                          rabbit_log:debug("User '~s' authenticated successfully by backend ~s", [Username2, Mod]),
                           user(ModNUser, {ok, [{Mod, Impl}], []});
                       Else ->
                           Else

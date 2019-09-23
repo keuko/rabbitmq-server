@@ -16,6 +16,10 @@
 
 -module(rabbit_amqp1_0_session_process).
 
+%% Transitional step until we can require Erlang/OTP 21 and
+%% use the now recommended try/catch syntax for obtaining the stack trace.
+-compile(nowarn_deprecated_function).
+
 -behaviour(gen_server2).
 
 -export([init/1, terminate/2, code_change/3,
@@ -45,19 +49,32 @@ info(Pid) ->
 init({Channel, ReaderPid, WriterPid, #user{username = Username}, VHost,
       FrameMax, AdapterInfo, _Collector}) ->
     process_flag(trap_exit, true),
-    {ok, Conn} = amqp_connection:start(
-                   #amqp_params_direct{username     = Username,
-                                       virtual_host = VHost,
-                                       adapter_info = AdapterInfo}),
-    {ok, Ch} = amqp_connection:open_channel(Conn),
-    {ok, #state{backing_connection = Conn,
-                backing_channel    = Ch,
-                reader_pid         = ReaderPid,
-                writer_pid         = WriterPid,
-                frame_max          = FrameMax,
-                buffer             = queue:new(),
-                session            = rabbit_amqp1_0_session:init(Channel)
-               }}.
+    case amqp_connection:start(
+           #amqp_params_direct{username     = Username,
+                               virtual_host = VHost,
+                               adapter_info = AdapterInfo}) of
+        {ok, Conn}  ->
+            case amqp_connection:open_channel(Conn) of
+                {ok, Ch} ->
+                    monitor(process, Ch),
+                    {ok, #state{backing_connection = Conn,
+                                backing_channel    = Ch,
+                                reader_pid         = ReaderPid,
+                                writer_pid         = WriterPid,
+                                frame_max          = FrameMax,
+                                buffer             = queue:new(),
+                                session            = rabbit_amqp1_0_session:init(Channel)
+                               }};
+                {error, Reason} ->
+                    rabbit_log:warning("Closing session for connection ~p:~n~p~n",
+                                       [ReaderPid, Reason]),
+                    {stop, Reason}
+            end;
+        {error, Reason} ->
+            rabbit_log:warning("Closing session for connection ~p:~n~p~n",
+                               [ReaderPid, Reason]),
+            {stop, Reason}
+    end.
 
 terminate(_Reason, _State = #state{backing_connection = Conn}) ->
     rabbit_misc:with_exit_handler(fun () -> ok end,
@@ -130,6 +147,27 @@ handle_info({'EXIT', WriterPid, Reason = {writer, send_failed, _Error}},
     {stop, normal, State};
 handle_info({'EXIT', _Pid, Reason}, State) ->
     {stop, Reason, State};
+handle_info({'DOWN', _MRef, process, Ch, Reason},
+            #state{reader_pid = ReaderPid,
+                   writer_pid = Sock,
+                   backing_channel = Ch} = State) ->
+    Error =
+    case Reason of
+        {shutdown, {server_initiated_close, Code, Msg}} ->
+            #'v1_0.error'{condition = rabbit_amqp1_0_channel:convert_code(Code),
+                          description = {utf8, Msg}};
+        _ ->
+            #'v1_0.error'{condition = ?V_1_0_AMQP_ERROR_INTERNAL_ERROR,
+                          description = {utf8,
+                                         list_to_binary(
+                                           lists:flatten(
+                                             io_lib:format("~w", [Reason])))}}
+    end,
+    End = #'v1_0.end'{ error = Error },
+    rabbit_log:warning("Closing session for connection ~p:~n~p~n",
+                       [ReaderPid, Reason]),
+    ok = rabbit_amqp1_0_writer:send_command_sync(Sock, End),
+    {stop, normal, State};
 handle_info({'DOWN', _MRef, process, _QPid, _Reason}, State) ->
     %% TODO do we care any more since we're using direct client?
     {noreply, State}. % TODO rabbit_channel uses queue_blocked?

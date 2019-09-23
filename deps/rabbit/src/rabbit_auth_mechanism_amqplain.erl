@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_auth_mechanism_amqplain).
@@ -41,13 +41,21 @@ should_offer(_Sock) ->
 init(_Sock) ->
     [].
 
+-define(IS_STRING_TYPE(Type), Type =:= longstr orelse Type =:= shortstr).
+
 handle_response(Response, _State) ->
     LoginTable = rabbit_binary_parser:parse_table(Response),
     case {lists:keysearch(<<"LOGIN">>, 1, LoginTable),
           lists:keysearch(<<"PASSWORD">>, 1, LoginTable)} of
-        {{value, {_, longstr, User}},
-         {value, {_, longstr, Pass}}} ->
+        {{value, {_, UserType, User}},
+         {value, {_, PassType, Pass}}} when ?IS_STRING_TYPE(UserType);
+                                            ?IS_STRING_TYPE(PassType) ->
             rabbit_access_control:check_user_pass_login(User, Pass);
+        {{value, {_, _UserType, _User}},
+         {value, {_, _PassType, _Pass}}} ->
+           {protocol_error,
+            "AMQPLAIN auth info ~w uses unsupported type for LOGIN or PASSWORD field",
+            [LoginTable]};
         _ ->
             {protocol_error,
              "AMQPLAIN auth info ~w is missing LOGIN or PASSWORD field",

@@ -11,7 +11,7 @@
 %%  The Original Code is RabbitMQ.
 %%
 %%  The Initial Developer of the Original Code is GoPivotal, Inc.
-%%  Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%%  Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_amqp10_shovel).
@@ -45,6 +45,7 @@
 -import(rabbit_misc, [pget/2, pget/3]).
 
 -define(INFO(Text, Args), error_logger:info_msg(Text, Args)).
+-define(LINK_CREDIT_TIMEOUT, 5000).
 
 -type state() :: rabbit_shovel_behaviour:state().
 -type uri() :: rabbit_shovel_behaviour:uri().
@@ -81,7 +82,7 @@ connect_source(State = #{name := Name,
                          source := #{uris := [Uri | _],
                                      source_address := Addr} = Src}) ->
     AttachFun = fun amqp10_client:attach_receiver_link/5,
-    {Conn, Sess, LinkRef} = connect(Name, AckMode, Uri, "-receiver", Addr, Src,
+    {Conn, Sess, LinkRef} = connect(Name, AckMode, Uri, "receiver", Addr, Src,
                                     AttachFun),
     State#{source => Src#{current => #{conn => Conn,
                                        session => Sess,
@@ -94,18 +95,22 @@ connect_dest(State = #{name := Name,
                        dest := #{uris := [Uri | _],
                                  target_address := Addr} = Dst}) ->
     AttachFun = fun amqp10_client:attach_sender_link_sync/5,
-    {Conn, Sess, LinkRef} = connect(Name, AckMode, Uri, "-sender", Addr, Dst,
+    {Conn, Sess, LinkRef} = connect(Name, AckMode, Uri, "sender", Addr, Dst,
                                     AttachFun),
+    %% wait for link credit here as if there are messages waiting we may try
+    %% to forward before we've received credit
     State#{dest => Dst#{current => #{conn => Conn,
                                      session => Sess,
+                                     link_state => attached,
+                                     pending => [],
                                      link => LinkRef,
                                      uri => Uri}}}.
 
 connect(Name, AckMode, Uri, Postfix, Addr, Map, AttachFun) ->
     {ok, Config} = amqp10_client:parse_uri(Uri),
     {ok, Conn} = amqp10_client:open_connection(Config),
-    link(Conn),
     {ok, Sess} = amqp10_client:begin_session(Conn),
+    link(Conn),
     LinkName = begin
                    LinkName0 = gen_unique_name(Name, Postfix),
                    rabbit_data_coercion:to_binary(LinkName0)
@@ -177,7 +182,7 @@ dest_endpoint(#{shovel_type := dynamic,
 -spec handle_source(Msg :: any(), state()) -> not_handled | state().
 handle_source({amqp10_msg, _LinkRef, Msg}, State) ->
     Tag = amqp10_msg:delivery_id(Msg),
-    [Payload] = amqp10_msg:body(Msg),
+    Payload = amqp10_msg:body_bin(Msg),
     rabbit_shovel_behaviour:forward(Tag, #{}, Payload, State);
 handle_source({amqp10_event, {connection, Conn, opened}},
               State = #{source := #{current := #{conn := Conn}}}) ->
@@ -241,6 +246,16 @@ handle_dest({amqp10_event, {session, Sess, {ended, Why}}},
 handle_dest({amqp10_event, {link, Link, {detached, Why}}},
             #{dest := #{current := #{link := Link}}}) ->
     {stop, {outbound_link_detached, Why}};
+handle_dest({amqp10_event, {link, Link, credited}},
+            State0 = #{dest := #{current := #{link := Link},
+                                 pending := Pend} = Dst}) ->
+
+    %% we have credit so can begin to forward
+    State = State0#{dest => Dst#{link_state => credited,
+                                 pending => []}},
+    lists:foldl(fun ({A, B, C}, S) ->
+                        forward(A, B, C, S)
+                end, State, lists:reverse(Pend));
 handle_dest({amqp10_event, {link, Link, _Evt}},
             State= #{dest := #{current := #{link := Link}}}) ->
     State;
@@ -292,6 +307,12 @@ nack(Tag, true, State = #{source := #{current := #{session := Session},
 forward(_Tag, _Props, _Payload,
         #{source := #{remaining_unacked := 0}} = State) ->
     State;
+forward(Tag, Props, Payload,
+        #{dest := #{current := #{link_state := attached},
+                    pending := Pend0} = Dst} = State) ->
+    %% simply cache the forward oo
+    Pend = [{Tag, Props, Payload} | Pend0],
+    State#{dest => Dst#{pending => {Pend}}};
 forward(Tag, Props, Payload,
         #{dest := #{current := #{link := Link},
                     unacked := Unacked} = Dst,

@@ -7,7 +7,8 @@
          update_app_config/1,
          schema_dir/0,
          config_files/0,
-         get_advanced_config/0
+         get_advanced_config/0,
+         validate_config_files/0
         ]).
 
 prepare_and_use_config() ->
@@ -42,16 +43,16 @@ legacy_erlang_term_config_used() ->
 
 get_confs() ->
     case init:get_argument(conf) of
-        {ok, Configs} -> Configs;
-        _             -> []
+        {ok, Confs} -> [ filename:rootname(Conf, ".conf") ++ ".conf"
+                         || Conf <- Confs ];
+        _           -> []
     end.
 
-prepare_config(Configs) ->
+prepare_config(Confs) ->
     case {init:get_argument(conf_dir), init:get_argument(conf_script_dir)} of
         {{ok, ConfDir}, {ok, ScriptDir}} ->
-            ConfFiles = [Config ++ ".conf" || [Config] <- Configs,
-                                            rabbit_file:is_file(Config ++
-                                                                    ".conf")],
+            ConfFiles = [Conf || Conf <- Confs,
+                                 rabbit_file:is_file(Conf)],
             case ConfFiles of
                 [] -> ok;
                 _  ->
@@ -120,9 +121,7 @@ maybe_set_net_ticktime(KernelConfig) ->
                     io:format(standard_error,
                         "~nCouldn't set net_ticktime to ~p "
                         "as net_kernel is busy changing net_ticktime to ~p seconds ~n",
-                        [NetTickTime, NewNetTicktime]);
-                _ ->
-                    ok
+                        [NetTickTime, NewNetTicktime])
             end
     end.
 
@@ -144,8 +143,9 @@ generate_config_file(ConfFiles, ConfDir, ScriptDir, SchemaDir, Advanced) ->
     Command = lists:concat(["escript ", "\"", Cuttlefish, "\"",
                             "  -f rabbitmq -s ", "\"", SchemaDir, "\"",
                             " -e ", "\"",  ConfDir, "\"",
-                            [[" -c ", ConfFile] || ConfFile <- ConfFiles],
+                            [[" -c \"", ConfFile, "\""] || ConfFile <- ConfFiles],
                             AdvancedConfigArg]),
+    rabbit_log:debug("Generating config file using '~s'", [Command]),
     Result = rabbit_misc:os_cmd(Command),
     case string:str(Result, " -config ") of
         0 -> {error, {generation_error, Result}};
@@ -178,9 +178,8 @@ get_advanced_config() ->
     case init:get_argument(conf_advanced) of
         %% There can be only one advanced.config
         {ok, [FileName | _]} ->
-            ConfigName = FileName ++ ".config",
-            case rabbit_file:is_file(ConfigName) of
-                true  -> ConfigName;
+            case rabbit_file:is_file(FileName) of
+                true  -> FileName;
                 false -> none
             end;
         _ -> none
@@ -193,25 +192,25 @@ prepare_plugin_schemas(SchemaDir) ->
         false -> ok
     end.
 
-
 config_files() ->
-    Abs = fun (F, Ex) -> filename:absname(filename:rootname(F, Ex) ++ Ex) end,
     case legacy_erlang_term_config_used() of
         true ->
             case init:get_argument(config) of
-                {ok, Files} -> [Abs(File, ".config") || [File] <- Files];
+                {ok, Files} -> [ filename:absname(filename:rootname(File) ++ ".config")
+                                 || [File] <- Files];
                 error       -> case config_setting() of
                                    none -> [];
-                                   File -> [Abs(File, ".config")
+                                   File -> [filename:absname(filename:rootname(File, ".config") ++ ".config")
                                             ++
                                             " (not found)"]
                                end
             end;
         false ->
-            ConfFiles = [Abs(File, ".conf") || File <- get_confs()],
+            ConfFiles = [filename:absname(File) || File <- get_confs(),
+                                                   filelib:is_regular(File)],
             AdvancedFiles = case get_advanced_config() of
                 none -> [];
-                FileName -> [Abs(FileName, ".config")]
+                FileName -> [filename:absname(FileName)]
             end,
             AdvancedFiles ++ ConfFiles
 
@@ -234,3 +233,89 @@ config_setting() ->
                        end
     end.
 
+-spec validate_config_files() -> ok | {error, {Fmt :: string(), Args :: list()}}.
+validate_config_files() ->
+    ConfigFile = os:getenv("RABBITMQ_CONFIG_FILE"),
+    AdvancedConfigFile = get_advanced_config(),
+    AssertConfig = case filename:extension(ConfigFile) of
+        ".config" -> assert_config(ConfigFile, "RABBITMQ_CONFIG_FILE");
+        ".conf"   -> assert_conf(ConfigFile, "RABBITMQ_CONFIG_FILE");
+        _ -> ok
+    end,
+    case AssertConfig of
+        ok ->
+            assert_config(AdvancedConfigFile, "RABBITMQ_ADVANCED_CONFIG_FILE");
+        {error, Err} ->
+            {error, Err}
+    end.
+
+assert_config("", _) -> ok;
+assert_config(none, _) -> ok;
+assert_config(Filename, Env) ->
+    assert_config(filename:extension(Filename), Filename, Env).
+
+-define(ERRMSG_INDENT, "                                ").
+
+assert_config(".config", Filename, Env) ->
+    case filelib:is_regular(Filename) of
+        true ->
+            case file:consult(Filename) of
+                {ok, []}    -> {error,
+                                {"Config file ~s should not be empty: ~s",
+                                 [Env, Filename]}};
+                {ok, [_]}   -> ok;
+                {ok, [_|_]} -> {error,
+                                {"Config file ~s must contain ONE list ended by <dot>: ~s",
+                                 [Env, Filename]}};
+                {error, {1, erl_parse, Err}} ->
+                    % Note: the sequence of spaces is to indent from the [error] prefix, like this:
+                    %
+                    % 2018-09-06 07:05:40.225 [error] Unable to parse erlang terms from RABBITMQ_ADVANCED_CONFIG_FILE...
+                    %                                 Reason: ["syntax error before: ",[]]
+                    {error, {"Unable to parse erlang terms from ~s file: ~s~n"
+                             ?ERRMSG_INDENT
+                             "Reason: ~p~n"
+                             ?ERRMSG_INDENT
+                             "Check that the file is in erlang term format. " ++
+                             case Env of
+                                "RABBITMQ_CONFIG_FILE" ->
+                                    "If you are using the new ini-style format, the file extension should be '.conf'~n";
+                                _ -> ""
+                             end,
+                             [Env, Filename, Err]}};
+                {error, Err} ->
+                    {error, {"Unable to parse erlang terms from  ~s file: ~s~n"
+                             ?ERRMSG_INDENT
+                             "Error: ~p~n",
+                             [Env, Filename, Err]}}
+            end;
+        false ->
+            ok
+    end;
+assert_config(BadExt, Filename, Env) ->
+    {error, {"'~s': Expected extension '.config', got extension '~s' for file '~s'~n", [Env, BadExt, Filename]}}.
+
+assert_conf("", _) -> ok;
+assert_conf(Filename, Env) ->
+    assert_conf(filename:extension(Filename), Filename, Env).
+
+assert_conf(".conf", Filename, Env) ->
+    case filelib:is_regular(Filename) of
+        true ->
+            case file:consult(Filename) of
+                {ok, []} -> ok;
+                {ok, _}  ->
+                    {error, {"Wrong format of the config file ~s: ~s~n"
+                             ?ERRMSG_INDENT
+                             "Check that the file is in the new ini-style config format. "
+                             "If you are using the old format the file extension should "
+                             "be .config~n",
+                             [Env, Filename]}};
+                _ ->
+                    ok
+            end;
+        false ->
+            ok
+    end;
+assert_conf(BadExt, Filename, Env) ->
+    {error, {"'~s': Expected extension '.config', got extension '~s' for file '~s'~n", [Env, BadExt, Filename]}}.

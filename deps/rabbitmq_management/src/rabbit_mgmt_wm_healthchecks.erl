@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2018 Pivotal Software, Inc.  All rights reserved.
 %%
 -module(rabbit_mgmt_wm_healthchecks).
 
@@ -24,7 +24,7 @@
 %%--------------------------------------------------------------------
 
 init(Req, _State) ->
-    {cowboy_rest, rabbit_mgmt_cors:set_headers(Req, ?MODULE), #context{}}.
+    {cowboy_rest, rabbit_mgmt_headers:set_common_permission_headers(Req, ?MODULE), #context{}}.
 
 variances(Req, Context) ->
     {[<<"accept-encoding">>, <<"origin">>], Req, Context}.
@@ -47,6 +47,9 @@ to_json(ReqData, Context) ->
     case rabbit_health_check:node(Node, Timeout) of
         ok ->
             rabbit_mgmt_util:reply([{status, ok}], ReqData, Context);
+        timeout ->
+            ErrMsg = rabbit_mgmt_format:print("node ~p health check timed out", [Node]),
+            failure(ErrMsg, ReqData, Context);
         {badrpc, Err} ->
             failure(rabbit_mgmt_format:print("~p", Err), ReqData, Context);
         {error_string, Err} ->

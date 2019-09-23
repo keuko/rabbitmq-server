@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License at
-%% http://www.mozilla.org/MPL/
+%% https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
@@ -81,15 +81,18 @@
 %% Backing queue
 %% ---------------------------------------------------------------------------
 
+-spec start(_, _) -> no_return().
 start(_Vhost, _DurableQueues) ->
     %% This will never get called as this module will never be
     %% installed as the default BQ implementation.
     exit({not_valid_for_generic_backing_queue, ?MODULE}).
 
+-spec stop(_) -> no_return().
 stop(_Vhost) ->
     %% Same as start/1.
     exit({not_valid_for_generic_backing_queue, ?MODULE}).
 
+-spec delete_crashed(_) -> no_return().
 delete_crashed(_QName) ->
     exit({not_valid_for_generic_backing_queue, ?MODULE}).
 
@@ -165,6 +168,8 @@ sync_mirrors(HandleInfo, EmitStats,
     S = fun(BQSN) -> State#state{backing_queue_state = BQSN} end,
     case rabbit_mirror_queue_sync:master_go(
            Syncer, Ref, Log, HandleInfo, EmitStats, SyncBatchSize, BQ, BQS) of
+        {cancelled, BQS1}      -> Log(" synchronisation cancelled ", []),
+                                  {ok, S(BQS1)};
         {shutdown,  R, BQS1}   -> {stop, R, S(BQS1)};
         {sync_died, R, BQS1}   -> Log("~p", [R]),
                                   {ok, S(BQS1)};
@@ -221,6 +226,7 @@ purge(State = #state { gm                  = GM,
     {Count, BQS1} = BQ:purge(BQS),
     {Count, State #state { backing_queue_state = BQS1 }}.
 
+-spec purge_acks(_) -> no_return().
 purge_acks(_State) -> exit({not_implemented, {?MODULE, purge_acks}}).
 
 publish(Msg = #basic_message { id = MsgId }, MsgProps, IsDelivered, ChPid, Flow,

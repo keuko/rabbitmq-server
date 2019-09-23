@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -131,9 +131,9 @@
 
 -record(amqqueue, {
           name, durable, auto_delete, exclusive_owner = none, %% immutable
-          arguments,                   %% immutable
+          arguments = [],                   %% immutable
           pid,                         %% durable (just so we know home node)
-          slave_pids, sync_slave_pids, %% transient
+          slave_pids = [], sync_slave_pids, %% transient
           recoverable_slaves,          %% durable
           policy,                      %% durable, implicit update as above
           operator_policy,             %% durable, implicit update as above
@@ -232,10 +232,10 @@
 
 %%----------------------------------------------------------------------------
 
--define(COPYRIGHT_MESSAGE, "Copyright (C) 2007-2018 Pivotal Software, Inc.").
--define(INFORMATION_MESSAGE, "Licensed under the MPL.  See http://www.rabbitmq.com/").
--define(OTP_MINIMUM, "19.3").
--define(ERTS_MINIMUM, "8.3").
+-define(COPYRIGHT_MESSAGE, "Copyright (C) 2007-2019 Pivotal Software, Inc.").
+-define(INFORMATION_MESSAGE, "Licensed under the MPL.  See https://www.rabbitmq.com/").
+-define(OTP_MINIMUM, "20.3").
+-define(ERTS_MINIMUM, "9.3").
 
 %% EMPTY_FRAME_SIZE, 8 = 1 + 2 + 4 + 1
 %%  - 1 byte of frame type
@@ -278,19 +278,12 @@
 %% wrapping the message body).
 -define(MAX_MSG_SIZE, 2147383648).
 
-%% First number is maximum size in bytes before we start to
-%% truncate. The following 4-tuple is:
-%%
-%% 1) Maximum size of printable lists and binaries.
-%% 2) Maximum size of any structural term.
-%% 3) Amount to decrease 1) every time we descend while truncating.
-%% 4) Amount to decrease 2) every time we descend while truncating.
-%%
-%% Whole thing feeds into truncate:log_event/2.
--define(LOG_TRUNC, {100000, {2000, 100, 50, 5}}).
-
 -define(store_proc_name(N), rabbit_misc:store_proc_name(?MODULE, N)).
 
 %% For event audit purposes
 -define(INTERNAL_USER, <<"rmq-internal">>).
 -define(UNKNOWN_USER,  <<"unknown">>).
+
+%% Store metadata in the trace files when message tracing is enabled.
+-define(LG_INFO(Info), is_pid(whereis(lg)) andalso (lg ! Info)).
+-define(LG_PROCESS_TYPE(Type), ?LG_INFO(#{process_type => Type})).

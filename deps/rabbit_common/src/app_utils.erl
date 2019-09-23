@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -144,7 +144,7 @@ default_restart_type(_)      -> temporary.
 
 %% Copyright Ericsson AB 1996-2016. All Rights Reserved.
 %%
-%% Code orignially from Erlang/OTP source lib/kernel/src/application.erl
+%% Code originally from Erlang/OTP source lib/kernel/src/application.erl
 %% and modified to use RestartTypes map
 %%
 ensure_all_started(Application, RestartTypes) ->

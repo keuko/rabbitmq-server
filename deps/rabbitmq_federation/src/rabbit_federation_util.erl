@@ -21,6 +21,7 @@
 
 -export([should_forward/3, find_upstreams/2, already_seen/2]).
 -export([validate_arg/3, fail/2, name/1, vhost/1, r/1, pgname/1]).
+-export([obfuscate_upstream/1, deobfuscate_upstream/1, obfuscate_upstream_params/1, deobfuscate_upstream_params/1]).
 
 -import(rabbit_misc, [pget_or_die/2, pget/3]).
 
@@ -51,11 +52,13 @@ validate_arg(Name, Type, Args) ->
         _         -> fail("Argument ~s must be of type ~s", [Name, Type])
     end.
 
+-spec fail(io:format(), [term()]) -> no_return().
+
 fail(Fmt, Args) -> rabbit_misc:protocol_error(precondition_failed, Fmt, Args).
 
-name(                 #resource{name = XName})  -> XName;
-name(#exchange{name = #resource{name = XName}}) -> XName;
-name(#amqqueue{name = #resource{name = QName}}) -> QName.
+name(                 #resource{name = XorQName})  -> XorQName;
+name(#exchange{name = #resource{name = XName}})    -> XName;
+name(#amqqueue{name = #resource{name = QName}})    -> QName.
 
 vhost(                 #resource{virtual_host = VHost})  -> VHost;
 vhost(#exchange{name = #resource{virtual_host = VHost}}) -> VHost;
@@ -71,3 +74,31 @@ pgname(Name) ->
         {ok, false} -> Name;
         {ok, true}  -> {rabbit_nodes:cluster_name(), Name}
     end.
+
+obfuscate_upstream(#upstream{uris = Uris} = Upstream) ->
+    Upstream#upstream{uris = [credentials_obfuscation:encrypt(Uri) || Uri <- Uris]}.
+
+obfuscate_upstream_params(#upstream_params{uri = Uri, params = #amqp_params_network{password = Password} = Params} = UParams) ->
+    UParams#upstream_params{
+        uri = credentials_obfuscation:encrypt(Uri),
+        params = Params#amqp_params_network{password = credentials_obfuscation:encrypt(Password)}
+    };
+obfuscate_upstream_params(#upstream_params{uri = Uri, params = #amqp_params_direct{password = Password} = Params} = UParams) ->
+    UParams#upstream_params{
+        uri = credentials_obfuscation:encrypt(Uri),
+        params = Params#amqp_params_direct{password = credentials_obfuscation:encrypt(Password)}
+    }.
+
+deobfuscate_upstream(#upstream{uris = EncryptedUris} = Upstream) ->
+    Upstream#upstream{uris = [credentials_obfuscation:decrypt(EncryptedUri) || EncryptedUri <- EncryptedUris]}.
+
+deobfuscate_upstream_params(#upstream_params{uri = EncryptedUri, params = #amqp_params_network{password = EncryptedPassword} = Params} = UParams) ->
+    UParams#upstream_params{
+        uri = credentials_obfuscation:decrypt(EncryptedUri),
+        params = Params#amqp_params_network{password = credentials_obfuscation:decrypt(EncryptedPassword)}
+    };
+deobfuscate_upstream_params(#upstream_params{uri = EncryptedUri, params = #amqp_params_direct{password = EncryptedPassword} = Params} = UParams) ->
+    UParams#upstream_params{
+        uri = credentials_obfuscation:decrypt(EncryptedUri),
+        params = Params#amqp_params_direct{password = credentials_obfuscation:decrypt(EncryptedPassword)}
+    }.

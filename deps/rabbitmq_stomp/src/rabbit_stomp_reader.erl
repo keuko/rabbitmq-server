@@ -17,7 +17,7 @@
 -module(rabbit_stomp_reader).
 -behaviour(gen_server2).
 
--export([start_link/4]).
+-export([start_link/3]).
 -export([conserve_resources/3]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          code_change/3, terminate/2]).
@@ -41,19 +41,9 @@
 
 %%----------------------------------------------------------------------------
 
-start_link(SupHelperPid, Ref, Sock, Configuration) ->
+start_link(SupHelperPid, Ref, Configuration) ->
     Pid = proc_lib:spawn_link(?MODULE, init,
-                              [[SupHelperPid, Ref, Sock, Configuration]]),
-
-    %% In the event that somebody floods us with connections, the
-    %% reader processes can spew log events at error_logger faster
-    %% than it can keep up, causing its mailbox to grow unbounded
-    %% until we eat all the memory available and crash. So here is a
-    %% meaningless synchronous call to the underlying gen_event
-    %% mechanism. When it returns the mailbox is drained, and we
-    %% return to our caller to accept more connections.
-    _ = gen_event:which_handlers(error_logger),
-
+                              [[SupHelperPid, Ref, Configuration]]),
     {ok, Pid}.
 
 info(Pid, InfoItems) ->
@@ -63,10 +53,11 @@ info(Pid, InfoItems) ->
         UnknownItems -> throw({bad_argument, UnknownItems})
     end.
 
-init([SupHelperPid, Ref, Sock, Configuration]) ->
+init([SupHelperPid, Ref, Configuration]) ->
     process_flag(trap_exit, true),
+    {ok, Sock} = rabbit_networking:handshake(Ref,
+        application:get_env(rabbitmq_stomp, proxy_protocol, false)),
     RealSocket = rabbit_net:unwrap_socket(Sock),
-    rabbit_networking:accept_ack(Ref, RealSocket),
 
     case rabbit_net:connection_string(Sock, inbound) of
         {ok, ConnStr} ->
@@ -120,16 +111,19 @@ handle_cast(Msg, State) ->
     {stop, {stomp_unexpected_cast, Msg}, State}.
 
 
-handle_info({inet_async, _Sock, _Ref, {ok, Data}}, State) ->
+handle_info({Tag, Sock, Data}, State=#reader_state{socket=Sock})
+        when Tag =:= tcp; Tag =:= ssl ->
     case process_received_bytes(Data, State#reader_state{recv_outstanding = false}) of
       {ok, NewState} ->
           {noreply, ensure_stats_timer(run_socket(control_throttle(NewState))), hibernate};
       {stop, Reason, NewState} ->
           {stop, Reason, NewState}
     end;
-handle_info({inet_async, _Sock, _Ref, {error, closed}}, State) ->
+handle_info({Tag, Sock}, State=#reader_state{socket=Sock})
+        when Tag =:= tcp_closed; Tag =:= ssl_closed ->
     {stop, normal, State};
-handle_info({inet_async, _Sock, _Ref, {error, Reason}}, State) ->
+handle_info({Tag, Sock, Reason}, State=#reader_state{socket=Sock})
+        when Tag =:= tcp_error; Tag =:= ssl_error ->
     {stop, {inet_error, Reason}, State};
 handle_info({inet_reply, _Sock, {error, closed}}, State) ->
     {stop, normal, State};
@@ -273,7 +267,7 @@ run_socket(State = #reader_state{state = blocked}) ->
 run_socket(State = #reader_state{recv_outstanding = true}) ->
     State;
 run_socket(State = #reader_state{socket = Sock}) ->
-    _ = rabbit_net:async_recv(Sock, 0, infinity),
+    rabbit_net:setopts(Sock, [{active, once}]),
     State#reader_state{recv_outstanding = true}.
 
 
@@ -294,24 +288,23 @@ log_reason({network_error, {ssl_upgrade_error, closed}, ConnStr}, _State) ->
     rabbit_log_connection:error("STOMP detected TLS upgrade error on ~s: connection closed~n",
         [ConnStr]);
 
-log_reason({network_error,
-           {ssl_upgrade_error,
-            {tls_alert, "handshake failure"}}, ConnStr}, _State) ->
-    rabbit_log_connection:error("STOMP detected TLS upgrade error on ~s: handshake failure~n",
-        [ConnStr]);
 
 log_reason({network_error,
-           {ssl_upgrade_error,
-            {tls_alert, "unknown ca"}}, ConnStr}, _State) ->
-    rabbit_log_connection:error("STOMP detected TLS certificate verification error on ~s: alert 'unknown CA'~n",
-        [ConnStr]);
-
+            {ssl_upgrade_error,
+             {tls_alert, "handshake failure"}}, ConnStr}, _State) ->
+    log_tls_alert(handshake_failure, ConnStr);
 log_reason({network_error,
-           {ssl_upgrade_error,
-            {tls_alert, Alert}}, ConnStr}, _State) ->
-    rabbit_log_connection:error("STOMP detected TLS upgrade error on ~s: alert ~s~n",
-        [ConnStr, Alert]);
-
+            {ssl_upgrade_error,
+             {tls_alert, "unknown ca"}}, ConnStr}, _State) ->
+    log_tls_alert(unknown_ca, ConnStr);
+log_reason({network_error,
+            {ssl_upgrade_error,
+             {tls_alert, {Err, _}}}, ConnStr}, _State) ->
+    log_tls_alert(Err, ConnStr);
+log_reason({network_error,
+            {ssl_upgrade_error,
+             {tls_alert, Alert}}, ConnStr}, _State) ->
+    log_tls_alert(Alert, ConnStr);
 log_reason({network_error, {ssl_upgrade_error, Reason}, ConnStr}, _State) ->
     rabbit_log_connection:error("STOMP detected TLS upgrade error on ~s: ~p~n",
         [ConnStr, Reason]);
@@ -339,6 +332,17 @@ log_reason(Reason, #reader_state{ processor_state = ProcState }) ->
     AdapterName = rabbit_stomp_processor:adapter_name(ProcState),
     rabbit_log:warning("STOMP connection ~s terminated"
                        " with reason ~p, closing it~n", [AdapterName, Reason]).
+
+log_tls_alert(handshake_failure, ConnStr) ->
+    rabbit_log_connection:error("STOMP detected TLS upgrade error on ~s: handshake failure~n",
+        [ConnStr]);
+log_tls_alert(unknown_ca, ConnStr) ->
+    rabbit_log_connection:error("STOMP detected TLS certificate verification error on ~s: alert 'unknown CA'~n",
+        [ConnStr]);
+log_tls_alert(Alert, ConnStr) ->
+    rabbit_log_connection:error("STOMP detected TLS upgrade error on ~s: alert ~s~n",
+        [ConnStr, Alert]).
+
 
 %%----------------------------------------------------------------------------
 

@@ -91,10 +91,15 @@
                         durable => terminus_durability()}.
 
 -type attach_role() :: {sender, target_def()} | {receiver, source_def(), pid()}.
+
+% http://www.amqp.org/specification/1.0/filters
+-type filter() :: #{binary() => binary() | map() | list(binary())}.
+
 -type attach_args() :: #{name => binary(),
                          role => attach_role(),
                          snd_settle_mode => snd_settle_mode(),
-                         rcv_settle_mode => rcv_settle_mode()
+                         rcv_settle_mode => rcv_settle_mode(),
+                         filter => filter()
                         }.
 
 -type link_ref() :: #link_ref{}.
@@ -105,7 +110,8 @@
               attach_args/0,
               attach_role/0,
               target_def/0,
-              source_def/0]).
+              source_def/0,
+              filter/0]).
 
 -record(link,
         {name :: link_name(),
@@ -348,21 +354,24 @@ mapped({#'v1_0.transfer'{handle = {uint, InHandle},
               State0#state{links = Links#{OutHandle => Link1}}),
     {next_state, mapped, State};
 mapped({#'v1_0.transfer'{handle = {uint, InHandle},
-                         delivery_id = {uint, DeliveryId},
+                         delivery_id = MaybeDeliveryId,
                          settled = Settled} = Transfer0, Payload0},
                          #state{incoming_unsettled = Unsettled0} = State0) ->
 
     {ok, #link{target = {pid, TargetPid},
                output_handle = OutHandle,
-               ref = LinkRef} = Link} =
+               ref = LinkRef} = Link0} =
         find_link_by_input_handle(InHandle, State0),
 
-    {Transfer, Payload} = complete_partial_transfer(Transfer0, Payload0, Link),
+    {Transfer, Payload, Link} = complete_partial_transfer(Transfer0, Payload0, Link0),
     Msg = decode_as_msg(Transfer, Payload),
+
     % stash the DeliveryId - not sure for what yet
-    Unsettled = case Settled of
-                   true -> Unsettled0;
-                   _ -> Unsettled0#{DeliveryId => OutHandle}
+    Unsettled = case MaybeDeliveryId of
+                    {uint, DeliveryId} when Settled =/= true ->
+                        Unsettled0#{DeliveryId => OutHandle};
+                    _ ->
+                        Unsettled0
                 end,
 
     % link bookkeeping
@@ -630,10 +639,12 @@ build_frames(Channel, Trf, Payload, MaxPayloadSize, Acc) ->
 
 make_source(#{role := {sender, _}}) ->
     #'v1_0.source'{};
-make_source(#{role := {receiver, #{address := Address} = Target, _Pid}}) ->
+make_source(#{role := {receiver, #{address := Address} = Target, _Pid}, filter := Filter}) ->
     Durable = translate_terminus_durability(maps:get(durable, Target, none)),
+    TranslatedFilter = translate_filters(Filter),
     #'v1_0.source'{address = {utf8, Address},
-                   durable = {uint, Durable}}.
+                   durable = {uint, Durable},
+                   filter = TranslatedFilter}.
 
 make_target(#{role := {receiver, _Source, _Pid}}) ->
     #'v1_0.target'{};
@@ -645,6 +656,42 @@ make_target(#{role := {sender, #{address := Address} = Target}}) ->
 translate_terminus_durability(none) -> 0;
 translate_terminus_durability(configuration) -> 1;
 translate_terminus_durability(unsettled_state) -> 2.
+
+translate_filters(Filters) when is_map(Filters) andalso map_size(Filters) =< 0 -> undefined;
+translate_filters(Filters) when is_map(Filters) -> {
+    map,
+    maps:fold(
+        fun(<<"apache.org:legacy-amqp-direct-binding:string">> = K, V, Acc) when is_binary(V) ->
+            [{{symbol, K}, {utf8, V}} | Acc];
+        (<<"apache.org:legacy-amqp-topic-binding:string">> = K, V, Acc) when is_binary(V) ->
+            [{{symbol, K}, {utf8, V}} | Acc];
+        (<<"apache.org:legacy-amqp-headers-binding:map">> = K, V, Acc) when is_map(V) ->
+            [{{symbol, K}, translate_legacy_amqp_headers_binding(V)} | Acc];
+        (<<"apache.org:no-local-filter:list">> = K, V, Acc) when is_list(V) ->
+            [{{symbol, K}, lists:map(fun(Id) -> {utf8, Id} end, V)} | Acc];
+        (<<"apache.org:selector-filter:string">> = K, V, Acc) when is_binary(V) ->
+            [{{symbol, K}, {utf8, V}} | Acc]
+        end,
+        [],
+        Filters)
+}.
+
+% https://people.apache.org/~rgodfrey/amqp-1.0/apache-filters.html
+translate_legacy_amqp_headers_binding(LegacyHeaders) -> {
+    map,
+    maps:fold(
+        fun(<<"x-match">> = K, <<"any">> = V, Acc) ->
+            [{{utf8, K}, {utf8, V}} | Acc];
+        (<<"x-match">> = K, <<"all">> = V, Acc) ->
+            [{{utf8, K}, {utf8, V}} | Acc];
+        (<<"x-",_/binary>>, _, Acc) ->
+            Acc;
+        (K, V, Acc) ->
+            [{{utf8, K}, {utf8, V}} | Acc]
+        end,
+        [],
+        LegacyHeaders)
+}.
 
 send_detach(Send, {detach, OutHandle}, _From, State = #state{links = Links}) ->
     case Links of
@@ -722,6 +769,7 @@ handle_session_flow(#'v1_0.flow'{next_incoming_id = MaybeNII,
     State#state{next_incoming_id = NOI,
                 remote_incoming_window = NII + InWin - OurNOI, % see: 2.5.6
                 remote_outgoing_window = OutWin}.
+
 
 -spec handle_link_flow(#'v1_0.flow'{}, #link{}) -> {ok | send_flow, #link{}}.
 handle_link_flow(#'v1_0.flow'{drain = true, link_credit = {uint, TheirCredit}},
@@ -906,11 +954,12 @@ append_partial_transfer(_Transfer, Payload,
     Link#link{partial_transfers = {T, [Payload | Payloads]}}.
 
 complete_partial_transfer(Transfer, Payload,
-                          #link{partial_transfers = undefined}) ->
-    {Transfer, Payload};
+                          #link{partial_transfers = undefined} = Link) ->
+    {Transfer, Payload, Link};
 complete_partial_transfer(_Transfer, Payload,
-                          #link{partial_transfers = {T, Payloads}}) ->
-    {T, iolist_to_binary(lists:reverse([Payload | Payloads]))}.
+                          #link{partial_transfers = {T, Payloads}} = Link) ->
+    {T, iolist_to_binary(lists:reverse([Payload | Payloads])),
+     Link#link{partial_transfers = undefined}}.
 
 decode_as_msg(Transfer, Payload) ->
     Records = amqp10_framing:decode_bin(Payload),
@@ -1014,4 +1063,67 @@ handle_link_flow_receiver_test() ->
     true = Outcome#link.drain,
     SenderDC = Outcome#link.delivery_count. % maintain delivery count
 
+translate_filters_empty_map_test() ->
+    undefined = translate_filters(#{}).
+
+translate_filters_legacy_amqp_direct_binding_filter_test() ->
+    {map,
+        [{
+            {symbol,<<"apache.org:legacy-amqp-direct-binding:string">>},
+            {utf8,<<"my topic">>}
+        }]
+    } = translate_filters(#{<<"apache.org:legacy-amqp-direct-binding:string">> => <<"my topic">>}).
+
+translate_filters_legacy_amqp_topic_binding_filter_test() ->
+    {map,
+        [{
+            {symbol, <<"apache.org:legacy-amqp-topic-binding:string">>},
+            {utf8, <<"*.stock.#">>}
+        }]
+    } = translate_filters(#{<<"apache.org:legacy-amqp-topic-binding:string">> => <<"*.stock.#">>}).
+
+translate_filters_legacy_amqp_headers_binding_filter_test() ->
+    {map,
+        [{
+            {symbol,<<"apache.org:legacy-amqp-headers-binding:map">>},
+            {map, [
+                    {{utf8, <<"x-match">>}, {utf8, <<"all">>}},
+                    {{utf8, <<"foo">>}, {utf8, <<"bar">>}},
+                    {{utf8, <<"bar">>}, {utf8, <<"baz">>}}
+                ]
+            }
+        }]
+    } = translate_filters(#{<<"apache.org:legacy-amqp-headers-binding:map">> => #{
+            <<"x-match">> => <<"all">>,
+            <<"x-something">> => <<"ignored">>,
+            <<"bar">> => <<"baz">>,
+            <<"foo">> => <<"bar">>
+        }}).
+
+translate_filters_legacy_amqp_no_local_filter_test() ->
+    {map,
+        [{
+            {symbol, <<"apache.org:no-local-filter:list">>},
+            [{utf8, <<"foo">>}, {utf8, <<"bar">>}]
+        }]
+    } = translate_filters(#{<<"apache.org:no-local-filter:list">> => [<<"foo">>, <<"bar">>]}).
+
+translate_filters_selector_filter_test() ->
+    {map,
+        [{
+            {symbol, <<"apache.org:selector-filter:string">>},
+            {utf8, <<"amqp.annotation.x-opt-enqueuedtimeutc > 123456789">>}
+        }]
+    } = translate_filters(#{<<"apache.org:selector-filter:string">> => <<"amqp.annotation.x-opt-enqueuedtimeutc > 123456789">>}).
+
+translate_filters_multiple_filters_test() ->
+    {map,
+        [
+            {{symbol, <<"apache.org:selector-filter:string">>}, {utf8, <<"amqp.annotation.x-opt-enqueuedtimeutc > 123456789">>}},
+            {{symbol, <<"apache.org:legacy-amqp-direct-binding:string">>}, {utf8,<<"my topic">>}}
+        ]
+    } = translate_filters(#{
+            <<"apache.org:legacy-amqp-direct-binding:string">> => <<"my topic">>,
+            <<"apache.org:selector-filter:string">> => <<"amqp.annotation.x-opt-enqueuedtimeutc > 123456789">>
+        }).
 -endif.

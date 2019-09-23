@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -26,6 +26,7 @@
 -export([sync_notify/2, sync_notify/3]).
 
 -ignore_xref([{gen_event, start_link, 2}]).
+-dialyzer([{no_missing_calls, start_link/0}]).
 
 %%----------------------------------------------------------------------------
 
@@ -156,7 +157,8 @@ notify_if(false, _Type, _Props) -> ok.
 notify(Type, Props) -> notify(Type, Props, none).
 
 notify(Type, Props, Ref) ->
-    gen_event:notify(?MODULE, event_cons(Type, Props, Ref)).
+    %% Using {Name, node()} here to not fail if the event handler is not started
+    gen_event:notify({?MODULE, node()}, event_cons(Type, Props, Ref)).
 
 sync_notify(Type, Props) -> sync_notify(Type, Props, none).
 
