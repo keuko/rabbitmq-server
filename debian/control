@@ -29,8 +29,8 @@ Build-Depends:
  erlang-tools (>= 1:19.3),
  erlang-xmerl (>= 1:19.3),
  locales-all,
- python-all,
- python-simplejson,
+ python3-all,
+ python3-simplejson,
  rsync,
  unzip,
  xmlto,
@@ -63,7 +63,7 @@ Depends:
  lsb-base,
  socat,
  ${misc:Depends},
- ${python:Depends},
+ ${python3:Depends},
 Description: AMQP server written in Erlang
  RabbitMQ is an implementation of AMQP, the emerging standard for high
  performance enterprise messaging. The RabbitMQ server is a robust and

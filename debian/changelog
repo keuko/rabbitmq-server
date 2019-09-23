@@ -3,6 +3,8 @@ rabbitmq-server (3.7.18-1) unstable; urgency=medium
   * New upstream release.
     - Can be built with Elixir 1.9.x (Closes: #939881).
   * Re-add debian/gbp.conf, as this package must use pristine-tar.
+  * Fix display of version when doing rabbitmqadmin --version. Used a different
+    way from proposed patch which isn't invasive (Closes: #908690).
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 23 Sep 2019 10:05:48 +0200
 
