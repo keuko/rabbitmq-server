@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_queue_index).
@@ -352,7 +352,7 @@ pre_publish(MsgOrId, SeqId, MsgProps, IsPersistent, IsDelivered, JournalSizeHint
                 false -> ?PUB_TRANS_JPREFIX
             end):?JPREFIX_BITS,
            SeqId:?SEQ_BITS, Bin/binary,
-           (size(MsgBin)):?EMBEDDED_SIZE_BITS>>, MsgBin], PPC],
+           (size(MsgBin)):?EMBEDDED_SIZE_BITS>>, MsgBin] | PPC],
 
     DC1 =
         case IsDelivered of
@@ -362,13 +362,13 @@ pre_publish(MsgOrId, SeqId, MsgProps, IsPersistent, IsDelivered, JournalSizeHint
                 DC
         end,
 
-    add_to_journal(SeqId, {IsPersistent, Bin, MsgBin},
-                   maybe_flush_pre_publish_cache(
+    State2 = add_to_journal(SeqId, {IsPersistent, Bin, MsgBin}, State1),
+    maybe_flush_pre_publish_cache(
                      JournalSizeHint,
-                     State1#qistate{pre_publish_cache = PPC1,
-                                    delivered_cache   = DC1})).
+                     State2#qistate{pre_publish_cache = PPC1,
+                                    delivered_cache   = DC1}).
 
-%% pre_publish_cache is the entry with most elements when comapred to
+%% pre_publish_cache is the entry with most elements when compared to
 %% delivered_cache so we only check the former in the guard.
 maybe_flush_pre_publish_cache(JournalSizeHint,
                               #qistate{pre_publish_cache = PPC} = State)
@@ -626,7 +626,8 @@ init_dirty(CleanShutdown, ContainsCheckFun, State) ->
                   {{Segment = #segment { unacked = UnackedCount }, Dirty},
                    UnackedBytes} =
                       recover_segment(ContainsCheckFun, CleanShutdown,
-                                      segment_find_or_new(Seg, Dir, Segments2)),
+                                      segment_find_or_new(Seg, Dir, Segments2),
+                                      State1#qistate.max_journal_entries),
                   {segment_store(Segment, Segments2),
                    CountAcc + UnackedCount,
                    BytesAcc + UnackedBytes, DirtyCount + Dirty}
@@ -650,7 +651,7 @@ terminate(State = #qistate { journal_handle = JournalHdl,
                                      segments = undefined }}.
 
 recover_segment(ContainsCheckFun, CleanShutdown,
-                Segment = #segment { journal_entries = JEntries }) ->
+                Segment = #segment { journal_entries = JEntries }, MaxJournal) ->
     {SegEntries, UnackedCount} = load_segment(false, Segment),
     {SegEntries1, UnackedCountDelta} =
         segment_plus_journal(SegEntries, JEntries),
@@ -659,7 +660,7 @@ recover_segment(ContainsCheckFun, CleanShutdown,
            {SegmentAndDirtyCount, Bytes}) ->
               {MsgOrId, MsgProps} = parse_pub_record_body(Bin, MsgBin),
               {recover_message(ContainsCheckFun(MsgOrId), CleanShutdown,
-                               Del, RelSeq, SegmentAndDirtyCount),
+                               Del, RelSeq, SegmentAndDirtyCount, MaxJournal),
                Bytes + case IsPersistent of
                            true  -> MsgProps#message_properties.size;
                            false -> 0
@@ -668,15 +669,16 @@ recover_segment(ContainsCheckFun, CleanShutdown,
       {{Segment #segment { unacked = UnackedCount + UnackedCountDelta }, 0}, 0},
       SegEntries1).
 
-recover_message( true,  true,   _Del, _RelSeq, SegmentAndDirtyCount) ->
+recover_message( true,  true,   _Del, _RelSeq, SegmentAndDirtyCount, _MaxJournal) ->
     SegmentAndDirtyCount;
-recover_message( true, false,    del, _RelSeq, SegmentAndDirtyCount) ->
+recover_message( true, false,    del, _RelSeq, SegmentAndDirtyCount, _MaxJournal) ->
     SegmentAndDirtyCount;
-recover_message( true, false, no_del,  RelSeq, {Segment, DirtyCount}) ->
-    {add_to_journal(RelSeq, del, Segment), DirtyCount + 1};
-recover_message(false,     _,    del,  RelSeq, {Segment, DirtyCount}) ->
+recover_message( true, false, no_del,  RelSeq, {Segment, _DirtyCount}, MaxJournal) ->
+    %% force to flush the segment
+    {add_to_journal(RelSeq, del, Segment), MaxJournal + 1}; 
+recover_message(false,     _,    del,  RelSeq, {Segment, DirtyCount}, _MaxJournal) ->
     {add_to_journal(RelSeq, ack, Segment), DirtyCount + 1};
-recover_message(false,     _, no_del,  RelSeq, {Segment, DirtyCount}) ->
+recover_message(false,     _, no_del,  RelSeq, {Segment, DirtyCount}, _MaxJournal) ->
     {add_to_journal(RelSeq, ack,
                     add_to_journal(RelSeq, del, Segment)),
      DirtyCount + 2}.
@@ -1456,14 +1458,18 @@ move_to_per_vhost_stores(#resource{} = QueueName) ->
     OldQueueDir = filename:join([queues_base_dir(), "queues",
                                  queue_name_to_dir_name_legacy(QueueName)]),
     NewQueueDir = queue_dir(QueueName),
+    rabbit_log_upgrade:info("About to migrate queue directory '~s' to '~s'",
+                            [OldQueueDir, NewQueueDir]),
     case rabbit_file:is_dir(OldQueueDir) of
         true  ->
             ok = rabbit_file:ensure_dir(NewQueueDir),
             ok = rabbit_file:rename(OldQueueDir, NewQueueDir),
             ok = ensure_queue_name_stub_file(NewQueueDir, QueueName);
         false ->
-            rabbit_log:info("Queue index directory not found for queue ~p~n",
-                            [QueueName])
+            Msg  = "Queue index directory '~s' not found for ~s~n",
+            Args = [OldQueueDir, rabbit_misc:rs(QueueName)],
+            rabbit_log_upgrade:error(Msg, Args),
+            rabbit_log:error(Msg, Args)
     end,
     ok.
 

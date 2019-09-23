@@ -63,6 +63,8 @@ format_queue_stats({slave_pids, Pids}) ->
     [{slave_nodes, [node(Pid) || Pid <- Pids]}];
 format_queue_stats({synchronised_slave_pids, ''}) ->
     [];
+format_queue_stats({effective_policy_definition, []}) ->
+    [{effective_policy_definition, #{}}];
 format_queue_stats({synchronised_slave_pids, Pids}) ->
     [{synchronised_slave_nodes, [node(Pid) || Pid <- Pids]}];
 format_queue_stats({backing_queue_status, Value}) ->
@@ -174,6 +176,9 @@ amqp_table(Table)     -> maps:from_list([{Name, amqp_value(Type, Value)} ||
 
 amqp_value(array, Vs)                  -> [amqp_value(T, V) || {T, V} <- Vs];
 amqp_value(table, V)                   -> amqp_table(V);
+amqp_value(decimal, {Before, After})   ->
+    erlang:list_to_float(
+      lists:flatten(io_lib:format("~p.~p", [Before, After])));
 amqp_value(_Type, V) when is_binary(V) -> utf8_safe(V);
 amqp_value(_Type, V)                   -> V.
 
@@ -391,6 +396,9 @@ queue(#amqqueue{name            = Name,
 
 queue_state({syncing, Msgs}) -> [{state,         syncing},
                                  {sync_messages, Msgs}];
+queue_state({terminated_by, Name}) ->
+                                [{state, terminated},
+                                 {terminated_by, Name}];
 queue_state(Status)          -> [{state,         Status}].
 
 %% We get bindings using rabbit_binding:list_*/1 rather than :info_all/1 since

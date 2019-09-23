@@ -11,7 +11,7 @@
 %%  The Original Code is RabbitMQ.
 %%
 %%  The Initial Developer of the Original Code is GoPivotal, Inc.
-%%  Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%%  Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_shovel_config).
@@ -21,9 +21,6 @@
 
 -include_lib("amqp_client/include/amqp_client.hrl").
 -include("rabbit_shovel.hrl").
-
--define(IGNORE_FIELDS, [delete_after]).
--define(EXTRA_KEYS, [add_forward_headers, add_timestamp_header]).
 
 resolve_module(amqp091) -> rabbit_amqp091_shovel;
 resolve_module(amqp10) -> rabbit_amqp10_shovel.

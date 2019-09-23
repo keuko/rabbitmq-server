@@ -1,7 +1,7 @@
 %%  The contents of this file are subject to the Mozilla Public License
 %%  Version 1.1 (the "License"); you may not use this file except in
 %%  compliance with the License. You may obtain a copy of the License
-%%  at http://www.mozilla.org/MPL/
+%%  at https://www.mozilla.org/MPL/
 %%
 %%  Software distributed under the License is distributed on an "AS IS"
 %%  basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -20,7 +20,7 @@
 -include_lib("rabbit_framing.hrl").
 -behaviour(rabbit_backing_queue).
 
-%% enabled unconditionally. Disabling priority queueing after
+%% enabled unconditionally. Disabling priority queuing after
 %% it has been enabled is dangerous.
 -rabbit_boot_step({?MODULE,
                    [{description, "enable priority queue"},
@@ -53,7 +53,7 @@
 -define(passthrough3(F),
         {Res1, Res2, BQS1} = BQ:F, {Res1, Res2, State#passthrough{bqs = BQS1}}).
 
-%% This module adds suport for priority queues.
+%% This module adds support for priority queues.
 %%
 %% Priority queues have one backing queue per priority. Backing queue functions
 %% then produce a list of results for each BQ and fold over them, sorting

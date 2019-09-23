@@ -23,7 +23,8 @@
 -export([start_conn_ch/5, disposable_channel_call/2, disposable_channel_call/3,
          disposable_connection_call/3, ensure_connection_closed/1,
          log_terminate/4, unacked_new/0, ack/3, nack/3, forward/9,
-         handle_down/6, get_connection_name/2, log_warning/3]).
+         handle_down/6, get_connection_name/2,
+         log_debug/3, log_info/3, log_warning/3, log_error/3]).
 
 %% temp
 -export([connection_error/6]).
@@ -34,8 +35,12 @@
 
 %%----------------------------------------------------------------------------
 
-start_conn_ch(Fun, Upstream, UParams,
+start_conn_ch(Fun, OUpstream, OUParams,
               XorQName = #resource{virtual_host = DownVHost}, State) ->
+
+    Upstream = rabbit_federation_util:deobfuscate_upstream(OUpstream),
+    UParams = rabbit_federation_util:deobfuscate_upstream_params(OUParams),
+
     ConnName = get_connection_name(Upstream, UParams),
     case open_monitor(#amqp_params_direct{virtual_host = DownVHost}, ConnName) of
         {ok, DConn, DCh} ->
@@ -63,7 +68,7 @@ start_conn_ch(Fun, Upstream, UParams,
                              UParams)]),
                         Name = pget(name, amqp_connection:info(DConn, [name])),
                         rabbit_federation_status:report(
-                          Upstream, UParams, XorQName, {running, Name}),
+                          OUpstream, OUParams, XorQName, {running, Name}),
                         R
                     catch exit:E ->
                             %% terminate/2 will not get this, as we
@@ -71,16 +76,16 @@ start_conn_ch(Fun, Upstream, UParams,
                             ensure_connection_closed(DConn),
                             ensure_connection_closed(Conn),
                             connection_error(remote_start, E,
-                                             Upstream, UParams, XorQName, State)
+                                             OUpstream, OUParams, XorQName, State)
                     end;
                 E ->
                     ensure_connection_closed(DConn),
                     connection_error(remote_start, E,
-                                     Upstream, UParams, XorQName, State)
+                                     OUpstream, OUParams, XorQName, State)
             end;
         E ->
             connection_error(local_start, E,
-                             Upstream, UParams, XorQName, State)
+                             OUpstream, OUParams, XorQName, State)
     end.
 
 get_connection_name(#upstream{name = UpstreamName},
@@ -129,7 +134,7 @@ ensure_connection_closed(Conn) ->
 connection_error(remote_start, E, Upstream, UParams, XorQName, State) ->
     rabbit_federation_status:report(
       Upstream, UParams, XorQName, clean_reason(E)),
-    log_warning(XorQName, "did not connect to ~s~n~p~n",
+    log_warning(XorQName, "did not connect to ~s. Reason: ~p~n",
                 [rabbit_federation_upstream:params_to_string(UParams),
                  E]),
     {stop, {shutdown, restart}, State};
@@ -272,8 +277,10 @@ log_terminate(Reason, Upstream, UParams, XorQName) ->
     rabbit_federation_status:report(
       Upstream, UParams, XorQName, clean_reason(Reason)).
 
-log_info   (XorQName, Fmt, Args) -> log(info,    XorQName, Fmt, Args).
+log_debug(XorQName, Fmt, Args) -> log(debug, XorQName, Fmt, Args).
+log_info(XorQName, Fmt, Args) -> log(info, XorQName, Fmt, Args).
 log_warning(XorQName, Fmt, Args) -> log(warning, XorQName, Fmt, Args).
+log_error(XorQName, Fmt, Args) -> log(error, XorQName, Fmt, Args).
 
 log(Level, XorQName, Fmt0, Args0) ->
     Fmt = "Federation ~s " ++ Fmt0,

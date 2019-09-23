@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -23,7 +23,8 @@
           {ok, integer()} | {error, parse_error}.
 
 parse_information_unit(Value) when is_integer(Value) -> {ok, Value};
-parse_information_unit(Value) when is_list(Value) ->
+parse_information_unit(Value0) ->
+    Value = rabbit_data_coercion:to_list(Value0),
     case re:run(Value,
                 "^(?<VAL>[0-9]+)(?<UNIT>kB|KB|MB|GB|kb|mb|gb|Kb|Mb|Gb|kiB|KiB|MiB|GiB|kib|mib|gib|KIB|MIB|GIB|k|K|m|M|g|G)?$",
                 [{capture, all_but_first, list}]) of

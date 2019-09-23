@@ -95,9 +95,8 @@ dispatcher_add(function(sammy) {
         });
 
     sammy.get('#/queues', function() {
-                          renderQueues();
-            });
-
+            renderQueues();
+        });
 
     sammy.get('#/queues/:vhost/:name', function() {
             var path = '/queues/' + esc(this.params['vhost']) + '/' + esc(this.params['name']);
@@ -118,7 +117,7 @@ dispatcher_add(function(sammy) {
             else if (this.params['mode'] == 'purge') {
                 if (sync_delete(this, '/queues/:vhost/:name/contents')) {
                     show_popup('info', "Queue purged");
-                    update_partial();
+                    partial_update();
                 }
             }
             return false;
@@ -188,8 +187,14 @@ dispatcher_add(function(sammy) {
                    '#/users');
         });
     sammy.put('#/users-add', function() {
-            if (sync_put(this, '/users/:username'))
+            res = sync_put(this, '/users/:username');
+            if (res) {
+                if (res.http_status === 204) {
+                    username = res.req_params.username;
+                    show_popup('warn', "Updated an existing user: '" + username + "'");
+                }
                 update();
+            }
             return false;
         });
     sammy.put('#/users-modify', function() {
@@ -200,6 +205,15 @@ dispatcher_add(function(sammy) {
     sammy.del('#/users', function() {
             if (sync_delete(this, '/users/:username'))
                 go_to('#/users');
+            return false;
+        });
+
+    path('#/feature-flags', {'feature_flags': {path:    '/feature-flags',
+                                               options: {sort:true}},
+                             'permissions': '/permissions'}, 'feature-flags');
+    sammy.put('#/feature-flags-enable', function() {
+            if (sync_put(this, '/feature-flags/:name/enable'))
+                update();
             return false;
         });
 

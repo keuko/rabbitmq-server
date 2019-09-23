@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License at
-%% http://www.mozilla.org/MPL/
+%% https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
@@ -67,6 +67,7 @@
                       non_neg_integer(),
                       bq(), bqs()) ->
                           {'already_synced', bqs()} | {'ok', bqs()} |
+                          {'cancelled', bqs()} |
                           {'shutdown', any(), bqs()} |
                           {'sync_died', any(), bqs()}.
 -spec slave(non_neg_integer(), reference(), timer:tref(), pid(),

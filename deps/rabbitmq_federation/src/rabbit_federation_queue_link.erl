@@ -66,7 +66,9 @@ federation_up() ->
 init({Upstream, Queue = #amqqueue{name = QName}}) ->
     case rabbit_amqqueue:lookup(QName) of
         {ok, Q} ->
-            UParams = rabbit_federation_upstream:to_params(Upstream, Queue),
+            DeobfuscatedUpstream = rabbit_federation_util:deobfuscate_upstream(Upstream),
+            DeobfuscatedUParams = rabbit_federation_upstream:to_params(DeobfuscatedUpstream, Queue),
+            UParams = rabbit_federation_util:obfuscate_upstream_params(DeobfuscatedUParams),
             rabbit_federation_status:report(Upstream, UParams, QName, starting),
             join(rabbit_federation_queues),
             join({rabbit_federation_queue, QName}),
@@ -117,8 +119,8 @@ handle_cast(pause, State = #state{run = false}) ->
 handle_cast(pause, State = #not_started{}) ->
     {noreply, State#not_started{run = false}};
 
-handle_cast(pause, State = #state{ch = Ch}) ->
-    cancel(Ch),
+handle_cast(pause, State = #state{ch = Ch, upstream = Upstream}) ->
+    cancel(Ch, Upstream),
     {noreply, State#state{run = false}};
 
 handle_cast(Msg, State) ->
@@ -303,15 +305,20 @@ visit_match({table, T}, Info) ->
 visit_match(_ ,_) ->
     false.
 
+consumer_tag(#upstream{name = Name}) ->
+    <<"federation-link-", Name/binary>>.
+
 consume(Ch, Upstream, UQueue) ->
+    ConsumerTag = consumer_tag(Upstream),
     NoAck = Upstream#upstream.ack_mode =:= 'no-ack',
     amqp_channel:cast(
       Ch, #'basic.consume'{queue        = name(UQueue),
                            no_ack       = NoAck,
                            nowait       = true,
-                           consumer_tag = <<"consumer">>,
+                           consumer_tag = ConsumerTag,
                            arguments    = [{<<"x-priority">>, long, -1}]}).
 
-cancel(Ch) ->
+cancel(Ch, Upstream) ->
+    ConsumerTag = consumer_tag(Upstream),
     amqp_channel:cast(Ch, #'basic.cancel'{nowait       = true,
-                                          consumer_tag = <<"consumer">>}).
+                                          consumer_tag = ConsumerTag}).

@@ -1,17 +1,17 @@
-%%   The contents of this file are subject to the Mozilla Public License
-%%   Version 1.1 (the "License"); you may not use this file except in
-%%   compliance with the License. You may obtain a copy of the License at
-%%   http://www.mozilla.org/MPL/
+%% The contents of this file are subject to the Mozilla Public License
+%% Version 1.1 (the "License"); you may not use this file except in
+%% compliance with the License. You may obtain a copy of the License at
+%% https://www.mozilla.org/MPL/
 %%
-%%   Software distributed under the License is distributed on an "AS IS"
-%%   basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%   License for the specific language governing rights and limitations
-%%   under the License.
+%% Software distributed under the License is distributed on an "AS IS"
+%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
+%% License for the specific language governing rights and limitations
+%% under the License.
 %%
-%%   The Original Code is RabbitMQ Management Plugin.
+%% The Original Code is RabbitMQ Management Plugin.
 %%
-%%   The Initial Developer of the Original Code is GoPivotal, Inc.
-%%   Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% The Initial Developer of the Original Code is GoPivotal, Inc.
+%% Copyright (c) 2007-2018 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_mgmt_util).
@@ -34,7 +34,7 @@
          filter_vhost/3]).
 -export([filter_conn_ch_list/3, filter_user/2, list_login_vhosts/2]).
 -export([with_decode/5, decode/1, decode/2, set_resp_header/3,
-         args/1]).
+         args/1, read_complete_body/1]).
 -export([reply_list/3, reply_list/5, reply_list/4,
          sort_list/2, destination_type/1, reply_list_or_paginate/3
          ]).
@@ -49,6 +49,7 @@
 -export([direct_request/6]).
 -export([qs_val/2]).
 -export([get_path_prefix/0]).
+-export([catch_no_such_user_or_vhost/2]).
 
 -import(rabbit_misc, [pget/2]).
 
@@ -382,7 +383,7 @@ augment_resources0(Resources, DefaultSort, BasicColumns, Pagination, ReqData,
                 [AugFun, SortFun, PageFun];
             {true, basic, extended} ->
                 % pagination with extended columns and sorting on basic
-                % here we can reduce the augementation set before
+                % here we can reduce the augmentation set before
                 % augmenting
                 [SortFun, PageFun, AugFun]
         end,
@@ -452,7 +453,7 @@ sort_list(Facts, Sorts) -> sort_list_and_paginate(Facts, Sorts, undefined, false
       Fact :: [{atom(), term()}],
       SortColumn :: string().
 sort_list(Facts, _, [], _) ->
-    %% Do not sort when we are explicitly requsted to sort with an
+    %% Do not sort when we are explicitly requested to sort with an
     %% empty sort columns list. Note that this clause won't match when
     %% 'sort' parameter is not provided in a HTTP request at all.
     Facts;
@@ -710,8 +711,16 @@ id0(Key, ReqData) ->
         Id        -> Id
     end.
 
+read_complete_body(Req) ->
+    read_complete_body(Req, <<"">>).
+read_complete_body(Req0, Acc) ->
+    case cowboy_req:read_body(Req0) of
+        {ok, Data, Req}   -> {ok, <<Acc/binary, Data/binary>>, Req};
+        {more, Data, Req} -> read_complete_body(Req, <<Acc/binary, Data/binary>>)
+    end.
+
 with_decode(Keys, ReqData, Context, Fun) ->
-    {ok, Body, ReqData1} = cowboy_req:read_body(ReqData),
+    {ok, Body, ReqData1} = read_complete_body(ReqData),
     with_decode(Keys, Body, ReqData1, Context, Fun).
 
 with_decode(Keys, Body, ReqData, Context, Fun) ->
@@ -767,7 +776,7 @@ direct_request(MethodName, Transformers, Extra, ErrorMsg, ReqData,
               Method = props_to_method(MethodName, Props, Transformers, Extra),
               Node = get_node(Props),
               case rabbit_misc:rpc_call(Node, rabbit_channel, handle_method,
-                                        [Method, none, none,
+                                        [Method, none, ?MODULE, none,
                                          VHost, User]) of
                   {badrpc, nodedown} ->
                       Msg = io_lib:format("Node ~p could not be contacted", [Node]),
@@ -807,7 +816,7 @@ with_vhost_and_props(Fun, ReqData, Context) ->
             not_found(rabbit_data_coercion:to_binary("vhost_not_found"),
                       ReqData, Context);
         VHost ->
-            {ok, Body, ReqData1} = cowboy_req:read_body(ReqData),
+            {ok, Body, ReqData1} = read_complete_body(ReqData),
             case decode(Body) of
                 {ok, Props} ->
                     try
@@ -1083,3 +1092,11 @@ def(V, _) -> V.
 qs_val(Name, ReqData) ->
     Qs = cowboy_req:parse_qs(ReqData),
     proplists:get_value(Name, Qs, undefined).
+
+-spec catch_no_such_user_or_vhost(fun(() -> Result), Replacement) -> Result | Replacement.
+catch_no_such_user_or_vhost(Fun, Replacement) ->
+    try
+        Fun()
+    catch throw:{error, {E, _}} when E =:= no_such_user; E =:= no_such_vhost ->
+        Replacement()
+    end.

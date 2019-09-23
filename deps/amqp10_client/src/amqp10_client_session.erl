@@ -354,21 +354,24 @@ mapped({#'v1_0.transfer'{handle = {uint, InHandle},
               State0#state{links = Links#{OutHandle => Link1}}),
     {next_state, mapped, State};
 mapped({#'v1_0.transfer'{handle = {uint, InHandle},
-                         delivery_id = {uint, DeliveryId},
+                         delivery_id = MaybeDeliveryId,
                          settled = Settled} = Transfer0, Payload0},
                          #state{incoming_unsettled = Unsettled0} = State0) ->
 
     {ok, #link{target = {pid, TargetPid},
                output_handle = OutHandle,
-               ref = LinkRef} = Link} =
+               ref = LinkRef} = Link0} =
         find_link_by_input_handle(InHandle, State0),
 
-    {Transfer, Payload} = complete_partial_transfer(Transfer0, Payload0, Link),
+    {Transfer, Payload, Link} = complete_partial_transfer(Transfer0, Payload0, Link0),
     Msg = decode_as_msg(Transfer, Payload),
+
     % stash the DeliveryId - not sure for what yet
-    Unsettled = case Settled of
-                   true -> Unsettled0;
-                   _ -> Unsettled0#{DeliveryId => OutHandle}
+    Unsettled = case MaybeDeliveryId of
+                    {uint, DeliveryId} when Settled =/= true ->
+                        Unsettled0#{DeliveryId => OutHandle};
+                    _ ->
+                        Unsettled0
                 end,
 
     % link bookkeeping
@@ -767,6 +770,7 @@ handle_session_flow(#'v1_0.flow'{next_incoming_id = MaybeNII,
                 remote_incoming_window = NII + InWin - OurNOI, % see: 2.5.6
                 remote_outgoing_window = OutWin}.
 
+
 -spec handle_link_flow(#'v1_0.flow'{}, #link{}) -> {ok | send_flow, #link{}}.
 handle_link_flow(#'v1_0.flow'{drain = true, link_credit = {uint, TheirCredit}},
                  Link = #link{role = sender,
@@ -950,11 +954,12 @@ append_partial_transfer(_Transfer, Payload,
     Link#link{partial_transfers = {T, [Payload | Payloads]}}.
 
 complete_partial_transfer(Transfer, Payload,
-                          #link{partial_transfers = undefined}) ->
-    {Transfer, Payload};
+                          #link{partial_transfers = undefined} = Link) ->
+    {Transfer, Payload, Link};
 complete_partial_transfer(_Transfer, Payload,
-                          #link{partial_transfers = {T, Payloads}}) ->
-    {T, iolist_to_binary(lists:reverse([Payload | Payloads]))}.
+                          #link{partial_transfers = {T, Payloads}} = Link) ->
+    {T, iolist_to_binary(lists:reverse([Payload | Payloads])),
+     Link#link{partial_transfers = undefined}}.
 
 decode_as_msg(Transfer, Payload) ->
     Records = amqp10_framing:decode_bin(Payload),

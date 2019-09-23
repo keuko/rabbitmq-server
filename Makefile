@@ -35,7 +35,7 @@ include erlang.mk
 .PHONY: source-dist clean-source-dist
 
 SOURCE_DIST_BASE ?= rabbitmq-server
-SOURCE_DIST_SUFFIXES ?= tar.xz zip
+SOURCE_DIST_SUFFIXES ?= tar.xz
 SOURCE_DIST ?= $(PACKAGES_DIR)/$(SOURCE_DIST_BASE)-$(PROJECT_VERSION)
 
 # The first source distribution file is used by packages: if the archive
@@ -142,7 +142,7 @@ $(SOURCE_DIST): $(ERLANG_MK_RECURSIVE_DEPS_LIST)
 			(cd $$(dirname "$$mix_exs") && \
 			 env DEPS_DIR=$@/deps HOME=$@/deps MIX_ENV=prod FILL_HEX_CACHE=yes mix local.hex --force && \
 			 env DEPS_DIR=$@/deps HOME=$@/deps MIX_ENV=prod FILL_HEX_CACHE=yes mix deps.get --only prod && \
-			 cp $(DEPS_DIR)/rabbit_common/mk/rabbitmq-mix.mk . && \
+			 cp $(CURDIR)/mk/rabbitmq-mix.mk . && \
 			 rm -rf _build deps); \
 		fi; \
 		if test -f "$$dep/license_info"; then \
@@ -391,13 +391,9 @@ install-windows-scripts: install-windows-escripts
 
 install-windows-docs: install-windows-erlapp
 	$(verbose) mkdir -p $(DESTDIR)$(WINDOWS_PREFIX)/etc
-	$(inst_verbose) mandoc -T html \
-		< $(DEPS_DIR)/rabbit/docs/rabbitmq-service.8 \
-		> rabbitmq-service.html
-	$(verbose) elinks -dump -no-references -no-numbering \
-		rabbitmq-service.html \
-		> $(DESTDIR)$(WINDOWS_PREFIX)/readme-service.txt
-	$(verbose) rm rabbitmq-service.html
+	$(inst_verbose) man $(DEPS_DIR)/rabbit/docs/rabbitmq-service.8 > tmp-readme-service.txt
+	$(verbose) col -bx < ./tmp-readme-service.txt > $(DESTDIR)$(WINDOWS_PREFIX)/readme-service.txt
+	$(verbose) rm -f ./tmp-readme-service.txt
 	$(verbose) cp $(DEPS_DIR)/rabbit/docs/rabbitmq.config.example \
 		$(DESTDIR)$(WINDOWS_PREFIX)/etc
 	$(verbose) for file in \

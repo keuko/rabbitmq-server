@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License at
-%% http://www.mozilla.org/MPL/
+%% https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_queue_location_min_masters).
@@ -38,45 +38,33 @@ description() ->
       <<"Locate queue master node from cluster node with least bound queues">>}].
 
 queue_master_location(#amqqueue{} = Q) ->
-    Cluster            = rabbit_queue_master_location_misc:all_nodes(Q),
-    VHosts             = rabbit_vhost:list(),
-    BoundQueueMasters  = get_bound_queue_masters_per_vhost(VHosts, []),
-    {_Count, MinMaster}= get_min_master(Cluster, BoundQueueMasters),
-    {ok, MinMaster}.
+    Cluster = rabbit_queue_master_location_misc:all_nodes(Q),
+    QueueNames = rabbit_amqqueue:list_names(),
+    MastersPerNode = lists:foldl(
+        fun(#resource{virtual_host = VHost, name = QueueName}, NodeMasters) ->
+            case rabbit_queue_master_location_misc:lookup_master(QueueName, VHost) of
+                {ok, Master} when is_atom(Master) ->
+                    case maps:is_key(Master, NodeMasters) of
+                        true -> maps:update_with(Master,
+                                                 fun(N) -> N + 1 end,
+                                                 NodeMasters);
+                        false -> NodeMasters
+                    end;
+                _ -> NodeMasters
+            end
+        end,
+        maps:from_list([{N, 0} || N <- Cluster]),
+        QueueNames),
 
-%%---------------------------------------------------------------------------
-%% Private helper functions
-%%---------------------------------------------------------------------------
-get_min_master(Cluster, BoundQueueMasters) ->
-    lists:min([ {count_masters(Node, BoundQueueMasters), Node} ||
-                  Node <- Cluster ]).
-
-count_masters(Node, Masters) ->
-    length([ X || X <- Masters, X == Node ]).
-
-get_bound_queue_masters_per_vhost([], Acc) ->
-    lists:flatten(Acc);
-get_bound_queue_masters_per_vhost([VHost|RemVHosts], Acc) ->
-    BoundQueueNames =
-        lists:filtermap(
-            fun(#binding{destination =#resource{kind = queue,
-                                                name = QueueName}}) ->
-                    {true, QueueName};
-               (_) ->
-                    false
-            end,
-            rabbit_binding:list(VHost)),
-    UniqQueueNames = lists:usort(BoundQueueNames),
-    BoundQueueMasters = get_queue_masters(VHost, UniqQueueNames, []),
-    get_bound_queue_masters_per_vhost(RemVHosts, [BoundQueueMasters|Acc]).
-
-
-get_queue_masters(_VHost, [], BoundQueueNodes) -> BoundQueueNodes;
-get_queue_masters(VHost, [QueueName | RemQueueNames], QueueMastersAcc) ->
-    QueueMastersAcc0 = case rabbit_queue_master_location_misc:lookup_master(
-                              QueueName, VHost) of
-                           {ok, Master} when is_atom(Master) ->
-                               [Master|QueueMastersAcc];
-                           _ -> QueueMastersAcc
-                       end,
-    get_queue_masters(VHost, RemQueueNames, QueueMastersAcc0).
+    {MinNode, _NMasters} = maps:fold(
+        fun(Node, NMasters, init) ->
+            {Node, NMasters};
+        (Node, NMasters, {MinNode, MinMasters}) ->
+            case NMasters < MinMasters of
+                true  -> {Node, NMasters};
+                false -> {MinNode, MinMasters}
+            end
+        end,
+        init,
+        MastersPerNode),
+    {ok, MinNode}.

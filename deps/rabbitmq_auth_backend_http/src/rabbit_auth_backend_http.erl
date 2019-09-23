@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ HTTP authentication.
 %%
 %% The Initial Developer of the Original Code is VMware, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_auth_backend_http).
@@ -21,7 +21,7 @@
 -behaviour(rabbit_authn_backend).
 -behaviour(rabbit_authz_backend).
 
--export([description/0, p/1, q/1]).
+-export([description/0, p/1, q/1, join_tags/1]).
 -export([user_login_authentication/2, user_login_authorization/1,
          check_vhost_access/3, check_resource_access/3, check_topic_access/4]).
 
@@ -41,8 +41,8 @@ description() ->
 user_login_authentication(Username, AuthProps) ->
     case http_req(p(user_path), q([{username, Username}|AuthProps])) of
         {error, _} = E  -> E;
-        deny            -> {refused, "Denied by HTTP plugin", []};
-        "allow" ++ Rest -> Tags = [list_to_atom(T) ||
+        "deny"          -> {refused, "Denied by the backing HTTP service", []};
+        "allow" ++ Rest -> Tags = [rabbit_data_coercion:to_atom(T) ||
                                       T <- string:tokens(Rest, " ")],
                            {ok, #auth_user{username = Username,
                                            tags     = Tags,
@@ -56,21 +56,23 @@ user_login_authorization(Username) ->
         Else                          -> Else
     end.
 
-check_vhost_access(#auth_user{username = Username}, VHost, Sock) ->
+check_vhost_access(#auth_user{username = Username, tags = Tags}, VHost, Sock) ->
     bool_req(vhost_path, [{username, Username},
                           {vhost,    VHost},
-                          {ip,       extract_address(Sock)}]).
+                          {ip,       extract_address(Sock)},
+                          {tags, join_tags(Tags)}]).
 
-check_resource_access(#auth_user{username = Username},
+check_resource_access(#auth_user{username = Username, tags = Tags},
                       #resource{virtual_host = VHost, kind = Type, name = Name},
                       Permission) ->
     bool_req(resource_path, [{username,   Username},
                              {vhost,      VHost},
                              {resource,   Type},
                              {name,       Name},
-                             {permission, Permission}]).
+                             {permission, Permission},
+                             {tags, join_tags(Tags)}]).
 
-check_topic_access(#auth_user{username = Username},
+check_topic_access(#auth_user{username = Username, tags = Tags},
                    #resource{virtual_host = VHost, kind = topic = Type, name = Name},
                    Permission,
                    Context) ->
@@ -79,7 +81,8 @@ check_topic_access(#auth_user{username = Username},
         {vhost,      VHost},
         {resource,   Type},
         {name,       Name},
-        {permission, Permission}] ++ OptionsParameters).
+        {permission, Permission},
+        {tags, join_tags(Tags)}] ++ OptionsParameters).
 
 %%--------------------------------------------------------------------
 
@@ -160,6 +163,11 @@ escape(K, V) ->
     rabbit_data_coercion:to_list(K) ++ "=" ++ rabbit_http_util:quote_plus(V).
 
 parse_resp(Resp) -> string:to_lower(string:strip(Resp)).
+
+join_tags([])   -> "";
+join_tags(Tags) ->
+  Strings = [rabbit_data_coercion:to_list(T) || T <- Tags],
+  string:join(Strings, " ").
 
 %%--------------------------------------------------------------------
 

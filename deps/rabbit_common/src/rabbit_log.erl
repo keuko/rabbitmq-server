@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -76,9 +76,11 @@ log(Category, Level, Fmt, Args) when is_list(Args) ->
 
 make_internal_sink_name(connection) -> rabbit_log_connection_lager_event;
 make_internal_sink_name(channel)    -> rabbit_log_channel_lager_event;
+make_internal_sink_name(ldap)       -> rabbit_log_ldap_lager_event;
 make_internal_sink_name(mirroring)  -> rabbit_log_mirroring_lager_event;
 make_internal_sink_name(queue)      -> rabbit_log_queue_lager_event;
 make_internal_sink_name(federation) -> rabbit_log_federation_lager_event;
+make_internal_sink_name(shovel)     -> rabbit_log_shovel_lager_event;
 make_internal_sink_name(upgrade)    -> rabbit_log_upgrade_lager_event;
 make_internal_sink_name(default)    -> rabbit_log_lager_event;
 make_internal_sink_name(Category)   -> erlang:error({unknown_category, Category}).

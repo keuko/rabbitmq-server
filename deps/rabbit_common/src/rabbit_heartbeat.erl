@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -32,23 +32,26 @@
 
 -type heartbeat_callback() :: fun (() -> any()).
 
+-export_type([heartbeat_timeout/0]).
+-type heartbeat_timeout() :: non_neg_integer().
+
 -spec start
-        (pid(), rabbit_net:socket(), non_neg_integer(), heartbeat_callback(),
-         non_neg_integer(), heartbeat_callback()) ->
+        (pid(), rabbit_net:socket(), heartbeat_timeout(), heartbeat_callback(),
+         heartbeat_timeout(), heartbeat_callback()) ->
             heartbeaters().
 
 -spec start
         (pid(), rabbit_net:socket(), rabbit_types:proc_name(),
-         non_neg_integer(), heartbeat_callback(), non_neg_integer(),
+         heartbeat_timeout(), heartbeat_callback(), heartbeat_timeout(),
          heartbeat_callback()) ->
             heartbeaters().
 
 -spec start_heartbeat_sender
-        (rabbit_net:socket(), non_neg_integer(), heartbeat_callback(),
+        (rabbit_net:socket(), heartbeat_timeout(), heartbeat_callback(),
          rabbit_types:proc_type_and_name()) ->
             rabbit_types:ok(pid()).
 -spec start_heartbeat_receiver
-        (rabbit_net:socket(), non_neg_integer(), heartbeat_callback(),
+        (rabbit_net:socket(), heartbeat_timeout(), heartbeat_callback(),
          rabbit_types:proc_type_and_name()) ->
             rabbit_types:ok(pid()).
 
@@ -125,7 +128,7 @@ heartbeater(Params, Identity) ->
                              end)}.
 
 heartbeater({Sock, TimeoutMillisec, StatName, Threshold, Handler} = Params,
-            Deb, {StatVal, SameCount} = State) ->
+            Deb, {StatVal0, SameCount} = State) ->
     Recurse = fun (State1) -> heartbeater(Params, Deb, State1) end,
     System  = fun (From, Req) ->
                       sys:handle_system_msg(
@@ -143,23 +146,48 @@ heartbeater({Sock, TimeoutMillisec, StatName, Threshold, Handler} = Params,
         Other ->
             exit({unexpected_message, Other})
     after TimeoutMillisec ->
-            case rabbit_net:getstat(Sock, [StatName]) of
-                {ok, [{StatName, NewStatVal}]} ->
-                    if NewStatVal =/= StatVal ->
-                            Recurse({NewStatVal, 0});
-                       SameCount < Threshold ->
-                            Recurse({NewStatVal, SameCount + 1});
-                       true ->
-                            case Handler() of
-                                stop     -> ok;
-                                continue -> Recurse({NewStatVal, 0})
-                            end
-                    end;
-                {error, einval} ->
-                    %% the socket is dead, most likely because the
-                    %% connection is being shut down -> terminate
-                    ok;
-                {error, Reason} ->
-                    exit({cannot_get_socket_stats, Reason})
-            end
+              OkFun = fun(StatVal1) ->
+                              if StatVal0 =:= 0 andalso StatName =:= send_oct ->
+                                     % Note: this clause is necessary to ensure the
+                                     % first RMQ -> client heartbeat is sent at the
+                                     % first interval, instead of waiting the first
+                                     % two intervals
+                                     {run_handler, {StatVal1, 0}};
+                                 StatVal1 =/= StatVal0 ->
+                                     {recurse, {StatVal1, 0}};
+                                 SameCount < Threshold ->
+                                     {recurse, {StatVal1, SameCount +1}};
+                                 true ->
+                                     {run_handler, {StatVal1, 0}}
+                              end
+                      end,
+              SSResult = get_sock_stats(Sock, StatName, OkFun),
+              handle_get_sock_stats(SSResult, Sock, StatName, Recurse, Handler)
+    end.
+
+handle_get_sock_stats(stop, _Sock, _StatName, _Recurse, _Handler) ->
+    ok;
+handle_get_sock_stats({recurse, RecurseArg}, _Sock, _StatName, Recurse, _Handler) ->
+    Recurse(RecurseArg);
+handle_get_sock_stats({run_handler, {_, SameCount}}, Sock, StatName, Recurse, Handler) ->
+    case Handler() of
+        stop     -> ok;
+        continue ->
+            OkFun = fun(StatVal) ->
+                            {recurse, {StatVal, SameCount}}
+                    end,
+            SSResult = get_sock_stats(Sock, StatName, OkFun),
+            handle_get_sock_stats(SSResult, Sock, StatName, Recurse, Handler)
+    end.
+
+get_sock_stats(Sock, StatName, OkFun) ->
+    case rabbit_net:getstat(Sock, [StatName]) of
+        {ok, [{StatName, StatVal}]} ->
+            OkFun(StatVal);
+        {error, einval} ->
+            %% the socket is dead, most likely because the
+            %% connection is being shut down -> terminate
+            stop;
+        {error, Reason} ->
+            exit({cannot_get_socket_stats, Reason})
     end.

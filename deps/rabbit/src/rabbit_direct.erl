@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_direct).
@@ -133,7 +133,9 @@ extract_protocol(Infos) ->
 
 maybe_call_connection_info_module(Protocol, Creds, VHost, Pid, Infos) ->
     Module = rabbit_data_coercion:to_atom(string:to_lower(
-        "rabbit_" ++ rabbit_data_coercion:to_list(Protocol) ++ "_connection_info")
+        "rabbit_" ++
+        lists:flatten(string:replace(rabbit_data_coercion:to_list(Protocol), " ", "_", all)) ++
+        "_connection_info")
     ),
     Args = [Creds, VHost, Pid, Infos],
     code_server_cache:maybe_call_mfa(Module, additional_authn_params, Args, []).
@@ -206,6 +208,7 @@ start_channel(Number, ClientChannelPid, ConnPid, ConnName, Protocol, User,
           rabbit_direct_client_sup,
           [{direct, Number, ClientChannelPid, ConnPid, ConnName, Protocol,
             User, VHost, Capabilities, Collector}]),
+    _ = rabbit_channel:source(ChannelPid, ?MODULE),
     {ok, ChannelPid}.
 
 disconnect(Pid, Infos) ->

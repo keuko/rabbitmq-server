@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License at
-%% http://www.mozilla.org/MPL/
+%% https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
@@ -58,7 +58,8 @@
 
 -spec remove_from_queue
         (rabbit_amqqueue:name(), pid(), [pid()]) ->
-            {'ok', pid(), [pid()], [node()]} | {'error', 'not_found'}.
+            {'ok', pid(), [pid()], [node()]} | {'error', 'not_found'} |
+            {'error', {'not_synced', [pid()]}}.
 -spec add_mirrors(rabbit_amqqueue:name(), [node()], 'sync' | 'async') ->
           'ok'.
 -spec store_updated_slaves(rabbit_types:amqqueue()) ->
@@ -572,7 +573,7 @@ validate_sync_batch_size(none) ->
 validate_sync_batch_size(N) when is_integer(N) andalso N > 0 ->
     ok;
 validate_sync_batch_size(N) ->
-    {error, "ha-sync-batch-size takes an integer greather than 0, "
+    {error, "ha-sync-batch-size takes an integer greater than 0, "
      "~p given", [N]}.
 
 validate_pos(PromoteOnShutdown) ->

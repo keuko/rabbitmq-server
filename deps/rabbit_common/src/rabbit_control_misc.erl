@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -109,11 +109,11 @@ spawn_emitter_caller(Node, Mod, Fun, Args, Ref, Pid, Timeout) ->
 rpc_call_emitter(Node, Mod, Fun, Args, Ref, Pid, Timeout) ->
     rabbit_misc:rpc_call(Node, Mod, Fun, Args++[Ref, Pid], Timeout).
 
-%% Agregator process expects correct numbers of explicits ACKs about
+%% Aggregator process expects correct numbers of explicits ACKs about
 %% finished emission process. While everything is linked, we still
 %% need somehow to wait for termination of all emitters before
 %% returning from RPC call - otherwise links will be just broken with
-%% reason 'normal' and we can miss some errors, and subsequentially
+%% reason 'normal' and we can miss some errors, and subsequently
 %% hang.
 await_emitters_termination(Pids) ->
     Monitors = [erlang:monitor(process, Pid) || Pid <- Pids],
@@ -182,7 +182,7 @@ simplify_emission_error(Anything) ->
 notify_if_timeout(_, _, infinity) ->
     ok;
 notify_if_timeout(Pid, Ref, Timeout) ->
-    timer:send_after(Timeout, Pid, {Ref, {timeout, Timeout}}).
+    erlang:send_after(Timeout, Pid, {Ref, {timeout, Timeout}}).
 
 print_cmd_result(authenticate_user, _Result) -> io:format("Success~n");
 print_cmd_result(join_cluster, already_member) -> io:format("The node is already a member of this cluster~n").

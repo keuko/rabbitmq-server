@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -177,7 +177,7 @@ get_timeouts() ->
 
 set_timeout(Key, Time, Fun, Timeouts) ->
     _ = cancel_timeout(Key, Timeouts),
-    {ok, TRef} = timer:send_after(Time, {timeout, Key, Fun}),
+    TRef = erlang:send_after(Time, self(), {timeout, Key, Fun}),
     NewTimeouts = dict:store(Key, TRef, Timeouts),
     put(timeouts, NewTimeouts),
     {ok, Key}.
@@ -185,7 +185,7 @@ set_timeout(Key, Time, Fun, Timeouts) ->
 cancel_timeout(Key, Timeouts) ->
     case dict:find(Key, Timeouts) of
         {ok, TRef} ->
-            _ = timer:cancel(TRef),
+            _ = erlang:cancel_timer(TRef),
             receive {timeout, Key, _} -> ok
             after 0 -> ok
             end,

@@ -34,7 +34,7 @@
     </tr>
     <tr>
       <th>
-        <a href="http://www.rabbitmq.com/configure.html" target="_blank">Config file</a>
+        <a href="https://www.rabbitmq.com/configure.html" target="_blank">Config file</a>
       </th>
       <td>
   <%
@@ -186,6 +186,28 @@
        ['Sync', 'io_sync_avg_time'],
        ['File handle open attempt', 'io_file_handle_open_attempt_avg_time']],
       fmt_ms, fmt_ms, false, 'I/O average time per operation') %>
+</div>
+</div>
+
+<div class="section-hidden">
+<h2>Churn statistics</h2>
+<div class="hider">
+  <%= rates_chart_or_text('connection-churn', node,
+      [['Created', 'connection_created'],
+       ['Closed', 'connection_closed']],
+      fmt_rate, fmt_rate_axis, true, 'Connection operations', 'connection-operations') %>
+
+  <%= rates_chart_or_text('channel-churn', node,
+      [['Created', 'channel_created'],
+       ['Closed', 'channel_closed']],
+      fmt_rate, fmt_rate_axis, true, 'Channel operations', 'channel-operations') %>
+
+  <%= rates_chart_or_text('queue-churn', node,
+      [['Declared', 'queue_declared'],
+       ['Created', 'queue_created'],
+       ['Deleted', 'queue_deleted']],
+      fmt_rate, fmt_rate_axis, true, 'Queue operations', 'queue-operations') %>
+
 </div>
 </div>
 

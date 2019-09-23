@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_variable_queue).
@@ -1732,7 +1732,7 @@ purge_and_index_reset(State) ->
 %%
 %% purge_betas_and_deltas/2 loads messages from the queue index,
 %% filling up q3 and in some cases moving messages form q2 to q3 while
-%% reseting q2 to an empty queue (see maybe_deltas_to_betas/2). The
+%% resetting q2 to an empty queue (see maybe_deltas_to_betas/2). The
 %% messages loaded into q3 are removed by calling
 %% remove_queue_entries/3 until there are no more messages to be read
 %% from the queue index. Messages are read in batches from the queue
@@ -1936,7 +1936,7 @@ maybe_write_msg_to_disk(Force, MsgStatus = #msg_status {
 maybe_write_msg_to_disk(_Force, MsgStatus, State) ->
     {MsgStatus, State}.
 
-%% Due to certain optimizations made inside
+%% Due to certain optimisations made inside
 %% rabbit_queue_index:pre_publish/7 we need to have two separate
 %% functions for index persistence. This one is only used when paging
 %% during memory pressure. We didn't want to modify

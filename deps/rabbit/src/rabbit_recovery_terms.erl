@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 %% We use a gen_server simply so that during the terminate/2 call
@@ -115,7 +115,7 @@ upgrade_recovery_terms() ->
         [begin
              File = filename:join([QueuesDir, Dir, "clean.dot"]),
              case rabbit_file:read_term_file(File) of
-                 {ok, Terms} -> ok  = store(?MODULE, Dir, Terms);
+                 {ok, Terms} -> ok  = store_global_table(Dir, Terms);
                  {error, _}  -> ok
              end,
              file:delete(File)
@@ -132,7 +132,7 @@ dets_upgrade(Fun)->
     open_global_table(),
     try
         ok = dets:foldl(fun ({DirBaseName, Terms}, Acc) ->
-                                store(?MODULE, DirBaseName, Fun(Terms)),
+                                store_global_table(DirBaseName, Fun(Terms)),
                                 Acc
                         end, ok, ?MODULE),
         ok
@@ -158,8 +158,14 @@ close_global_table() ->
             ok
     end.
 
+store_global_table(DirBaseName, Terms) ->
+    dets:insert(?MODULE, {DirBaseName, Terms}).
+
 read_global(DirBaseName) ->
-    read(?MODULE, DirBaseName).
+    case dets:lookup(?MODULE, DirBaseName) of
+        [{_, Terms}] -> {ok, Terms};
+        _            -> {error, not_found}
+    end.
 
 delete_global_table() ->
     file:delete(filename:join(rabbit_mnesia:dir(), "recovery.dets")).

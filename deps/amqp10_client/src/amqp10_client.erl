@@ -46,6 +46,7 @@
          send_msg/2,
          accept_msg/2,
          flow_link_credit/3,
+         flow_link_credit/4,
          link_handle/1,
          get_msg/1,
          get_msg/2,
@@ -283,12 +284,20 @@ detach_link(#link_ref{link_handle = Handle, session = Session}) ->
 %% the caller will be notified when the link_credit reaches 0 with an
 %% amqp10_event of the following format:
 %% {amqp10_event, {link, LinkRef, credit_exhausted}}
--spec flow_link_credit(link_ref(), non_neg_integer(), never | non_neg_integer()) -> ok.
-flow_link_credit(#link_ref{role = receiver, session = Session,
-                           link_handle = Handle}, Credit, RenewWhenBelow) ->
-    Flow = #'v1_0.flow'{link_credit = {uint, Credit}},
-    ok = amqp10_client_session:flow(Session, Handle, Flow, RenewWhenBelow).
+-spec flow_link_credit(link_ref(), Credit :: non_neg_integer(),
+                       RenewWhenBelow :: never | non_neg_integer()) -> ok.
+flow_link_credit(Ref, Credit, RenewWhenBelow) ->
+    flow_link_credit(Ref, Credit, RenewWhenBelow, false).
 
+-spec flow_link_credit(link_ref(), Credit :: non_neg_integer(),
+                       RenewWhenBelow :: never | non_neg_integer(),
+                       Drain :: boolean()) -> ok.
+flow_link_credit(#link_ref{role = receiver, session = Session,
+                           link_handle = Handle},
+                 Credit, RenewWhenBelow, Drain) ->
+    Flow = #'v1_0.flow'{link_credit = {uint, Credit},
+                        drain = Drain},
+    ok = amqp10_client_session:flow(Session, Handle, Flow, RenewWhenBelow).
 
 %%% messages
 
@@ -337,7 +346,9 @@ link_handle(#link_ref{link_handle = Handle}) -> Handle.
 -spec parse_uri(string()) ->
     {ok, connection_config()} | {error, term()}.
 parse_uri(Uri) ->
-    case http_uri:parse(Uri) of
+    case http_uri:parse(Uri, [{scheme_defaults,
+                               [{amqp, 5672},
+                                {amqps, 5671}]}]) of
         {ok, Result} ->
             try
                 {ok, parse_result(Result)}
@@ -371,6 +382,8 @@ parse_result({Scheme, UserInfo, Host, Port, "/", Query0}) ->
                              Acc#{max_frame_size => list_to_integer(V)};
                         ("hostname", V, Acc) ->
                              Acc#{hostname => list_to_binary(V)};
+                        ("container_id", V, Acc) ->
+                             Acc#{container_id => list_to_binary(V)};
                         ("transfer_limit_margin", V, Acc) ->
                              Acc#{transfer_limit_margin => list_to_integer(V)};
                         (_, _, Acc) -> Acc
@@ -383,7 +396,10 @@ parse_result({Scheme, UserInfo, Host, Port, "/", Query0}) ->
         amqps ->
             TlsOpts = parse_tls_opts(Query),
             Ret0#{tls_opts => {secure_port, TlsOpts}}
-    end.
+    end;
+parse_result({_Scheme, _UserInfo, _Host, _Port, _Path, _Query0}) ->
+    throw(path_segment_not_supported).
+
 
 parse_usertoken(U) ->
     [User, Pass] = string:tokens(U, ":"),
@@ -447,15 +463,20 @@ parse_uri_test_() ->
                           port => 9876,
                           hostname => <<"my_host">>,
                           sasl => none}}, parse_uri("amqp://my_host:9876")),
+     %% port defaults
+     ?_assertMatch({ok, #{port := 5671}}, parse_uri("amqps://my_host")),
+     ?_assertMatch({ok, #{port := 5672}}, parse_uri("amqp://my_host")),
      ?_assertEqual({ok, #{address => "my_proxy",
                           port => 9876,
                           hostname => <<"my_host">>,
+                          container_id => <<"my_container">>,
                           idle_time_out => 60000,
                           max_frame_size => 512,
                           tls_opts => {secure_port, []},
                           sasl => {plain, <<"fred">>, <<"passw">>}}},
-                   parse_uri("amqps://fred:passw@my_proxy:9876?sasl=plain&" ++
-                             "hostname=my_host&max_frame_size=512&idle_time_out=60000")),
+                   parse_uri("amqps://fred:passw@my_proxy:9876?sasl=plain&"
+                             "hostname=my_host&container_id=my_container&"
+                             "max_frame_size=512&idle_time_out=60000")),
      %% ensure URI encoded usernames and passwords are decodeded
      ?_assertEqual({ok, #{address => "my_proxy",
                           port => 9876,
@@ -507,7 +528,9 @@ parse_uri_test_() ->
                   "cacertfile=/etc/cacertfile.pem&certfile=/etc/certfile.pem&" ++
                   "keyfile=/etc/keyfile.key&fail_if_no_peer_cert=banana&")),
      ?_assertEqual({error, plain_sasl_missing_userinfo},
-                   parse_uri("amqp://my_host:9876?sasl=plain"))
+                   parse_uri("amqp://my_host:9876?sasl=plain")),
+     ?_assertEqual({error, path_segment_not_supported},
+                   parse_uri("amqp://my_host/my_path_segment:9876"))
     ].
 
 -endif.

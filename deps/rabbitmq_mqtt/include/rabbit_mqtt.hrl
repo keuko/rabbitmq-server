@@ -51,7 +51,10 @@
                       %% and rabbit_mqtt_retainer.
                       retainer_pid,
                       auth_state,
-                      send_fun}).
+                      send_fun,
+                      peer_addr,
+                      mqtt2amqp_fun,
+                      amqp2mqtt_fun }).
 
 -record(auth_state, {username,
                      user,
@@ -94,3 +97,4 @@
      user,
      vhost]).
 
+-define(MQTT_GUIDE_URL, <<"https://rabbitmq.com/mqtt.html">>).

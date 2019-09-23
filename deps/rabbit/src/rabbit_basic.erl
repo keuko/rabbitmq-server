@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_basic).
@@ -29,7 +29,7 @@
 -type properties_input() ::
         rabbit_framing:amqp_property_record() | [{atom(), any()}].
 -type publish_result() ::
-        {ok, [pid()]} | rabbit_types:error('not_found').
+        ok | rabbit_types:error('not_found').
 -type header() :: any().
 -type headers() :: rabbit_framing:amqp_table() | 'undefined'.
 
@@ -107,8 +107,8 @@ publish(Delivery = #delivery{
 
 publish(X, Delivery) ->
     Qs = rabbit_amqqueue:lookup(rabbit_exchange:route(X, Delivery)),
-    DeliveredQPids = rabbit_amqqueue:deliver(Qs, Delivery),
-    {ok, DeliveredQPids}.
+    _QPids = rabbit_amqqueue:deliver(Qs, Delivery),
+    ok.
 
 delivery(Mandatory, Confirm, Message, MsgSeqNo) ->
     #delivery{mandatory = Mandatory, confirm = Confirm, sender = self(),

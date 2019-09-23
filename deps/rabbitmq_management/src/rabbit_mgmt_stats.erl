@@ -1,17 +1,17 @@
-%%   The contents of this file are subject to the Mozilla Public License
-%%   Version 1.1 (the "License"); you may not use this file except in
-%%   compliance with the License. You may obtain a copy of the License at
-%%   http://www.mozilla.org/MPL/
+%% The contents of this file are subject to the Mozilla Public License
+%% Version 1.1 (the "License"); you may not use this file except in
+%% compliance with the License. You may obtain a copy of the License at
+%% https://www.mozilla.org/MPL/
 %%
-%%   Software distributed under the License is distributed on an "AS IS"
-%%   basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
-%%   License for the specific language governing rights and limitations
-%%   under the License.
+%% Software distributed under the License is distributed on an "AS IS"
+%% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See the
+%% License for the specific language governing rights and limitations
+%% under the License.
 %%
-%%   The Original Code is RabbitMQ Management Plugin.
+%% The Original Code is RabbitMQ Management Plugin.
 %%
-%%   The Initial Developer of the Original Code is GoPivotal, Inc.
-%%   Copyright (c) 2010-2012 GoPivotal, Inc.  All rights reserved.
+%% The Initial Developer of the Original Code is GoPivotal, Inc.
+%% Copyright (c) 2010-2012 GoPivotal, Inc.  All rights reserved.
 %%
 
 -module(rabbit_mgmt_stats).
@@ -113,8 +113,7 @@ format_samples(Samples, ESamples, ETotal) ->
 append_full_sample(TS, {V1, V2, V3}, {S1, S2, S3}, {T1, T2, T3}) ->
     {{append_sample(V1, TS, S1), append_sample(V2, TS, S2), append_sample(V3, TS, S3)},
      {V1 + T1, V2 + T2, V3 + T3}};
-%% channel_queue_stats_deliver_stats, queue_stats_deliver_stats,
-%% vhost_stats_deliver_stats, channel_stats_deliver_stats
+%% connection_churn_rates
 append_full_sample(TS, {V1, V2, V3, V4, V5, V6, V7},
            {S1, S2, S3, S4, S5, S6, S7},
            {T1, T2, T3, T4, T5, T6, T7}) ->
@@ -123,10 +122,8 @@ append_full_sample(TS, {V1, V2, V3, V4, V5, V6, V7},
       append_sample(V5, TS, S5), append_sample(V6, TS, S6),
       append_sample(V7, TS, S7)},
      {V1 + T1, V2 + T2, V3 + T3, V4 + T4, V5 + T5, V6 + T6, V7 + T7}};
-%% channel_process_stats, queue_stats_publish, queue_exchange_stats_publish,
-%% exchange_stats_publish_out, exchange_stats_publish_in, queue_process_stats
-append_full_sample(TS, {V1}, {S1}, {T1}) ->
-    {{append_sample(V1, TS, S1)}, {V1 + T1}};
+%% channel_queue_stats_deliver_stats, queue_stats_deliver_stats,
+%% vhost_stats_deliver_stats, channel_stats_deliver_stats
 %% node_coarse_stats
 append_full_sample(TS, {V1, V2, V3, V4, V5, V6, V7, V8},
            {S1, S2, S3, S4, S5, S6, S7, S8},
@@ -136,6 +133,10 @@ append_full_sample(TS, {V1, V2, V3, V4, V5, V6, V7, V8},
       append_sample(V5, TS, S5), append_sample(V6, TS, S6),
       append_sample(V7, TS, S7), append_sample(V8, TS, S8)},
      {V1 + T1, V2 + T2, V3 + T3, V4 + T4, V5 + T5, V6 + T6, V7 + T7, V8 + T8}};
+%% channel_process_stats, queue_stats_publish, queue_exchange_stats_publish,
+%% exchange_stats_publish_out, exchange_stats_publish_in, queue_process_stats
+append_full_sample(TS, {V1}, {S1}, {T1}) ->
+    {{append_sample(V1, TS, S1)}, {V1 + T1}};
 %% node_persister_stats
 append_full_sample(TS,
            {V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14,
@@ -162,7 +163,6 @@ append_full_sample(TS,
 %% vhost_msg_rates
 append_full_sample(TS, {V1, V2}, {S1, S2}, {T1, T2}) ->
     {{append_sample(V1, TS, S1), append_sample(V2, TS, S2)}, {V1 + T1, V2 + T2}}.
-
 
 format_rate(connection_stats_coarse_conn_stats, {TR, TS, TRe}, {RR, RS, RRe}) ->
     [
@@ -334,6 +334,24 @@ format_rate(node_node_coarse_stats, {TS, TR}, {RS, RR}) ->
      {send_bytes_details, [{rate, RS}]},
      {recv_bytes, TR},
      {recv_bytes_details, [{rate, RR}]}
+    ];
+format_rate(connection_churn_rates, {TCCr, TCCo, TChCr, TChCo, TQD, TQCr, TQCo},
+            {RCCr, RCCo, RChCr, RChCo, RQD, RQCr, RQCo}) ->
+    [
+     {connection_created, TCCr},
+     {connection_created_details, [{rate, RCCr}]},
+     {connection_closed, TCCo},
+     {connection_closed_details, [{rate, RCCo}]},
+     {channel_created, TChCr},
+     {channel_created_details, [{rate, RChCr}]},
+     {channel_closed, TChCo},
+     {channel_closed_details, [{rate, RChCo}]},
+     {queue_declared, TQD},
+     {queue_declared_details, [{rate, RQD}]},
+     {queue_created, TQCr},
+     {queue_created_details, [{rate, RQCr}]},
+     {queue_deleted, TQCo},
+     {queue_deleted_details, [{rate, RQCo}]}
     ].
 
 format_rate(connection_stats_coarse_conn_stats, {TR, TS, TRe}, {RR, RS, RRe},
@@ -577,6 +595,33 @@ format_rate(node_node_coarse_stats, {TS, TR}, {RS, RR}, {SS, SR}, {STS, STR}, Le
      {recv_bytes, TR},
      {recv_bytes_details, [{rate, RR},
                {samples, SR}] ++ average(SR, STR, Length)}
+    ];
+format_rate(connection_churn_rates, {TCCr, TCCo, TChCr, TChCo, TQD, TQCr, TQCo},
+            {RCCr, RCCo, RChCr, RChCo, RQD, RQCr, RQCo},
+            {SCCr, SCCo, SChCr, SChCo, SQD, SQCr, SQCo},
+            {STCCr, STCCo, STChCr, STChCo, STQD, STQCr, STQCo}, Length) ->
+    [
+     {connection_created, TCCr},
+     {connection_created_details, [{rate, RCCr},
+                                   {samples, SCCr}] ++ average(SCCr, STCCr, Length)},
+     {connection_closed, TCCo},
+     {connection_closed_details, [{rate, RCCo},
+                                  {samples, SCCo}] ++ average(SCCo, STCCo, Length)},
+     {channel_created, TChCr},
+     {channel_created_details, [{rate, RChCr},
+                                {samples, SChCr}] ++ average(SChCr, STChCr, Length)},
+     {channel_closed, TChCo},
+     {channel_closed_details, [{rate, RChCo},
+                               {samples, SChCo}] ++ average(SChCo, STChCo, Length)},
+     {queue_declared, TQD},
+     {queue_declared_details, [{rate, RQD},
+                               {samples, SQD}] ++ average(SQD, STQD, Length)},
+     {queue_created, TQCr},
+     {queue_created_details, [{rate, RQCr},
+                              {samples, SQCr}] ++ average(SQCr, STQCr, Length)},
+     {queue_deleted, TQCo},
+     {queue_deleted_details, [{rate, RQCo},
+                              {samples, SQCo}] ++ average(SQCo, STQCo, Length)}
     ].
 
 avg_time_details(Avg) ->

@@ -67,6 +67,7 @@ node_mnesia_dir = $(call node_mnesia_base,$(1))/$(1)
 node_schema_dir = $(call node_tmpdir,$(1))/schema
 node_plugins_expand_dir = $(call node_tmpdir,$(1))/plugins
 node_generated_config_dir = $(call node_tmpdir,$(1))/config
+node_feature_flags_file = $(call node_tmpdir,$(1))/feature_flags
 node_enabled_plugins_file = $(call node_tmpdir,$(1))/enabled_plugins
 
 # Broker startup variables for the test environment.
@@ -81,13 +82,14 @@ RABBITMQ_MNESIA_DIR ?= $(call node_mnesia_dir,$(RABBITMQ_NODENAME_FOR_PATHS))
 RABBITMQ_SCHEMA_DIR ?= $(call node_schema_dir,$(RABBITMQ_NODENAME_FOR_PATHS))
 RABBITMQ_PLUGINS_EXPAND_DIR ?= $(call node_plugins_expand_dir,$(RABBITMQ_NODENAME_FOR_PATHS))
 RABBITMQ_GENERATED_CONFIG_DIR ?= $(call node_generated_config_dir,$(RABBITMQ_NODENAME_FOR_PATHS))
+RABBITMQ_FEATURE_FLAGS_FILE ?= $(call node_feature_flags_file,$(RABBITMQ_NODENAME_FOR_PATHS))
 RABBITMQ_ENABLED_PLUGINS_FILE ?= $(call node_enabled_plugins_file,$(RABBITMQ_NODENAME_FOR_PATHS))
 
 # erlang.mk adds dependencies' ebin directory to ERL_LIBS. This is
 # a sane default, but we prefer to rely on the .ez archives in the
 # `plugins` directory so the plugin code is executed. The `plugins`
 # directory is added to ERL_LIBS by rabbitmq-env.
-DIST_ERL_LIBS = $(shell echo "$(filter-out $(DEPS_DIR),$(subst :, ,$(ERL_LIBS)))" | tr ' ' :)
+DIST_ERL_LIBS = $(patsubst :%,%,$(patsubst %:,%,$(subst :$(APPS_DIR):,:,$(subst :$(DEPS_DIR):,:,:$(ERL_LIBS):))))
 
 ifdef PLUGINS_FROM_DEPS_DIR
 RMQ_PLUGINS_DIR=$(DEPS_DIR)
@@ -107,7 +109,8 @@ RABBITMQ_MNESIA_BASE="$(call node_mnesia_base,$(2))" \
 RABBITMQ_MNESIA_DIR="$(call node_mnesia_dir,$(2))" \
 RABBITMQ_SCHEMA_DIR="$(call node_schema_dir,$(2))" \
 RABBITMQ_GENERATED_CONFIG_DIR="$(call node_generated_config_dir,$(2))" \
-RABBITMQ_PLUGINS_DIR="$(RMQ_PLUGINS_DIR)" \
+RABBITMQ_FEATURE_FLAGS_FILE="$(call node_feature_flags_file,$(2))" \
+RABBITMQ_PLUGINS_DIR="$(if $(RABBITMQ_PLUGINS_DIR),$(RABBITMQ_PLUGINS_DIR),$(RMQ_PLUGINS_DIR))" \
 RABBITMQ_PLUGINS_EXPAND_DIR="$(call node_plugins_expand_dir,$(2))" \
 RABBITMQ_SERVER_START_ARGS="$(RABBITMQ_SERVER_START_ARGS)"
 endef
@@ -115,9 +118,6 @@ endef
 BASIC_SCRIPT_ENV_SETTINGS = \
 	$(call basic_script_env_settings,$(RABBITMQ_NODENAME),$(RABBITMQ_NODENAME_FOR_PATHS),$(RABBITMQ_NODE_PORT)) \
 	RABBITMQ_ENABLED_PLUGINS_FILE="$(RABBITMQ_ENABLED_PLUGINS_FILE)"
-
-ERL_CALL := $(shell $(ERL) -eval 'io:format("~s~n", [filename:join(code:lib_dir(erl_interface, bin), case os:type() of {win32, _} -> "erl_call.exe"; _ -> "erl_call" end)]), halt().')
-ERL_CALL_OPTS ?= -sname $(RABBITMQ_NODENAME) -e
 
 test-tmpdir:
 	$(verbose) mkdir -p $(TEST_TMPDIR)
@@ -147,21 +147,39 @@ ifeq ($(wildcard ebin/test),)
 $(RABBITMQ_ENABLED_PLUGINS_FILE): dist
 endif
 
+ifdef LEAVE_PLUGINS_DISABLED
+$(RABBITMQ_ENABLED_PLUGINS_FILE): node-tmpdir
+	$(gen_verbose) : >$@
+else
 $(RABBITMQ_ENABLED_PLUGINS_FILE): node-tmpdir
 	$(verbose) rm -f $@
 	$(gen_verbose) $(BASIC_SCRIPT_ENV_SETTINGS) \
 	  $(RABBITMQ_PLUGINS) enable --all --offline
+endif
 
 # --------------------------------------------------------------------
 # Run a full RabbitMQ.
 # --------------------------------------------------------------------
+
+COMMA = ,
 
 define test_rabbitmq_config
 %% vim:ft=erlang:
 
 [
   {rabbit, [
-      {loopback_users, []}
+$(if $(RABBITMQ_NODE_PORT),      {tcp_listeners$(COMMA) [$(RABBITMQ_NODE_PORT)]}$(COMMA),)
+      {loopback_users, []},
+      {log, [{file, [{level, debug}]}]}
+    ]},
+  {rabbitmq_management, [
+$(if $(RABBITMQ_NODE_PORT),      {listener$(COMMA) [{port$(COMMA) $(shell echo "$$(($(RABBITMQ_NODE_PORT) + 10000))")}]},)
+    ]},
+  {rabbitmq_mqtt, [
+$(if $(RABBITMQ_NODE_PORT),      {tcp_listeners$(COMMA) [$(shell echo "$$((1883 + $(RABBITMQ_NODE_PORT) - 5672))")]},)
+    ]},
+  {rabbitmq_stomp, [
+$(if $(RABBITMQ_NODE_PORT),      {tcp_listeners$(COMMA) [$(shell echo "$$((61613 + $(RABBITMQ_NODE_PORT) - 5672))")]},)
     ]}
 ].
 endef
@@ -172,6 +190,7 @@ define test_rabbitmq_config_with_tls
 [
   {rabbit, [
       {loopback_users, []},
+      {log, [{file, [{level, debug}]}]},
       {ssl_listeners, [5671]},
       {ssl_options, [
           {cacertfile, "$(TEST_TLS_CERTS_DIR_in_config)/testca/cacert.pem"},
@@ -198,11 +217,14 @@ define test_rabbitmq_config_with_tls
 endef
 
 TEST_CONFIG_FILE ?= $(TEST_TMPDIR)/test.config
-TEST_TLS_CERTS_DIR = $(TEST_TMPDIR)/tls-certs
+TEST_TLS_CERTS_DIR := $(TEST_TMPDIR)/tls-certs
+ifeq ($(origin TEST_TLS_CERTS_DIR_in_config),undefined)
 ifeq ($(PLATFORM),msys2)
-TEST_TLS_CERTS_DIR_in_config = $(shell echo $(TEST_TLS_CERTS_DIR) | sed -E "s,^/([^/]+),\1:,")
+TEST_TLS_CERTS_DIR_in_config := $(shell echo $(TEST_TLS_CERTS_DIR) | sed -E "s,^/([^/]+),\1:,")
 else
-TEST_TLS_CERTS_DIR_in_config = $(TEST_TLS_CERTS_DIR)
+TEST_TLS_CERTS_DIR_in_config := $(TEST_TLS_CERTS_DIR)
+endif
+export TEST_TLS_CERTS_DIR_in_config
 endif
 
 .PHONY: $(TEST_CONFIG_FILE)
@@ -216,7 +238,7 @@ $(TEST_TLS_CERTS_DIR): node-tmpdir
 show-test-tls-certs-dir: $(TEST_TLS_CERTS_DIR)
 	@echo $(TEST_TLS_CERTS_DIR)
 
-run-broker run-tls-broker: RABBITMQ_CONFIG_FILE = $(basename $(TEST_CONFIG_FILE))
+run-broker run-tls-broker: RABBITMQ_CONFIG_FILE ?= $(basename $(TEST_CONFIG_FILE))
 run-broker:     config := $(test_rabbitmq_config)
 run-tls-broker: config := $(test_rabbitmq_config_with_tls)
 run-tls-broker: $(TEST_TLS_CERTS_DIR)
@@ -289,10 +311,11 @@ stop-rabbit-on-node:
 
 stop-node:
 	$(exec_verbose) ( \
-	pid=$$(test -f $(RABBITMQ_PID_FILE) && cat $(RABBITMQ_PID_FILE)) && \
-	$(ERL_CALL) $(ERL_CALL_OPTS) -q && \
-	while ps -p "$$pid" >/dev/null 2>&1; do sleep 1; done \
-	) || :
+	  pid=$$(test -f $(RABBITMQ_PID_FILE) && cat $(RABBITMQ_PID_FILE)) && \
+	  ERL_LIBS="$(DIST_ERL_LIBS)" \
+	  $(RABBITMQCTL) -n $(RABBITMQ_NODENAME) stop && \
+	  while ps -p "$$pid" >/dev/null 2>&1; do sleep 1; done \
+	  ) || :
 
 # " <-- To please Vim syntax hilighting.
 
@@ -325,7 +348,7 @@ start-brokers start-cluster:
 	done
 
 stop-brokers stop-cluster:
-	@for n in $$(seq $(NODES) 1); do \
+	@for n in $$(seq $(NODES) -1 1); do \
 		nodename="rabbit-$$n@$$(hostname -s)"; \
 		$(MAKE) stop-node \
 		  RABBITMQ_NODENAME="$$nodename"; \

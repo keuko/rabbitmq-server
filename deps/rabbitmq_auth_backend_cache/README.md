@@ -159,7 +159,7 @@ Or using the classic config for both parameters:
  {rabbit, [
    %% ...
  ]},
- {rabbitmq_auth_backend_cache, [{cached_backend, rabbit_auth_backend_ldap}
+ {rabbitmq_auth_backend_cache, [{cached_backend, rabbit_auth_backend_ldap},
                                 {cache_ttl, 5000}]}].
 ```
 
@@ -183,7 +183,7 @@ Cache module can be set via sysctl config format:
 
     auth_cache.cache_module = rabbit_auth_backend_ets_segmented
 
-Additional cache modulee arguments can only be defined via the [advanced config](http://www.rabbitmq.com/configure.html#advanced-config-file) or classic config format:
+Additional cache module arguments can only be defined via the [advanced config](http://www.rabbitmq.com/configure.html#advanced-config-file) or classic config format:
 
 ``` erlang
 [

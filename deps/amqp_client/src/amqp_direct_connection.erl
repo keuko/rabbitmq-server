@@ -88,7 +88,7 @@ closing(_ChannelCloseType, Reason, State) ->
 
 channels_terminated(State = #state{closing_reason = Reason,
                                    collector = Collector}) ->
-    rabbit_queue_collector_common:delete_all(Collector),
+    rabbit_queue_collector:delete_all(Collector),
     {stop, {shutdown, Reason}, State}.
 
 terminate(_Reason, #state{node = Node} = State) ->
@@ -148,8 +148,9 @@ connect(Params = #amqp_params_direct{username     = Username,
                          adapter_info = ensure_adapter_info(Info),
                          connected_at =
                            os:system_time(milli_seconds)},
+    DecryptedPassword = credentials_obfuscation:decrypt(Password),
     case rpc:call(Node, rabbit_direct, connect,
-                  [{Username, Password}, VHost, ?PROTOCOL, self(),
+                  [{Username, DecryptedPassword}, VHost, ?PROTOCOL, self(),
                    connection_info(State1)]) of
         {ok, {User, ServerProperties}} ->
             {ok, ChMgr, Collector} = SIF(i(name, State1)),

@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -71,7 +71,7 @@
 -spec invoke
         ( pid(),  fun_or_mfa(A)) -> A;
         ([pid()], fun_or_mfa(A)) -> {[{pid(), A}], [{pid(), term()}]}.
--spec invoke_no_result(pid(), fun_or_mfa(any())) -> 'ok'.
+-spec invoke_no_result(pid() | [pid()], fun_or_mfa(any())) -> 'ok'.
 -spec monitor('process', pid()) -> monitor_ref().
 -spec demonitor(monitor_ref()) -> 'true'.
 

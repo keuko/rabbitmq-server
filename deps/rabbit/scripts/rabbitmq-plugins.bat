@@ -55,7 +55,11 @@ if not defined ERL_CRASH_DUMP_SECONDS (
 -mnesia dir \""!RABBITMQ_MNESIA_DIR:\=/!"\" ^
 -run escript start ^
 -escript main rabbitmqctl_escript ^
--extra "%RABBITMQ_HOME%\escript\rabbitmq-plugins" --formatter=plugins !STAR!
+-extra "%RABBITMQ_HOME%\escript\rabbitmq-plugins" !STAR!
+
+if ERRORLEVEL 1 (
+    exit /B %ERRORLEVEL%
+)
 
 endlocal
 endlocal

@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_msg_store_gc).
@@ -116,15 +116,13 @@ attempt_action(Action, Files,
                State = #state { pending_no_readers = Pending,
                                 on_action          = Thunks,
                                 msg_store_state    = MsgStoreState }) ->
-    case [File || File <- Files,
-                  rabbit_msg_store:has_readers(File, MsgStoreState)] of
-        []         -> State #state {
-                        on_action = lists:filter(
-                                      fun (Thunk) -> not Thunk() end,
-                                      [do_action(Action, Files, MsgStoreState) |
-                                       Thunks]) };
-        [File | _] -> Pending1 = maps:put(File, {Action, Files}, Pending),
-                      State #state { pending_no_readers = Pending1 }
+    case do_action(Action, Files, MsgStoreState) of
+        {ok, OkThunk} ->
+            State#state{on_action = lists:filter(fun (Thunk) -> not Thunk() end,
+                                                 [OkThunk | Thunks])};
+        {defer, [File | _]} ->
+            Pending1 = maps:put(File, {Action, Files}, Pending),
+            State #state { pending_no_readers = Pending1 }
     end.
 
 do_action(combine, [Source, Destination], MsgStoreState) ->

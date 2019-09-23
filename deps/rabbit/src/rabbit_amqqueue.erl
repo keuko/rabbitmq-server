@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_amqqueue).
@@ -29,7 +29,7 @@
 -export([list/0, list/1, info_keys/0, info/1, info/2, info_all/1, info_all/2,
          emit_info_all/5, list_local/1, info_local/1,
 	 emit_info_local/4, emit_info_down/4]).
--export([list_down/1, count/1, list_names/0, list_local_names/0]).
+-export([list_down/1, count/1, list_names/0, list_names/1, list_local_names/0]).
 -export([force_event_refresh/1, notify_policy_changed/1]).
 -export([consumers/1, consumers_all/1,  emit_consumers_all/4, consumer_info_keys/0]).
 -export([basic_get/4, basic_consume/11, basic_cancel/5, notify_decorators/1]).
@@ -74,14 +74,14 @@
                            {'absent', rabbit_types:amqqueue(),absent_reason()}.
 -type not_found_or_absent() ::
         'not_found' | {'absent', rabbit_types:amqqueue(), absent_reason()}.
--spec recover(rabbit_types:vhost()) -> [rabbit_types:amqqueue()].
+-spec recover(rabbit_types:vhost()) -> {[rabbit_types:amqqueue()], [rabbit_types:amqqueue()]}.
 -spec stop(rabbit_types:vhost()) -> 'ok'.
 -spec start([rabbit_types:amqqueue()]) -> 'ok'.
 -spec declare
         (name(), boolean(), boolean(), rabbit_framing:amqp_table(),
          rabbit_types:maybe(pid()), rabbit_types:username()) ->
-            {'new' | 'existing' | 'absent' | 'owner_died',
-             rabbit_types:amqqueue()} |
+            {'new' | 'existing' | 'owner_died', rabbit_types:amqqueue()} |
+            {'absent', rabbit_types:amqqueue(), absent_reason()} |
             rabbit_types:channel_exit().
 -spec declare
         (name(), boolean(), boolean(), rabbit_framing:amqp_table(),
@@ -116,6 +116,7 @@
 -spec list() -> [rabbit_types:amqqueue()].
 -spec list(rabbit_types:vhost()) -> [rabbit_types:amqqueue()].
 -spec list_names() -> [rabbit_amqqueue:name()].
+-spec list_names(rabbit_types:vhost()) -> [rabbit_amqqueue:name()].
 -spec list_down(rabbit_types:vhost()) -> [rabbit_types:amqqueue()].
 -spec info_keys() -> rabbit_types:info_keys().
 -spec info(rabbit_types:amqqueue()) -> rabbit_types:infos().
@@ -128,7 +129,7 @@
 -spec notify_policy_changed(rabbit_types:amqqueue()) -> 'ok'.
 -spec consumers(rabbit_types:amqqueue()) ->
           [{pid(), rabbit_types:ctag(), boolean(), non_neg_integer(),
-            rabbit_framing:amqp_table()}].
+            rabbit_framing:amqp_table(), binary()}].
 -spec consumer_info_keys() -> rabbit_types:info_keys().
 -spec consumers_all(rabbit_types:vhost()) ->
           [{name(), pid(), rabbit_types:ctag(), boolean(),
@@ -160,7 +161,7 @@
 -spec notify_down_all(qpids(), pid()) -> ok_or_errors().
 -spec notify_down_all(qpids(), pid(), non_neg_integer()) ->
           ok_or_errors().
--spec activate_limit_all(qpids(), pid()) -> ok_or_errors().
+-spec activate_limit_all(qpids(), pid()) -> ok.
 -spec basic_get(rabbit_types:amqqueue(), pid(), boolean(), pid()) ->
           {'ok', non_neg_integer(), qmsg()} | 'empty'.
 -spec credit
@@ -237,7 +238,11 @@ recover(VHost) ->
         BQ:start(VHost, [QName || #amqqueue{name = QName} <- Queues]),
     case rabbit_amqqueue_sup_sup:start_for_vhost(VHost) of
         {ok, _}         ->
-            recover_durable_queues(lists:zip(Queues, OrderedRecoveryTerms));
+            Recovered = recover_durable_queues(lists:zip(Queues, OrderedRecoveryTerms)),
+            RecoveredNames = [Name || #amqqueue{name = Name} <- Recovered],
+            FailedQueues = [Q || Q = #amqqueue{name = Name} <- Queues,
+                              not lists:member(Name, RecoveredNames)],
+            {Recovered, FailedQueues};
         {error, Reason} ->
             rabbit_log:error("Failed to start queue supervisor for vhost '~s': ~s", [VHost, Reason]),
             throw({error, Reason})
@@ -448,6 +453,8 @@ not_found_or_absent(Name) ->
         [Q] -> {absent, Q, nodedown} %% Q exists on stopped node
     end.
 
+-spec not_found_or_absent_dirty(name()) -> not_found_or_absent().
+
 not_found_or_absent_dirty(Name) ->
     %% We should read from both tables inside a tx, to get a
     %% consistent view. But the chances of an inconsistency are small,
@@ -460,7 +467,7 @@ not_found_or_absent_dirty(Name) ->
 with(Name, F, E) ->
     with(Name, F, E, 2000).
 
-with(Name, F, E, RetriesLeft) ->
+with(#resource{} = Name, F, E, RetriesLeft) ->
     case lookup(Name) of
         {ok, Q = #amqqueue{state = live}} when RetriesLeft =:= 0 ->
             %% Something bad happened to that queue, we are bailing out
@@ -504,7 +511,17 @@ retry_wait(Q = #amqqueue{pid = QPid, name = Name, state = QState}, F, E, Retries
         {stopped, false} ->
             E({absent, Q, stopped});
         _ ->
-            false = rabbit_mnesia:is_process_alive(QPid),
+            case rabbit_mnesia:is_process_alive(QPid) of
+                true ->
+                    % rabbitmq-server#1682
+                    % The old check would have crashed here,
+                    % instead, log it and run the exit fun. absent & alive is weird,
+                    % but better than crashing with badmatch,true
+                    rabbit_log:debug("Unexpected alive queue process ~p~n", [QPid]),
+                    E({absent, Q, alive});
+                false ->
+                    ok % Expected result
+            end,
             timer:sleep(30),
             with(Name, F, E, RetriesLeft - 1)
     end.
@@ -512,18 +529,24 @@ retry_wait(Q = #amqqueue{pid = QPid, name = Name, state = QState}, F, E, Retries
 with(Name, F) -> with(Name, F, fun (E) -> {error, E} end).
 
 with_or_die(Name, F) ->
-    with(Name, F, fun (not_found)           -> rabbit_misc:not_found(Name);
-                      ({absent, Q, Reason}) -> rabbit_misc:absent(Q, Reason)
-                  end).
+    with(Name, F, die_fun(Name)).
+
+-spec die_fun(name()) ->
+    fun((not_found_or_absent()) -> no_return()).
+
+die_fun(Name) ->
+    fun (not_found)           -> rabbit_misc:not_found(Name);
+        ({absent, Q, Reason}) -> rabbit_misc:absent(Q, Reason)
+    end.
 
 assert_equivalence(#amqqueue{name        = QName,
-                             durable     = Durable,
-                             auto_delete = AD} = Q,
-                   Durable1, AD1, Args1, Owner) ->
-    rabbit_misc:assert_field_equivalence(Durable, Durable1, QName, durable),
-    rabbit_misc:assert_field_equivalence(AD, AD1, QName, auto_delete),
-    assert_args_equivalence(Q, Args1),
-    check_exclusive_access(Q, Owner, strict).
+                             durable     = DurableQ,
+                             auto_delete = AutoDeleteQ} = Q,
+                   DurableDeclare, AutoDeleteDeclare, Args1, Owner) ->
+    ok = check_exclusive_access(Q, Owner, strict),
+    ok = rabbit_misc:assert_field_equivalence(DurableQ, DurableDeclare, QName, durable),
+    ok = rabbit_misc:assert_field_equivalence(AutoDeleteQ, AutoDeleteDeclare, QName, auto_delete),
+    ok = assert_args_equivalence(Q, Args1).
 
 check_exclusive_access(Q, Owner) -> check_exclusive_access(Q, Owner, lax).
 
@@ -534,7 +557,9 @@ check_exclusive_access(#amqqueue{exclusive_owner = none}, _ReaderPid, lax) ->
 check_exclusive_access(#amqqueue{name = QueueName}, _ReaderPid, _MatchType) ->
     rabbit_misc:protocol_error(
       resource_locked,
-      "cannot obtain exclusive access to locked ~s",
+      "cannot obtain exclusive access to locked ~s. It could be originally "
+      "declared on another connection or the exclusive property value does not "
+      "match that of the original declaration.",
       [rabbit_misc:rs(QueueName)]).
 
 with_exclusive_access_or_die(Name, ReaderPid, F) ->
@@ -648,6 +673,8 @@ check_queue_mode({Type,    _}, _Args) ->
 list() -> mnesia:dirty_match_object(rabbit_queue, #amqqueue{_ = '_'}).
 
 list_names() -> mnesia:dirty_all_keys(rabbit_queue).
+
+list_names(VHost) -> [Q#amqqueue.name || Q <- list(VHost)].
 
 list_local_names() ->
     [ Q#amqqueue.name || #amqqueue{state = State, pid = QPid} = Q <- list(),
@@ -786,6 +813,9 @@ list_local(VHostPath) ->
            State =/= crashed,
            node() =:= node(QPid) ].
 
+% Note: https://www.pivotaltracker.com/story/show/166962656
+% This event is necessary for the stats timer to be initialized with
+% the correct values once the management agent has started
 force_event_refresh(Ref) ->
     [gen_server2:cast(Q#amqqueue.pid,
                       {force_event_refresh, Ref}) || Q <- list()],
@@ -833,8 +863,7 @@ pid_of(VHost, QueueName) ->
   end.
 
 delete_exclusive(QPids, ConnId) ->
-    [gen_server2:cast(QPid, {delete_exclusive, ConnId}) || QPid <- QPids],
-    ok.
+    rabbit_amqqueue_common:delete_exclusive(QPids, ConnId).
 
 delete_immediately(QPids) ->
     [gen_server2:cast(QPid, delete_immediately) || QPid <- QPids],
@@ -1087,8 +1116,8 @@ is_mirrored(Q) ->
 
 is_dead_exclusive(#amqqueue{exclusive_owner = none}) ->
     false;
-is_dead_exclusive(#amqqueue{exclusive_owner = Pid}) when is_pid(Pid) ->
-    not rabbit_mnesia:is_process_alive(Pid).
+is_dead_exclusive(#amqqueue{exclusive_owner = OwnerPid, pid = QPid}) when is_pid(OwnerPid), is_pid(QPid) ->
+    not (rabbit_mnesia:is_process_alive(OwnerPid) andalso rabbit_mnesia:is_process_alive(QPid)).
 
 on_node_up(Node) ->
     ok = rabbit_misc:execute_mnesia_transaction(

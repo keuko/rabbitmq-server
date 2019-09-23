@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_guid).
@@ -94,7 +94,7 @@ advance_blocks({B1, B2, B3, B4}, I) ->
     %% hashing {B5, I}. The new hash is used as last block, and the
     %% other three blocks are XORed with it.
     %%
-    %% Doing this is convenient because it avoids cascading conflits,
+    %% Doing this is convenient because it avoids cascading conflicts,
     %% while being very fast. The conflicts are avoided by propagating
     %% the changes through all the blocks at each round by XORing, so
     %% the only occasion in which a collision will take place is when

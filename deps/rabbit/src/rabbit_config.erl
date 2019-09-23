@@ -121,9 +121,7 @@ maybe_set_net_ticktime(KernelConfig) ->
                     io:format(standard_error,
                         "~nCouldn't set net_ticktime to ~p "
                         "as net_kernel is busy changing net_ticktime to ~p seconds ~n",
-                        [NetTickTime, NewNetTicktime]);
-                _ ->
-                    ok
+                        [NetTickTime, NewNetTicktime])
             end
     end.
 
@@ -145,8 +143,9 @@ generate_config_file(ConfFiles, ConfDir, ScriptDir, SchemaDir, Advanced) ->
     Command = lists:concat(["escript ", "\"", Cuttlefish, "\"",
                             "  -f rabbitmq -s ", "\"", SchemaDir, "\"",
                             " -e ", "\"",  ConfDir, "\"",
-                            [[" -c ", ConfFile] || ConfFile <- ConfFiles],
+                            [[" -c \"", ConfFile, "\""] || ConfFile <- ConfFiles],
                             AdvancedConfigArg]),
+    rabbit_log:debug("Generating config file using '~s'", [Command]),
     Result = rabbit_misc:os_cmd(Command),
     case string:str(Result, " -config ") of
         0 -> {error, {generation_error, Result}};

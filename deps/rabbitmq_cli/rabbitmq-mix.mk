@@ -3,8 +3,19 @@
 # those Elixir applications to build even with no access to Hex.pm,
 # using the bundled sources only.
 
-HEX_OFFLINE=1
+HEX_OFFLINE := 1
 
-HOME=$(DEPS_DIR)
+# mix(1) centralizes its data in `$MIX_HOME`. When unset, it defaults
+# to something under `$XDG_DATA_HOME`/`$XDG_CONFIG_HOME` or `$HOME`
+# depending on the Elixir version.
+#
+# We store those data for offline build in `$(DEPS_DIR)`.
 
-export HEX_OFFLINE HOME
+override MIX_HOME := $(DEPS_DIR)/.mix
+
+# In addition to `$MIX_HOME`, we still have to set `$HOME` which is used
+# to find `~/.hex` where the Hex.pm cache and packages are stored.
+
+override HOME := $(DEPS_DIR)
+
+export HEX_OFFLINE MIX_HOME HOME

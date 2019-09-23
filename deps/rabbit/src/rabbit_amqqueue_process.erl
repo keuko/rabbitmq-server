@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_amqqueue_process).
@@ -355,7 +355,7 @@ terminate_shutdown(Fun, #q{status = Status} = State) ->
                      QName = qname(State),
                      notify_decorators(shutdown, State),
                      [emit_consumer_deleted(Ch, CTag, QName, ActingUser) ||
-                         {Ch, CTag, _, _, _} <-
+                         {Ch, CTag, _, _, _, _} <-
                              rabbit_queue_consumers:all(Consumers)],
                      State1#q{backing_queue_state = Fun(BQS)}
     end.
@@ -446,8 +446,12 @@ init_max_bytes(MaxBytes, State) ->
     {_Dropped, State1} = maybe_drop_head(State#q{max_bytes = MaxBytes}),
     State1.
 
-init_overflow(undefined, State) ->
+%% Reset overflow to default 'drop-head' value if it's undefined.
+init_overflow(undefined, #q{overflow = 'drop-head'} = State) ->
     State;
+init_overflow(undefined, State) ->
+    {_Dropped, State1} = maybe_drop_head(State#q{overflow = 'drop-head'}),
+    State1;
 init_overflow(Overflow, State) ->
     OverflowVal = binary_to_existing_atom(Overflow, utf8),
     case OverflowVal of
@@ -735,14 +739,21 @@ maybe_drop_head(AlreadyDropped, State = #q{backing_queue       = BQ,
     end.
 
 send_reject_publish(#delivery{confirm = true,
-                                sender = SenderPid,
-                                msg_seq_no = MsgSeqNo} = Delivery,
+                              sender = SenderPid,
+                              flow = Flow,
+                              msg_seq_no = MsgSeqNo,
+                              message = #basic_message{id = MsgId}},
                       _Delivered,
                       State = #q{ backing_queue = BQ,
                                   backing_queue_state = BQS,
                                   msg_id_to_channel   = MTC}) ->
-    {BQS1, MTC1} = discard(Delivery, BQ, BQS, MTC),
     gen_server2:cast(SenderPid, {reject_publish, MsgSeqNo, self()}),
+
+    MTC1 = case gb_trees:is_defined(MsgId, MTC) of
+        true  -> gb_trees:delete(MsgId, MTC);
+        false -> MTC
+    end,
+    BQS1 = BQ:discard(MsgId, SenderPid, Flow, BQS),
     State#q{ backing_queue_state = BQS1, msg_id_to_channel = MTC1 };
 send_reject_publish(#delivery{confirm = false},
                       _Delivered, State) ->
@@ -1121,7 +1132,7 @@ prioritise_cast(Msg, _Len, State) ->
 %% will be rate limited by how fast consumers receive messages -
 %% i.e. by notify_sent. We prioritise ack and resume to discourage
 %% starvation caused by prioritising notify_sent. We don't vary their
-%% prioritiy since acks should stay in order (some parts of the queue
+%% priority since acks should stay in order (some parts of the queue
 %% stack are optimised for that) and to make things easier to reason
 %% about. Finally, we prioritise ack over resume since it should
 %% always reduce memory use.
@@ -1424,6 +1435,9 @@ handle_cast({credit, ChPid, CTag, Credit, Drain},
                                      run_message_queue(true, State1)
       end);
 
+% Note: https://www.pivotaltracker.com/story/show/166962656
+% This event is necessary for the stats timer to be initialized with
+% the correct values once the management agent has started
 handle_cast({force_event_refresh, Ref},
             State = #q{consumers          = Consumers,
                        exclusive_consumer = Exclusive}) ->

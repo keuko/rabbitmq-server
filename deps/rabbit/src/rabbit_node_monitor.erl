@@ -1,7 +1,7 @@
 %% The contents of this file are subject to the Mozilla Public License
 %% Version 1.1 (the "License"); you may not use this file except in
 %% compliance with the License. You may obtain a copy of the License
-%% at http://www.mozilla.org/MPL/
+%% at https://www.mozilla.org/MPL/
 %%
 %% Software distributed under the License is distributed on an "AS IS"
 %% basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
@@ -11,7 +11,7 @@
 %% The Original Code is RabbitMQ.
 %%
 %% The Initial Developer of the Original Code is GoPivotal, Inc.
-%% Copyright (c) 2007-2017 Pivotal Software, Inc.  All rights reserved.
+%% Copyright (c) 2007-2019 Pivotal Software, Inc.  All rights reserved.
 %%
 
 -module(rabbit_node_monitor).
@@ -104,10 +104,9 @@ cluster_status_filename() ->
 
 prepare_cluster_status_files() ->
     rabbit_mnesia:ensure_mnesia_dir(),
-    Corrupt = fun(F) -> throw({error, corrupt_cluster_status_files, F}) end,
     RunningNodes1 = case try_read_file(running_nodes_filename()) of
                         {ok, [Nodes]} when is_list(Nodes) -> Nodes;
-                        {ok, Other}                       -> Corrupt(Other);
+                        {ok, Other}                       -> corrupt_cluster_status_files(Other);
                         {error, enoent}                   -> []
                     end,
     ThisNode = [node()],
@@ -121,13 +120,18 @@ prepare_cluster_status_files() ->
             {ok, [AllNodes0]} when is_list(AllNodes0) ->
                 {legacy_cluster_nodes(AllNodes0), legacy_disc_nodes(AllNodes0)};
             {ok, Files} ->
-                Corrupt(Files);
+                corrupt_cluster_status_files(Files);
             {error, enoent} ->
                 LegacyNodes = legacy_cluster_nodes([]),
                 {LegacyNodes, LegacyNodes}
         end,
     AllNodes2 = lists:usort(AllNodes1 ++ RunningNodes2),
     ok = write_cluster_status({AllNodes2, DiscNodes, RunningNodes2}).
+
+-spec corrupt_cluster_status_files(any()) -> no_return().
+
+corrupt_cluster_status_files(F) ->
+    throw({error, corrupt_cluster_status_files, F}).
 
 write_cluster_status({All, Disc, Running}) ->
     ClusterStatusFN = cluster_status_filename(),
@@ -209,7 +213,7 @@ subscribe(Pid) ->
 %% We could confirm something by having an HA queue see the pausing
 %% state (and fail over into it) before the node monitor stops us, or
 %% by using unmirrored queues and just having them vanish (and
-%% confiming messages as thrown away).
+%% confirming messages as thrown away).
 %%
 %% So we have channels call in here before issuing confirms, to do a
 %% lightweight check that we have not entered a pausing state.

@@ -107,11 +107,7 @@ define PROJECT_ENV
 	    %% used by rabbit_peer_discovery_classic_config
 	    {cluster_nodes, {[], disc}},
 
-	    {config_entry_decoder, [{cipher, aes_cbc256},
-	                            {hash, sha512},
-	                            {iterations, 1000},
-	                            {passphrase, undefined}
-	                           ]},
+	    {config_entry_decoder, [{passphrase, undefined}]},
 
 	    %% rabbitmq-server#973
 	    {queue_explicit_gc_run_operation_threshold, 1000},
@@ -131,12 +127,12 @@ define PROJECT_ENV
 	  ]
 endef
 
-LOCAL_DEPS = sasl mnesia os_mon inets
-BUILD_DEPS = rabbitmq_cli
-DEPS = ranch syslog lager rabbit_common
+LOCAL_DEPS = sasl mnesia os_mon inets compiler syntax_tools
+BUILD_DEPS = rabbitmq_cli syslog
+DEPS = ranch lager rabbit_common sysmon_handler recon observer_cli stdout_formatter
 TEST_DEPS = rabbitmq_ct_helpers rabbitmq_ct_client_helpers amqp_client meck proper
 
-dep_syslog = git https://github.com/schlagert/syslog 3.4.3
+dep_syslog = git https://github.com/schlagert/syslog 3.4.5
 
 define usage_xml_to_erl
 $(subst __,_,$(patsubst $(DOCS_DIR)/rabbitmq%.1.xml, src/rabbit_%_usage.erl, $(subst -,_,$(1))))
@@ -183,13 +179,29 @@ tests:: bats
 SLOW_CT_SUITES := backing_queue \
 		  cluster_rename \
 		  clustering_management \
+		  config_schema \
 		  dynamic_ha \
 		  eager_sync \
+		  feature_flags \
 		  health_check \
+		  lazy_queue \
+		  metrics \
+		  msg_store \
 		  partitions \
+		  per_user_connection_tracking \
+		  per_vhost_connection_limit \
+		  per_vhost_msg_store \
+		  per_vhost_queue_limit \
+		  policy \
 		  priority_queue \
 		  queue_master_location \
-		  simple_ha
+		  quorum_queue \
+		  rabbit_core_metrics_gc \
+		  rabbit_fifo_prop \
+		  simple_ha \
+		  sync_detection \
+		  unit_inbroker_parallel \
+		  vhost
 FAST_CT_SUITES := $(filter-out $(sort $(SLOW_CT_SUITES)),$(CT_SUITES))
 
 ct-fast: CT_SUITES = $(FAST_CT_SUITES)
@@ -264,7 +276,9 @@ web-manpages: $(WEB_MANPAGES)
 	    gsub(/<\/h2>/, "</h3>", line); \
 	    gsub(/<h1/, "<h2", line); \
 	    gsub(/<\/h1>/, "</h2>", line); \
-	    gsub(/class="D1"/, "class=\"D1 sourcecode bash hljs\"", line); \
+	    gsub(/class="D1"/, "class=\"D1 lang-bash\"", line); \
+	    gsub(/class="Bd Bd-indent"/, "class=\"Bd Bd-indent lang-bash\"", line); \
+	    gsub(/&#[xX]201[cCdD];/, "\\&quot;", line); \
 	    print line; \
 	  } } \
 	  ' > "$@"

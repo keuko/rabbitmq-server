@@ -79,7 +79,7 @@ user_login_authentication(Username, AuthProps) when is_list(AuthProps) ->
                     prebind -> UserDN = username_to_dn_prebind(Username),
                                with_ldap({ok, {UserDN, PW}},
                                          login_fun(Username, UserDN, PW, AuthProps));
-                    _       -> with_ldap({ok, {fill_user_dn_pattern(Username), PW}},
+                    _       -> with_ldap({ok, {simple_bind_fill_pattern(Username), PW}},
                                          login_fun(Username, unknown, PW, AuthProps))
                 end,
             ?L("DECISION: login for ~s: ~p", [Username, log_result(R)]),
@@ -98,9 +98,10 @@ user_login_authorization(Username) ->
 check_vhost_access(User = #auth_user{username = Username,
                                      impl     = #impl{user_dn = UserDN}},
                    VHost, _Sock) ->
+    ADArgs = rabbit_auth_backend_ldap_util:get_active_directory_args(Username),
     Args = [{username, Username},
             {user_dn,  UserDN},
-            {vhost,    VHost}],
+            {vhost,    VHost}] ++ ADArgs,
     ?L("CHECK: ~s for ~s", [log_vhost(Args), log_user(User)]),
     R = evaluate_ldap(env(vhost_access_query), Args, User),
     ?L("DECISION: ~s for ~s: ~p",
@@ -111,12 +112,13 @@ check_resource_access(User = #auth_user{username = Username,
                                         impl     = #impl{user_dn = UserDN}},
                       #resource{virtual_host = VHost, kind = Type, name = Name},
                       Permission) ->
+    ADArgs = rabbit_auth_backend_ldap_util:get_active_directory_args(Username),
     Args = [{username,   Username},
             {user_dn,    UserDN},
             {vhost,      VHost},
             {resource,   Type},
             {name,       Name},
-            {permission, Permission}],
+            {permission, Permission}] ++ ADArgs,
     ?L("CHECK: ~s for ~s", [log_resource(Args), log_user(User)]),
     R = evaluate_ldap(env(resource_access_query), Args, User),
     ?L("DECISION: ~s for ~s: ~p",
@@ -129,12 +131,13 @@ check_topic_access(User = #auth_user{username = Username,
                    Permission,
                    Context) ->
     OptionsArgs = topic_context_as_options(Context, undefined),
+    ADArgs = rabbit_auth_backend_ldap_util:get_active_directory_args(Username),
     Args = [{username,   Username},
             {user_dn,    UserDN},
             {vhost,      VHost},
             {resource,   Resource},
             {name,       Name},
-            {permission, Permission}] ++ OptionsArgs,
+            {permission, Permission}] ++ OptionsArgs ++ ADArgs,
     ?L("CHECK: ~s for ~s", [log_resource(Args), log_user(User)]),
     R = evaluate_ldap(env(topic_access_query), Args, User),
     ?L("DECISION: ~s for ~s: ~p",
@@ -273,14 +276,14 @@ evaluate0({match, {string, _} = StringQuery, {string, _} = REQuery}, Args, User,
 
 evaluate0({match, StringQuery, {string, _} = REQuery}, Args, User, LDAP) when is_list(StringQuery)->
     safe_eval(fun (String1, String2) ->
-        do_match(String1, String2)
+                      do_match(String1, String2)
               end,
         evaluate(StringQuery, Args, User, LDAP),
         evaluate(REQuery, Args, User, LDAP));
 
 evaluate0({match, {string, _} = StringQuery, REQuery}, Args, User, LDAP) when is_list(REQuery) ->
     safe_eval(fun (String1, String2) ->
-        do_match(String1, String2)
+                      do_match(String1, String2)
               end,
         evaluate(StringQuery, Args, User, LDAP),
         evaluate(REQuery, Args, User, LDAP));
@@ -288,14 +291,14 @@ evaluate0({match, {string, _} = StringQuery, REQuery}, Args, User, LDAP) when is
 evaluate0({match, StringQuery, REQuery}, Args, User, LDAP) when is_list(StringQuery),
                                                                 is_list(REQuery)  ->
     safe_eval(fun (String1, String2) ->
-        do_match(String1, String2)
+                      do_match(String1, String2)
               end,
         evaluate(StringQuery, Args, User, LDAP),
         evaluate(REQuery, Args, User, LDAP));
 
 evaluate0({match, StringQuery, REQuery}, Args, User, LDAP) ->
     safe_eval(fun (String1, String2) ->
-        do_match_bidirectionally(String1, String2)
+                      do_match_multi(String1, String2)
               end,
         evaluate(StringQuery, Args, User, LDAP),
         evaluate(REQuery, Args, User, LDAP));
@@ -328,6 +331,8 @@ search_groups(LDAP, Desc, GroupsBase, Scope, DN) ->
         {error, _} = E ->
             ?L("error searching for parent groups for \"~s\": ~p", [DN, E]),
             [];
+        {ok, {referral, Referrals}} ->
+            {error, {referrals_not_supported, Referrals}};
         {ok, #eldap_search_result{entries = []}} ->
             [];
         {ok, #eldap_search_result{entries = Entries}} ->
@@ -361,32 +366,45 @@ safe_eval(F,  V1,         V2)         -> F(V1, V2).
 
 do_match(S1, S2) ->
     case re:run(S1, S2) of
-        {match, _} -> log_match(S1, S2, R = true),
+        {match, _} ->
+            log_match(S1, S2, R = true),
             R;
-        nomatch    -> log_match(S1, S2, R = false),
+        nomatch ->
+            log_match(S1, S2, R = false),
             R
     end.
 
-do_match_bidirectionally(S1, S2) ->
-    case re:run(S1, S2) of
-        {match, _} -> log_match(S1, S2, R = true),
-                      R;
-        nomatch    ->
-            %% Do match bidirectionally, if intial RE consists of
-            %% multi attributes, else log match and return result.
-            case S2 of
-                S when length(S) > 1 ->
-                    R = case re:run(S2, S1) of
-                            {match, _} -> true;
-                            nomatch    -> false
-                        end,
-                    log_match(S2, S1, R),
-                    R;
-                _ ->
-                    log_match(S1, S2, R = false),
-                    R
-            end
-    end.
+%% In some cases when fetching regular expressions, LDAP evalution() 
+%% returns a list of strings, so we need to wrap guards around that.
+%% If a list of strings is returned, loop and match versus each element.
+do_match_multi(S1, []) ->
+    log_match(S1, [], R = false),
+    R;
+do_match_multi(S1 = [H1|_], [H2|Tail]) when is_list(H2) and not is_list(H1) ->
+    case re:run(S1, H2) of
+        {match, _} ->
+            log_match(S1, H2, R = true),
+            R;
+        _ ->
+            log_match(S1,H2, false),
+            do_match_multi(S1, Tail)
+    end;
+do_match_multi([], S2) ->
+    log_match([], S2, R = false),
+    R;
+do_match_multi([H1|Tail], S2 = [H2|_] ) when is_list(H1) and not is_list(H2) ->
+    case re:run(H1, S2) of
+        {match, _} ->
+            log_match(H1, S2, R = true),
+            R;
+        _ ->
+            log_match(H1, S2, false),
+            do_match_multi(Tail, S2)
+    end;
+do_match_multi([H1|_],[H2|_]) when is_list(H1) and is_list(H2) ->
+    false; %% Unsupported combination
+do_match_multi(S1, S2) ->
+    do_match(S1, S2).
 
 log_match(String, RE, Result) ->
     ?L1("evaluated match \"~s\" against RE \"~s\": ~s",
@@ -399,6 +417,8 @@ object_exists(DN, Filter, LDAP) ->
                        {filter, Filter},
                        {attributes, ["objectClass"]}, %% Reduce verbiage
                        {scope, eldap:baseObject()}]) of
+        {ok, {referral, Referrals}} ->
+            {error, {referrals_not_supported, Referrals}};
         {ok, #eldap_search_result{entries = Entries}} ->
             length(Entries) > 0;
         {error, _} = E ->
@@ -410,6 +430,8 @@ attribute(DN, AttributeName, LDAP) ->
                       [{base, DN},
                        {filter, eldap:present("objectClass")},
                        {attributes, [AttributeName]}]) of
+        {ok, {referral, Referrals}} ->
+            {error, {referrals_not_supported, Referrals}};
         {ok, #eldap_search_result{entries = E = [#eldap_entry{}|_]}} ->
             get_attributes(AttributeName, E);
         {ok, #eldap_search_result{entries = _}} ->
@@ -441,18 +463,18 @@ with_ldap({ok, Creds}, Fun, Servers) ->
     Opts1 = case env(log) of
                 network ->
                     Pre = "    LDAP network traffic: ",
-                    rabbit_log:info(
+                    rabbit_log_ldap:info(
                       "    LDAP connecting to servers: ~p~n", [Servers]),
-                    [{log, fun(1, S, A) -> rabbit_log:warning(Pre ++ S, A);
+                    [{log, fun(1, S, A) -> rabbit_log_ldap:warning(Pre ++ S, A);
                               (2, S, A) ->
-                                   rabbit_log:info(Pre ++ S, scrub_creds(A, []))
+                                   rabbit_log_ldap:info(Pre ++ S, scrub_creds(A, []))
                            end} | Opts0];
                 network_unsafe ->
                     Pre = "    LDAP network traffic: ",
-                    rabbit_log:info(
+                    rabbit_log_ldap:info(
                       "    LDAP connecting to servers: ~p~n", [Servers]),
-                    [{log, fun(1, S, A) -> rabbit_log:warning(Pre ++ S, A);
-                              (2, S, A) -> rabbit_log:info(   Pre ++ S, A)
+                    [{log, fun(1, S, A) -> rabbit_log_ldap:warning(Pre ++ S, A);
+                              (2, S, A) -> rabbit_log_ldap:info(   Pre ++ S, A)
                            end} | Opts0];
                 _ ->
                     Opts0
@@ -477,7 +499,7 @@ with_ldap({ok, Creds}, Fun, Servers) ->
 with_login(Creds, Servers, Opts, Fun) ->
     with_login(Creds, Servers, Opts, Fun, ?LDAP_OPERATION_RETRIES).
 with_login(_Creds, _Servers, _Opts, _Fun, 0 = _RetriesLeft) ->
-    rabbit_log:warning("LDAP failed to perform an operation. TCP connection to a LDAP server was closed or otherwise defunct. Exhausted all retries."),
+    rabbit_log_ldap:warning("LDAP failed to perform an operation. TCP connection to a LDAP server was closed or otherwise defunct. Exhausted all retries."),
     {error, ldap_connect_error};
 with_login(Creds, Servers, Opts, Fun, RetriesLeft) ->
     case get_or_create_conn(Creds == anon, Servers, Opts) of
@@ -531,9 +553,9 @@ with_login(Creds, Servers, Opts, Fun, RetriesLeft) ->
 
 purge_connection(Creds, Servers, Opts) ->
     %% purge and retry with a new connection
-    rabbit_log:warning("TCP connection to a LDAP server was closed or otherwise defunct."),
+    rabbit_log_ldap:warning("TCP connection to a LDAP server was closed or otherwise defunct."),
     purge_conn(Creds == anon, Servers, Opts),
-    rabbit_log:warning("LDAP will retry with a new connection.").
+    rabbit_log_ldap:warning("LDAP will retry with a new connection.").
 
 call_ldap_fun(Fun, LDAP) ->
     call_ldap_fun(Fun, LDAP, "").
@@ -623,7 +645,7 @@ purge_conn(IsAnon, Servers, Opts) ->
     Conns = get(ldap_conns),
     Key = {IsAnon, Servers, Opts},
     {ok, Conn} = maps:find(Key, Conns),
-    rabbit_log:warning("LDAP will purge an already closed or defunct LDAP server connection from the pool"),
+    rabbit_log_ldap:warning("LDAP will purge an already closed or defunct LDAP server connection from the pool"),
     % We cannot close the connection with eldap:close/1 because as of OTP-13327
     % eldap will try to do_unbind first and will fail with a `{gen_tcp_error, closed}`.
     % Since we know that the connection is already closed, we just
@@ -705,9 +727,10 @@ do_login(Username, PrebindUserDN, Password, VHost, LDAP) ->
 do_tag_queries(Username, UserDN, User, VHost, LDAP) ->
     {ok, [begin
               ?L1("CHECK: does ~s have tag ~s?", [Username, Tag]),
-              R = evaluate(Q, [{username, Username},
-                               {user_dn,  UserDN} | vhost_if_defined(VHost)],
-                           User, LDAP),
+              VhostArgs = vhost_if_defined(VHost),
+              ADArgs = rabbit_auth_backend_ldap_util:get_active_directory_args(Username),
+              EvalArgs = [{username, Username}, {user_dn, UserDN}] ++ VhostArgs ++ ADArgs,
+              R = evaluate(Q, EvalArgs, User, LDAP),
               ?L1("DECISION: does ~s have tag ~s? ~p",
                   [Username, Tag, R]),
               {Tag, R}
@@ -740,11 +763,13 @@ dn_lookup(Username, LDAP) ->
                        {filter, eldap:equalityMatch(
                                   env(dn_lookup_attribute), Filled)},
                        {attributes, ["distinguishedName"]}]) of
+        {ok, {referral, Referrals}} ->
+            {error, {referrals_not_supported, Referrals}};
         {ok, #eldap_search_result{entries = [#eldap_entry{object_name = DN}]}}->
             ?L1("DN lookup: ~s -> ~s", [Username, DN]),
             DN;
         {ok, #eldap_search_result{entries = Entries}} ->
-            rabbit_log:warning("Searching for DN for ~s, got back ~p~n",
+            rabbit_log_ldap:warning("Searching for DN for ~s, got back ~p~n",
                                [Filled, Entries]),
             Filled;
         {error, _} = E ->
@@ -752,7 +777,17 @@ dn_lookup(Username, LDAP) ->
     end.
 
 fill_user_dn_pattern(Username) ->
-    fill(env(user_dn_pattern), [{username, Username}]).
+    ADArgs = rabbit_auth_backend_ldap_util:get_active_directory_args(Username),
+    fill(env(user_dn_pattern), [{username, Username}] ++ ADArgs).
+
+simple_bind_fill_pattern(Username) ->
+    simple_bind_fill_pattern(env(user_bind_pattern), Username).
+
+simple_bind_fill_pattern(none, Username) ->
+    fill_user_dn_pattern(Username);
+simple_bind_fill_pattern(Pattern, Username) ->
+    ADArgs = rabbit_auth_backend_ldap_util:get_active_directory_args(Username),
+    fill(Pattern, [{username, Username}] ++ ADArgs).
 
 creds(User) -> creds(User, env(other_bind)).
 
@@ -817,7 +852,7 @@ to_list(S)                   -> {error, {badarg, S}}.
 
 log(Fmt,  Args) -> case env(log) of
                        false -> ok;
-                       _     -> rabbit_log:info(Fmt ++ "~n", Args)
+                       _     -> rabbit_log_ldap:info(Fmt ++ "~n", Args)
                    end.
 
 fill(Fmt, Args) ->

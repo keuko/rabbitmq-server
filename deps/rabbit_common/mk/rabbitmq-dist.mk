@@ -50,7 +50,7 @@ $$(dist_$(1)_ez): SRC_DIR = $(3)
 $$(dist_$(1)_ez): EZ_DIR  = $$(abspath $$(dist_$(1)_ez_dir))
 $$(dist_$(1)_ez): EZ      = $$(dist_$(1)_ez)
 $$(dist_$(1)_ez): $$(if $$(wildcard $(3)/ebin $(3)/include $(3)/priv),\
-	$$(call core_find,$$(wildcard $(3)/ebin $(3)/include $(3)/priv),*),)
+	$$(filter-out %/dep_built,$$(call core_find,$$(wildcard $(3)/ebin $(3)/include $(3)/priv),*)),)
 
 # If the application's Makefile defines a `list-dist-deps` target, we
 # use it to populate the dependencies list. This is useful when the
@@ -92,7 +92,7 @@ $$(dist_$(1)_ez): SRC_DIR = $(3)
 $$(dist_$(1)_ez): EZ_DIR  = $$(abspath $$(dist_$(1)_ez_dir))
 $$(dist_$(1)_ez): EZ      = $$(dist_$(1)_ez)
 $$(dist_$(1)_ez): $$(if $$(wildcard _build/dev/lib/$(1)/ebin $(3)/priv),\
-	$$(call core_find,$$(wildcard _build/dev/lib/$(1)/ebin $(3)/priv),*),)
+	$$(filter-out %/dep_built,$$(call core_find,$$(wildcard _build/dev/lib/$(1)/ebin $(3)/priv),*)),)
 
 MIX_DIST_EZS += $$(dist_$(1)_ez)
 EXTRA_DIST_EZS += $$(call get_mix_project_dep_ezs,$(3))
@@ -105,14 +105,10 @@ endef
 # it finds a Mix configuration file, it calls do_ez_target_mix. It
 # should be called as:
 #
-#   $(call ez_target,app_name)
+#   $(call ez_target,path_to_app)
 
 define ez_target
-dist_$(1)_appdir = $$(if $$(filter $(PROJECT),$(1)), \
-			$(CURDIR), \
-			$$(if $$(shell test -d $(APPS_DIR)/$(1) && echo OK), \
-			      $(APPS_DIR)/$(1), \
-			      $(DEPS_DIR)/$(1)))
+dist_$(1)_appdir  = $(2)
 dist_$(1)_appfile = $$(dist_$(1)_appdir)/ebin/$(1).app
 dist_$(1)_mixfile = $$(dist_$(1)_appdir)/mix.exs
 
@@ -135,10 +131,10 @@ ifeq ($(wildcard $(DIST_PLUGINS_LIST)),)
 $(error DIST_PLUGINS_LIST ($(DIST_PLUGINS_LIST)) is missing)
 endif
 
-$(eval $(foreach app, \
-  $(filter-out rabbit looking_glass lz4, \
-  $(sort $(notdir $(shell cat $(DIST_PLUGINS_LIST)))) $(PROJECT)), \
-  $(call ez_target,$(app))))
+$(eval $(foreach path, \
+  $(filter-out %/rabbit %/looking_glass %/lz4, \
+  $(sort $(shell cat $(DIST_PLUGINS_LIST))) $(CURDIR)), \
+  $(call ez_target,$(if $(filter $(path),$(CURDIR)),$(PROJECT),$(notdir $(path))),$(path))))
 endif
 endif
 
