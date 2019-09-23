@@ -5,6 +5,7 @@ rabbitmq-server (3.7.18-1) unstable; urgency=medium
   * Re-add debian/gbp.conf, as this package must use pristine-tar.
   * Fix display of version when doing rabbitmqadmin --version. Used a different
     way from proposed patch which isn't invasive (Closes: #908690).
+  * Using python3 as binary, not python (Closes: #883192).
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 23 Sep 2019 10:05:48 +0200
 
