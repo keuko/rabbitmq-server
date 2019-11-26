@@ -1,7 +1,7 @@
 [Unit]
 Description=RabbitMQ Messaging Server
-After=network.target epmd@0.0.0.0.socket
-Wants=network.target epmd@0.0.0.0.socket
+After=network.target epmd@.socket
+Wants=network.target epmd@.socket
 
 [Service]
 Type=notify

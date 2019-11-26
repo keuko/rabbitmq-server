@@ -1,9 +1,15 @@
 rabbitmq-server (3.7.18-2) UNRELEASED; urgency=medium
 
+  [ Ondřej Nový ]
   * Remove gbp.conf, not used anymore or should be specified in the
     developers dotfiles.
 
- -- Ondřej Nový <onovy@debian.org>  Fri, 18 Oct 2019 16:32:08 +0200
+  [ Thomas Goirand ]
+  * Resolve issues with startup of RabbitMQ with erlang provided
+    epmd daemon. See Ubuntu bug:
+    https://bugs.launchpad.net/ubuntu/+source/rabbitmq-server/+bug/1808766
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 26 Nov 2019 13:27:36 +0100
 
 rabbitmq-server (3.7.18-1) unstable; urgency=medium
 
