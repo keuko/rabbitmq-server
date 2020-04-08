@@ -1,0 +1,3 @@
+Depends:
+ rabbitmq-server,
+Test-Command: set -e; systemctl status rabbitmq-server.service; journalctl -u rabbitmq-server.service
