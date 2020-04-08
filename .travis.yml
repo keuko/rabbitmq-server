@@ -1,56 +1,11 @@
-language: python
-cache: pip
-matrix:
-  include:
-  - os: linux
-    dist: xenial
-    sudo: false
-    python: '2.6'
-  - os: linux
-    dist: xenial
-    sudo: false
-    python: '2.7'
-# Something is broken about pysnmp->pysnmpcrypto->cryptography.
-# Somehow pysnmpcrypto chooses cryptography while it should
-# pick pycryptodomex
-#  - os: linux
-#    dist: xenial
-#    sudo: false
-#    python: '3.2'
-  - os: linux
-    dist: xenial
-    sudo: false
-    python: '3.3'
-  - os: linux
-    dist: xenial
-    sudo: false
-    python: '3.4'
-  - os: linux
-    dist: xenial
-    sudo: false
-    python: '3.5'
-  - os: linux
-    dist: xenial
-    sudo: false
-    python: '3.6'
-  - os: linux
-    dist: xenial
-    sudo: true
-    python: '3.7'
-  - os: linux
-    dist: xenial
-    sudo: false
-    python: 'nightly'
-  - os: linux
-    dist: xenial
-    sudo: false
-    python: 'pypy'
-  - os: linux
-    dist: xenial
-    sudo: false
-    python: 'pypy3'
-install:
-  - pip install -r requirements.txt -r devel-requirements.txt -r extra-requirements.txt
-  - pip install -e .
+sudo: required
+language: generic
+
+services:
+  - docker
+
 script:
-  - travis_wait 20 sh runtests.sh
+  - wget -O- http://travis.debian.net/script.sh | sh -
+
+if:
+  tag IS blank
