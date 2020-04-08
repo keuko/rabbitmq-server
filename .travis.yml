@@ -6,4 +6,4 @@ dist: xenial
 install: skip
 script:
 #  - export TRAVIS_DEBIAN_DERIVATIVE=unstable
-  - sh travis-script.sh 
+  - sh \.travis-script.sh 
