@@ -1,4 +1,4 @@
 Depends:
  systemd,
  rabbitmq-server,
-Test-Command: set -e; systemctl status rabbitmq-server.service; journalctl -u rabbitmq-server.service
+Test-Command: set -e; sudo systemctl status rabbitmq-server.service; sudo journalctl -u rabbitmq-server.service
